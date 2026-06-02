@@ -340,9 +340,10 @@ impl Simulator {
                 self.ctx.ports.uart2.feed_rx(&[response]);
             }
             let board_latches = self.ctx.effective_board_latches();
+            let board_latch_versions = self.ctx.effective_board_latch_versions();
             self.ctx
                 .board
-                .tick_protocols(&self.ctx.ports, &board_latches);
+                .tick_protocols(&self.ctx.ports, &board_latches, &board_latch_versions);
             self.ctx.ports.refresh_inputs(&self.ctx.board);
         }
     }
@@ -436,6 +437,16 @@ impl MachineContext {
         }
     }
 
+    fn effective_board_latch_versions(&self) -> [u64; 4] {
+        if self.ports.latch_used {
+            self.ports.board_latch_versions
+        } else if self.xdata.latch_used {
+            self.xdata.board_latch_versions
+        } else {
+            [0; 4]
+        }
+    }
+
     fn board_latch_source(&self) -> &'static str {
         if self.ports.latch_used {
             "p0_p2"
@@ -481,6 +492,7 @@ impl CpuContext for MachineContext {
 struct BoardXdata {
     ram: Vec<u8>,
     board_latches: [u8; 4],
+    board_latch_versions: [u64; 4],
     latch_used: bool,
 }
 
@@ -511,18 +523,22 @@ impl MemoryMapper for BoardXdata {
         match addr & 0xE000 {
             0x8000 => {
                 self.board_latches[0] = byte;
+                self.board_latch_versions[0] = self.board_latch_versions[0].saturating_add(1);
                 self.latch_used = true;
             }
             0xA000 => {
                 self.board_latches[1] = byte;
+                self.board_latch_versions[1] = self.board_latch_versions[1].saturating_add(1);
                 self.latch_used = true;
             }
             0xC000 => {
                 self.board_latches[2] = byte;
+                self.board_latch_versions[2] = self.board_latch_versions[2].saturating_add(1);
                 self.latch_used = true;
             }
             0xE000 => {
                 self.board_latches[3] = byte;
+                self.board_latch_versions[3] = self.board_latch_versions[3].saturating_add(1);
                 self.latch_used = true;
             }
             _ => {}
@@ -567,6 +583,7 @@ struct MachinePorts {
     port_latch: [u8; 6],
     port_input: [u8; 6],
     board_latches: [u8; 4],
+    board_latch_versions: [u64; 4],
     latch_used: bool,
     timer: Timer01,
     uart1: Uart,
@@ -589,6 +606,7 @@ impl MachinePorts {
             port_latch,
             port_input: port_latch,
             board_latches: [0; 4],
+            board_latch_versions: [0; 4],
             latch_used: false,
             timer: Timer01::default(),
             uart1: Uart::new(UART1_SFR_SCON, UART1_SFR_SBUF, uart_frame_ticks(9_600)),
@@ -660,6 +678,7 @@ impl MachinePorts {
         };
         if let Some(slot) = slot {
             self.board_latches[slot] = value;
+            self.board_latch_versions[slot] = self.board_latch_versions[slot].saturating_add(1);
             self.latch_used = true;
         }
     }
@@ -1029,7 +1048,12 @@ impl BoardModel {
         self.rtc.tick();
     }
 
-    fn tick_protocols(&mut self, ports: &MachinePorts, board_latches: &[u8; 4]) {
+    fn tick_protocols(
+        &mut self,
+        ports: &MachinePorts,
+        board_latches: &[u8; 4],
+        board_latch_versions: &[u64; 4],
+    ) {
         let p1 = ports.port_latch[1];
         let p2 = ports.port_latch[2];
         self.ds1302.sample(
@@ -1046,7 +1070,8 @@ impl BoardModel {
             (p2 & (1 << 1)) != 0,
             &self.analog,
         );
-        self.outputs.sample_from_latches(board_latches);
+        self.outputs
+            .sample_from_latches(board_latches, board_latch_versions);
     }
 
     fn read_port(&self, index: usize, latch: u8, all_latches: [u8; 6]) -> u8 {
@@ -1073,8 +1098,8 @@ impl BoardModel {
                 value = set_bit_level(value, 5, true);
             }
             4 => {
-                value = set_bit_level(value, 2, !self.key_matrix.col_low(1, all_latches));
-                value = set_bit_level(value, 4, !self.key_matrix.col_low(0, all_latches));
+                value = apply_open_drain_bit(value, 2, self.key_matrix.col_low(1, all_latches));
+                value = apply_open_drain_bit(value, 4, self.key_matrix.col_low(0, all_latches));
             }
             _ => {}
         }
@@ -1172,10 +1197,13 @@ struct Outputs {
     digits: [DigitSample; 8],
     segment_latch: u8,
     com_latch: u8,
+    pending_com_latch: u8,
+    last_com_strobe: u64,
+    last_seg_strobe: u64,
 }
 
 impl Outputs {
-    fn sample_from_latches(&mut self, latches: &[u8; 4]) {
+    fn sample_from_latches(&mut self, latches: &[u8; 4], versions: &[u64; 4]) {
         let led = latches[0];
         for bit in 0..8 {
             self.leds[bit] = led & (1 << bit) == 0;
@@ -1185,16 +1213,24 @@ impl Outputs {
         self.relay_on = ctrl & (1 << 4) != 0;
         self.buzzer_on = ctrl & (1 << 6) != 0;
 
-        self.com_latch = latches[2];
-        self.segment_latch = latches[3];
+        if versions[2] != self.last_com_strobe {
+            self.com_latch = latches[2];
+            self.pending_com_latch = self.com_latch;
+            self.last_com_strobe = versions[2];
+        }
 
-        for digit in 0..8 {
-            if self.com_latch & (1 << digit) != 0 {
-                if self.segment_latch == 0xFF && self.digits[digit].seen {
-                    continue;
+        if versions[3] != self.last_seg_strobe {
+            self.segment_latch = latches[3];
+            self.last_seg_strobe = versions[3];
+
+            if self.pending_com_latch != 0 {
+                for digit in 0..8 {
+                    if self.pending_com_latch & (1 << digit) != 0 {
+                        self.digits[digit].segments = self.segment_latch;
+                        self.digits[digit].seen = true;
+                    }
                 }
-                self.digits[digit].segments = self.segment_latch;
-                self.digits[digit].seen = true;
+                self.pending_com_latch = 0;
             }
         }
     }
@@ -1909,6 +1945,41 @@ mod tests {
                 .expect("count L1 changes"),
             29
         );
+    }
+
+    #[test]
+    fn key_seg_detects_s4_and_toggles_l1() {
+        let mut sim = Simulator::from_hex_path(
+            &sample_path("sample/key_seg/prj/Objects/key_seg.hex"),
+            false,
+        )
+        .expect("load key_seg");
+
+        sim.run_ms(150).expect("run key_seg to idle");
+        assert_eq!(sim.display_text(), "       0");
+
+        sim.set_key("S4", true).expect("press S4");
+        sim.run_ms(150).expect("run with S4 pressed");
+        assert_eq!(sim.display_text(), "       1");
+        assert!(sim.led_on(1).expect("read L1"));
+    }
+
+    #[test]
+    fn key_seg_clears_high_digits_after_release() {
+        let mut sim = Simulator::from_hex_path(
+            &sample_path("sample/key_seg/prj/Objects/key_seg.hex"),
+            false,
+        )
+        .expect("load key_seg");
+
+        sim.run_ms(220).expect("run key_seg to idle");
+        sim.set_key("S12", true).expect("press S12");
+        sim.run_ms(220).expect("run with S12 pressed");
+        assert_eq!(sim.display_text(), "     256");
+
+        sim.set_key("S12", false).expect("release S12");
+        sim.run_ms(220).expect("run with S12 released");
+        assert_eq!(sim.display_text(), "       0");
     }
 
     #[test]
