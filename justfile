@@ -2,16 +2,16 @@ default:
     @just --list
 
 clippy:
-    RUSTC_WRAPPER= cargo clippy
+    cargo clippy
 
 test:
-    RUSTC_WRAPPER= cargo test
+    cargo test --release
 
 run-sample hex script:
-    cargo run -- run --hex {{hex}} --script {{script}}
+    cargo run --release -- run --hex {{ hex }} --script {{ script }}
 
 run-stdin hex:
-    cargo run -- run --hex {{hex}} --stdin
+    cargo run --release -- run --hex {{ hex }} --stdin
 
 repl hex:
-    cargo run -- repl --hex {{hex}}
+    cargo run --release -- repl --hex {{ hex }}
