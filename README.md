@@ -37,7 +37,7 @@ stcjudge dump --hex sample/key_seg/prj/Objects/key_seg.hex --ms 220
 ## 评测脚本
 
 - 评测脚本约定放在 `sample/xxx/judge/`.
-- 详细手册见 [docs/rhai-script-manual.md](/Users/azazo1/pjs/rust/lanqiao-mcu-judge/docs/rhai-script-manual.md).
+- 详细手册见 [docs/judge-script-manual.md](docs/judge-script-manual.md).
 - 现在支持 `print(...)`, `watch_led_changes(...)`, `display_text(window_ms)` 以及内置常量 `L1..L8`, `S4..S19`, `RB2/RB3/RB4/RD1`.
 
 ## 仿真时钟
