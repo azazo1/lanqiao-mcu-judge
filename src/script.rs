@@ -9,7 +9,7 @@ use rhai::{Dynamic, Engine, EvalAltResult, ImmutableString, Scope};
 use tracing::debug;
 
 use crate::{
-    ids::{KeyId, LedId, VoltageChannel},
+    ids::{KeyId, KeyMode, LedId, VoltageChannel},
     machine::Simulator,
 };
 
@@ -93,6 +93,7 @@ fn build_engine(sim: &Arc<Mutex<Simulator>>) -> Engine {
     engine.on_print(|text| println!("{text}"));
     engine.register_type_with_name::<LedId>("Led");
     engine.register_type_with_name::<KeyId>("Key");
+    engine.register_type_with_name::<KeyMode>("KeyMode");
     engine.register_type_with_name::<VoltageChannel>("VoltageChannel");
     register_api(&mut engine, sim);
     engine
@@ -140,6 +141,10 @@ fn build_scope() -> Scope<'static> {
     ] {
         scope.push_constant(name, channel);
     }
+    scope.push_constant("KEYBOARD", KeyMode::Keyboard);
+    scope.push_constant("KBD", KeyMode::Keyboard);
+    scope.push_constant("BUTTON", KeyMode::Button);
+    scope.push_constant("BTN", KeyMode::Button);
     scope
 }
 
@@ -213,6 +218,31 @@ fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
                 .map_err(|_| runtime_error("仿真器锁已损坏"))?;
             sim.tap_key_id(key, hold_ms)
                 .map_err(|err| runtime_error(err.to_string()))
+        },
+    );
+
+    let sim_key_mode = Arc::clone(sim);
+    engine.register_fn(
+        "key_mode",
+        move |mode: KeyMode| -> Result<(), Box<EvalAltResult>> {
+            sim_key_mode
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .key_mode(mode);
+            Ok(())
+        },
+    );
+
+    let sim_key_mode_name = Arc::clone(sim);
+    engine.register_fn(
+        "key_mode",
+        move |mode: ImmutableString| -> Result<(), Box<EvalAltResult>> {
+            let mode = KeyMode::parse(mode.as_str()).map_err(|err| runtime_error(err.to_string()))?;
+            sim_key_mode_name
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .key_mode(mode);
+            Ok(())
         },
     );
 

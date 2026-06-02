@@ -13,10 +13,9 @@ use tracing::trace;
 
 use crate::{
     hex::load_ihex,
-    ids::{KeyId, LedId, VoltageChannel},
+    ids::{KeyId, KeyMode, LedId, VoltageChannel},
     peripherals::{
-        AnalogInputs, Ds1302, Ds18b20, I2cBus, KeyMatrix, Outputs, Rtc, SegmentDecoder,
-        UltrasonicDevice,
+        AnalogInputs, Ds1302, Ds18b20, I2cBus, Key, Outputs, Rtc, SegmentDecoder, UltrasonicDevice,
     },
     registers::*,
     timing::{CPU_TICKS_PER_US, TICKS_PER_SECOND},
@@ -63,7 +62,11 @@ impl Simulator {
     }
 
     pub fn set_key_id(&mut self, key: KeyId, pressed: bool) {
-        self.ctx.board.key_matrix.set_key_id(key, pressed);
+        self.ctx.board.keys.set_key_id(key, pressed);
+    }
+
+    pub fn key_mode(&mut self, mode: KeyMode) {
+        self.ctx.board.key_mode = mode;
     }
 
     pub fn tap_key(&mut self, name: &str, hold_ms: u64) -> Result<()> {
@@ -1018,7 +1021,8 @@ struct BoardModel {
     ds1302: Ds1302,
     i2c: I2cBus,
     ultrasonic: UltrasonicDevice,
-    key_matrix: KeyMatrix,
+    keys: Key,
+    key_mode: KeyMode,
     analog: AnalogInputs,
     frequency_hz: f32,
 }
@@ -1071,22 +1075,26 @@ impl BoardModel {
                 value = apply_push_pull_bit(value, 4, self.frequency_level());
                 let rows = [(0_u8, 0_u8), (1, 1), (2, 2), (3, 3)];
                 for (bit, row) in rows {
-                    let low = self.key_matrix.row_low(row, all_latches);
+                    let low = match self.key_mode {
+                        KeyMode::Keyboard => self.keys.row_low(row, all_latches),
+                        KeyMode::Button => self.keys.button_row_low(row),
+                    };
                     value = set_bit_level(value, bit, !low);
                 }
                 value = set_bit_level(value, 5, true);
             }
-            4 => {
-                value = apply_open_drain_bit(value, 2, self.key_matrix.col_low(1, all_latches));
-                value = apply_open_drain_bit(value, 4, self.key_matrix.col_low(0, all_latches));
+            4 if self.key_mode == KeyMode::Keyboard => {
+                value = apply_open_drain_bit(value, 2, self.keys.col_low(1, all_latches));
+                value = apply_open_drain_bit(value, 4, self.keys.col_low(0, all_latches));
             }
+            4 => {}
             _ => {}
         }
         value
     }
 
     fn set_key(&mut self, name: &str, pressed: bool) -> Result<()> {
-        self.key_matrix.set_key(name, pressed)
+        self.keys.set_key(name, pressed)
     }
 
     fn set_voltage(&mut self, name: &str, value: f32) -> Result<()> {
@@ -1132,7 +1140,7 @@ fn set_bit_level(value: u8, bit: u8, high: bool) -> u8 {
 mod tests {
     use std::path::PathBuf;
 
-    use crate::ids::LedId;
+    use crate::ids::{KeyMode, LedId};
 
     use super::Simulator;
 
@@ -1189,6 +1197,30 @@ mod tests {
         sim.set_key("S12", false).expect("release S12");
         sim.run_ms(220).expect("run with S12 released");
         assert_eq!(sim.display_text(), "       0");
+    }
+
+    #[test]
+    fn key_seg_btn_reads_independent_keys_without_matrix_scan() {
+        let mut sim = Simulator::from_hex_path(
+            &sample_path("sample/key_seg_btn/prj/Objects/key_seg_btn.hex"),
+            false,
+        )
+        .expect("load key_seg_btn");
+
+        sim.key_mode(KeyMode::Button);
+        sim.run_ms(220).expect("run key_seg_btn to idle");
+        assert_eq!(sim.display_text(), "       0");
+
+        sim.set_key("S4", true).expect("press S4");
+        sim.run_ms(220).expect("run with S4 pressed");
+        assert_eq!(sim.display_text(), "       1");
+        assert!(sim.led_on(1).expect("read L1"));
+
+        sim.set_key("S4", false).expect("release S4");
+        sim.set_key("S7", true).expect("press S7");
+        sim.run_ms(220).expect("run with S7 pressed");
+        assert_eq!(sim.display_text(), "       8");
+        assert!(sim.led_on(4).expect("read L4"));
     }
 
     #[test]

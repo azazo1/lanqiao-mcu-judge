@@ -3,11 +3,11 @@ use anyhow::Result;
 use crate::ids::KeyId;
 
 #[derive(Debug, Default)]
-pub(crate) struct KeyMatrix {
+pub(crate) struct Key {
     pressed: [[bool; 4]; 4],
 }
 
-impl KeyMatrix {
+impl Key {
     pub(crate) fn set_key(&mut self, name: &str, pressed: bool) -> Result<()> {
         self.set_key_id(KeyId::parse(name)?, pressed);
         Ok(())
@@ -34,6 +34,10 @@ impl KeyMatrix {
             }
         }
         false
+    }
+
+    pub(crate) fn button_row_low(&self, row: u8) -> bool {
+        self.pressed[row as usize][0]
     }
 
     fn row_driven_low(&self, row: usize, latches: [u8; 6]) -> bool {
