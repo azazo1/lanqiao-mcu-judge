@@ -2,7 +2,7 @@ use std::{cell::Cell, collections::VecDeque, fmt::Write as _, fs, path::Path};
 
 use anyhow::{Context, Result, bail};
 use i8051::{
-    Cpu, CpuContext, CpuView, Instruction, MemoryMapper, PortMapper, ReadOnlyMemoryMapper, Register,
+    Cpu, CpuContext, CpuView, MemoryMapper, PortMapper, ReadOnlyMemoryMapper, Register,
 };
 use tracing::{trace, warn};
 
@@ -214,6 +214,7 @@ impl Simulator {
         if duration_ms == 0 {
             return Ok(initial);
         }
+        let initial_digits = self.ctx.board.outputs.digits;
 
         let target = self.ctx.board.ticks.saturating_add(
             duration_ms
@@ -222,8 +223,8 @@ impl Simulator {
         );
         while self.ctx.board.ticks < target {
             self.step_once()?;
-            let current = self.display_text();
-            if current != initial {
+            if self.ctx.board.outputs.digits != initial_digits {
+                let current = self.display_text();
                 bail!("display_text 在观察窗口内发生变化: 初始 `{initial}`, 后续 `{current}`");
             }
         }
@@ -410,37 +411,44 @@ impl Simulator {
     }
 
     fn tick_devices(&mut self, ticks: u32) -> Result<()> {
-        for _ in 0..ticks {
-            self.ctx.board.tick_rtc();
-            self.ctx.ports.tick_timers01_t2(&self.ctx.board)?;
-            self.ctx.ports.tick_ultrasonic(&mut self.ctx.board);
-            self.ctx.ports.tick_pca()?;
-            self.ctx.ports.uart1.tick();
-            let responses = self.ctx.ports.uart2.tick();
-            for response in responses {
-                self.ctx.board.ultrasonic.push_response(response);
-            }
-            if let Some(response) = self.ctx.board.ultrasonic.pop_response() {
-                self.ctx.ports.uart2.feed_rx(&[response]);
-            }
-            let board_latches = self.ctx.effective_board_latches();
-            let board_latch_versions = self.ctx.effective_board_latch_versions();
-            self.ctx
-                .board
-                .tick_protocols(&self.ctx.ports, &board_latches, &board_latch_versions);
-            self.ctx.ports.refresh_inputs(&self.ctx.board);
+        if ticks == 0 {
+            return Ok(());
         }
+
+        self.ctx.board.advance_ticks(u64::from(ticks));
+        self.ctx.ports.tick_timers01_t2(&self.ctx.board, ticks)?;
+        self.ctx.ports.tick_ultrasonic(&mut self.ctx.board, ticks);
+        self.ctx.ports.tick_pca(ticks)?;
+        self.ctx.ports.uart1.tick_ticks(ticks);
+        let responses = self.ctx.ports.uart2.tick_ticks(ticks);
+        for response in responses {
+            self.ctx.board.ultrasonic.push_response(response);
+        }
+        if let Some(response) = self.ctx.board.ultrasonic.pop_response() {
+            self.ctx.ports.uart2.feed_rx(&[response]);
+        }
+        let board_latches = self.ctx.effective_board_latches();
+        let board_latch_versions = self.ctx.effective_board_latch_versions();
+        self.ctx
+            .board
+            .tick_protocols(&self.ctx.ports, &board_latches, &board_latch_versions);
+        self.ctx.ports.refresh_inputs(&self.ctx.board);
         Ok(())
     }
 
     fn current_instruction_ticks(&self) -> u32 {
-        let instruction = self.cpu.decode_pc(&self.ctx);
-        approximate_instruction_ticks(&instruction)
+        let op = self
+            .ctx
+            .code
+            .code
+            .get(usize::from(self.cpu.pc))
+            .copied()
+            .unwrap_or(0);
+        approximate_instruction_ticks(op)
     }
 }
 
-fn approximate_instruction_ticks(instruction: &Instruction) -> u32 {
-    let op = instruction.bytes()[0];
+fn approximate_instruction_ticks(op: u8) -> u32 {
     match op {
         0x00 => 1,
         0x02 | 0x12 | 0x22 | 0x32 => 2,
@@ -448,11 +456,7 @@ fn approximate_instruction_ticks(instruction: &Instruction) -> u32 {
         0x73 | 0x83 | 0x93 => 2,
         0xA4 | 0x84 => 4,
         0xE0 | 0xE2 | 0xE3 | 0xF0 | 0xF2 | 0xF3 => 2,
-        _ => match instruction.len() {
-            0 | 1 => 1,
-            2 => 1,
-            _ => 1,
-        },
+        _ => 1,
     }
 }
 
@@ -687,30 +691,30 @@ impl MachinePorts {
     }
 
     fn sample_port_p3(&self, board: &BoardModel) -> u8 {
-        board.read_port(3, self.port_latch[3], self.port_latch)
+        board.read_port(3, self.port_latch[3], &self.port_latch)
     }
 
     fn refresh_inputs(&mut self, board: &BoardModel) {
         for index in 0..self.port_input.len() {
             self.port_input[index] =
-                board.read_port(index, self.port_latch[index], self.port_latch);
+                board.read_port(index, self.port_latch[index], &self.port_latch);
         }
     }
 
-    fn tick_ultrasonic(&mut self, board: &mut BoardModel) {
+    fn tick_ultrasonic(&mut self, board: &mut BoardModel, ticks: u32) {
         let tx_high = self.port_latch[1] & (1 << 0) != 0;
         board.ultrasonic.sample_trigger(tx_high);
-        board.ultrasonic.tick();
+        board.ultrasonic.tick_ticks(ticks);
     }
 
-    fn tick_timers01_t2(&mut self, board: &BoardModel) -> Result<()> {
+    fn tick_timers01_t2(&mut self, board: &BoardModel, ticks: u32) -> Result<()> {
         let p3 = self.sample_port_p3(board);
         let auxr = self.generic_get(SFR_AUXR);
-        self.timers.tick_timers01_t2(p3, auxr, &mut self.generic)
+        self.timers.tick_timers01_t2(p3, auxr, ticks, &mut self.generic)
     }
 
-    fn tick_pca(&mut self) -> Result<()> {
-        self.timers.tick_pca(&mut self.generic)
+    fn tick_pca(&mut self, ticks: u32) -> Result<()> {
+        self.timers.tick_pca(ticks, &mut self.generic)
     }
 
     fn strobe_board_latch(&mut self, select: u8, value: u8) {
@@ -832,11 +836,11 @@ impl Uart {
         }
     }
 
-    fn tick(&mut self) -> Vec<u8> {
+    fn tick_ticks(&mut self, elapsed_ticks: u32) -> Vec<u8> {
         let mut sent = Vec::new();
 
-        if let Some((ticks, byte)) = self.tx_countdown.take() {
-            if ticks <= 1 {
+        if let Some((remaining, byte)) = self.tx_countdown.take() {
+            if elapsed_ticks >= remaining {
                 self.control |= if self.scon_addr == UART2_SFR_S2CON {
                     S2CON_TI
                 } else {
@@ -845,7 +849,7 @@ impl Uart {
                 self.tx_queue.push_back(byte);
                 sent.push(byte);
             } else {
-                self.tx_countdown = Some((ticks - 1, byte));
+                self.tx_countdown = Some((remaining - elapsed_ticks, byte));
             }
         }
 
@@ -855,8 +859,8 @@ impl Uart {
             self.rx_countdown = Some((self.frame_ticks, byte));
         }
 
-        if let Some((ticks, byte)) = self.rx_countdown.take() {
-            if ticks <= 1 {
+        if let Some((remaining, byte)) = self.rx_countdown.take() {
+            if elapsed_ticks >= remaining {
                 let ren_flag = if self.scon_addr == UART2_SFR_S2CON {
                     S2CON_REN
                 } else {
@@ -872,7 +876,7 @@ impl Uart {
                     self.control |= ri_flag;
                 }
             } else {
-                self.rx_countdown = Some((ticks - 1, byte));
+                self.rx_countdown = Some((remaining - elapsed_ticks, byte));
             }
         }
 
@@ -912,9 +916,9 @@ struct BoardModel {
 }
 
 impl BoardModel {
-    fn tick_rtc(&mut self) {
-        self.ticks = self.ticks.saturating_add(1);
-        self.ds1302.tick();
+    fn advance_ticks(&mut self, ticks: u64) {
+        self.ticks = self.ticks.saturating_add(ticks);
+        self.ds1302.tick_ticks(ticks);
     }
 
     fn tick_protocols(
@@ -942,7 +946,7 @@ impl BoardModel {
             .sample_from_latches(board_latches, board_latch_versions);
     }
 
-    fn read_port(&self, index: usize, latch: u8, all_latches: [u8; 6]) -> u8 {
+    fn read_port(&self, index: usize, latch: u8, all_latches: &[u8; 6]) -> u8 {
         let mut value = latch;
         match index {
             1 => {
@@ -1006,7 +1010,7 @@ impl BoardModel {
         true
     }
 
-    fn read_p34_level(&self, latch: u8, all_latches: [u8; 6]) -> bool {
+    fn read_p34_level(&self, latch: u8, all_latches: &[u8; 6]) -> bool {
         let drivers = [
             (
                 "mcu.p3.4",
@@ -1196,7 +1200,7 @@ mod tests {
     }
 
     fn p34_level(board: &super::BoardModel, all_latches: [u8; 6]) -> bool {
-        board.read_port(3, all_latches[3], all_latches) & (1 << 4) != 0
+        board.read_port(3, all_latches[3], &all_latches) & (1 << 4) != 0
     }
 
     #[test]

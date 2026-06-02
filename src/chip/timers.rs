@@ -61,15 +61,16 @@ impl TimerBlock {
         &mut self,
         p3: u8,
         auxr: u8,
+        ticks: u32,
         generic: &mut [u8; 128],
     ) -> Result<()> {
-        self.timer01.tick(p3, auxr)?;
-        self.timer2.tick(p3, auxr, generic)?;
+        self.timer01.tick(p3, auxr, ticks)?;
+        self.timer2.tick(p3, auxr, ticks, generic)?;
         Ok(())
     }
 
-    pub(crate) fn tick_pca(&mut self, generic: &mut [u8; 128]) -> Result<()> {
-        self.pca.tick(generic)
+    pub(crate) fn tick_pca(&mut self, ticks: u32, generic: &mut [u8; 128]) -> Result<()> {
+        self.pca.tick(ticks, generic)
     }
 
     pub(crate) fn snapshot(&self, generic: &[u8; 128]) -> TimerSnapshot {
@@ -144,14 +145,14 @@ impl Timer01 {
         }
     }
 
-    fn tick(&mut self, p3: u8, auxr: u8) -> Result<()> {
-        self.tick_timer0(p3, auxr)?;
-        self.tick_timer1(p3, auxr);
+    fn tick(&mut self, p3: u8, auxr: u8, ticks: u32) -> Result<()> {
+        self.tick_timer0(p3, auxr, ticks)?;
+        self.tick_timer1(p3, auxr, ticks);
         self.prev_p3 = p3;
         Ok(())
     }
 
-    fn tick_timer0(&mut self, p3: u8, auxr: u8) -> Result<()> {
+    fn tick_timer0(&mut self, p3: u8, auxr: u8, ticks: u32) -> Result<()> {
         if self.tcon & TCON_TR0 == 0 {
             self.div0 = 0;
             return Ok(());
@@ -161,44 +162,50 @@ impl Timer01 {
             return Ok(());
         }
 
-        let should_tick = if self.tmod & TMOD_C_T0 != 0 {
-            self.prev_p3 & P3_T0 != 0 && p3 & P3_T0 == 0
+        let tick_count = if self.tmod & TMOD_C_T0 != 0 {
+            u32::from(self.prev_p3 & P3_T0 != 0 && p3 & P3_T0 == 0)
         } else {
-            timer_tick_ready(auxr & AUXR_T0_X12 != 0, &mut self.div0)
+            timer_tick_count(auxr & AUXR_T0_X12 != 0, &mut self.div0, ticks)
         };
-        if !should_tick {
+        if tick_count == 0 {
             return Ok(());
         }
 
         match self.tmod & 0x03 {
             0x00 => {
-                let next = u16::from_be_bytes([self.th0, self.tl0]).wrapping_add(1);
-                if next == 0 {
-                    self.th0 = self.rl_th0;
-                    self.tl0 = self.rl_tl0;
-                    self.tcon |= TCON_TF0;
-                } else {
-                    let [th0, tl0] = next.to_be_bytes();
-                    self.th0 = th0;
-                    self.tl0 = tl0;
+                for _ in 0..tick_count {
+                    let next = u16::from_be_bytes([self.th0, self.tl0]).wrapping_add(1);
+                    if next == 0 {
+                        self.th0 = self.rl_th0;
+                        self.tl0 = self.rl_tl0;
+                        self.tcon |= TCON_TF0;
+                    } else {
+                        let [th0, tl0] = next.to_be_bytes();
+                        self.th0 = th0;
+                        self.tl0 = tl0;
+                    }
                 }
                 Ok(())
             }
             0x01 => {
-                let next = u16::from_be_bytes([self.th0, self.tl0]).wrapping_add(1);
-                let [th0, tl0] = next.to_be_bytes();
-                self.th0 = th0;
-                self.tl0 = tl0;
-                if next == 0 {
-                    self.tcon |= TCON_TF0;
+                for _ in 0..tick_count {
+                    let next = u16::from_be_bytes([self.th0, self.tl0]).wrapping_add(1);
+                    let [th0, tl0] = next.to_be_bytes();
+                    self.th0 = th0;
+                    self.tl0 = tl0;
+                    if next == 0 {
+                        self.tcon |= TCON_TF0;
+                    }
                 }
                 Ok(())
             }
             0x02 => {
-                self.tl0 = self.tl0.wrapping_add(1);
-                if self.tl0 == 0 {
-                    self.tl0 = self.th0;
-                    self.tcon |= TCON_TF0;
+                for _ in 0..tick_count {
+                    self.tl0 = self.tl0.wrapping_add(1);
+                    if self.tl0 == 0 {
+                        self.tl0 = self.th0;
+                        self.tcon |= TCON_TF0;
+                    }
                 }
                 Ok(())
             }
@@ -207,7 +214,7 @@ impl Timer01 {
         }
     }
 
-    fn tick_timer1(&mut self, p3: u8, auxr: u8) {
+    fn tick_timer1(&mut self, p3: u8, auxr: u8, ticks: u32) {
         if self.tcon & TCON_TR1 == 0 {
             self.div1 = 0;
             return;
@@ -223,42 +230,48 @@ impl Timer01 {
             return;
         }
 
-        let should_tick = if self.tmod & TMOD_C_T1 != 0 {
-            self.prev_p3 & P3_T1 != 0 && p3 & P3_T1 == 0
+        let tick_count = if self.tmod & TMOD_C_T1 != 0 {
+            u32::from(self.prev_p3 & P3_T1 != 0 && p3 & P3_T1 == 0)
         } else {
-            timer_tick_ready(auxr & AUXR_T1_X12 != 0, &mut self.div1)
+            timer_tick_count(auxr & AUXR_T1_X12 != 0, &mut self.div1, ticks)
         };
-        if !should_tick {
+        if tick_count == 0 {
             return;
         }
 
         match mode {
             0x00 => {
-                let next = u16::from_be_bytes([self.th1, self.tl1]).wrapping_add(1);
-                if next == 0 {
-                    self.th1 = self.rl_th1;
-                    self.tl1 = self.rl_tl1;
-                    self.tcon |= TCON_TF1;
-                } else {
-                    let [th1, tl1] = next.to_be_bytes();
-                    self.th1 = th1;
-                    self.tl1 = tl1;
+                for _ in 0..tick_count {
+                    let next = u16::from_be_bytes([self.th1, self.tl1]).wrapping_add(1);
+                    if next == 0 {
+                        self.th1 = self.rl_th1;
+                        self.tl1 = self.rl_tl1;
+                        self.tcon |= TCON_TF1;
+                    } else {
+                        let [th1, tl1] = next.to_be_bytes();
+                        self.th1 = th1;
+                        self.tl1 = tl1;
+                    }
                 }
             }
             0x01 => {
-                let next = u16::from_be_bytes([self.th1, self.tl1]).wrapping_add(1);
-                let [th1, tl1] = next.to_be_bytes();
-                self.th1 = th1;
-                self.tl1 = tl1;
-                if next == 0 {
-                    self.tcon |= TCON_TF1;
+                for _ in 0..tick_count {
+                    let next = u16::from_be_bytes([self.th1, self.tl1]).wrapping_add(1);
+                    let [th1, tl1] = next.to_be_bytes();
+                    self.th1 = th1;
+                    self.tl1 = tl1;
+                    if next == 0 {
+                        self.tcon |= TCON_TF1;
+                    }
                 }
             }
             0x02 => {
-                self.tl1 = self.tl1.wrapping_add(1);
-                if self.tl1 == 0 {
-                    self.tl1 = self.th1;
-                    self.tcon |= TCON_TF1;
+                for _ in 0..tick_count {
+                    self.tl1 = self.tl1.wrapping_add(1);
+                    if self.tl1 == 0 {
+                        self.tl1 = self.th1;
+                        self.tcon |= TCON_TF1;
+                    }
                 }
             }
             _ => unreachable!(),
@@ -284,32 +297,35 @@ impl Timer2 {
         }
     }
 
-    fn tick(&mut self, p3: u8, auxr: u8, generic: &mut [u8; 128]) -> Result<()> {
+    fn tick(&mut self, p3: u8, auxr: u8, ticks: u32, generic: &mut [u8; 128]) -> Result<()> {
         if auxr & AUXR_T2_RUN == 0 {
             self.divider = 0;
             self.prev_p3 = p3;
             return Ok(());
         }
 
-        let should_tick = if auxr & AUXR_T2_C_T != 0 {
-            self.prev_p3 & P3_T2 != 0 && p3 & P3_T2 == 0
+        let tick_count = if auxr & AUXR_T2_C_T != 0 {
+            u32::from(self.prev_p3 & P3_T2 != 0 && p3 & P3_T2 == 0)
         } else {
-            timer_tick_ready(auxr & AUXR_T2_X12 != 0, &mut self.divider)
+            timer_tick_count(auxr & AUXR_T2_X12 != 0, &mut self.divider, ticks)
         };
-        if !should_tick {
+        if tick_count == 0 {
             self.prev_p3 = p3;
             return Ok(());
         }
 
-        let next = u16::from_be_bytes([read_sfr(generic, SFR_T2H), read_sfr(generic, SFR_T2L)])
-            .wrapping_add(1);
-        if next == 0 {
-            write_sfr(generic, SFR_T2H, self.reload_high);
-            write_sfr(generic, SFR_T2L, self.reload_low);
-        } else {
-            let [t2h, t2l] = next.to_be_bytes();
-            write_sfr(generic, SFR_T2H, t2h);
-            write_sfr(generic, SFR_T2L, t2l);
+        for _ in 0..tick_count {
+            let next =
+                u16::from_be_bytes([read_sfr(generic, SFR_T2H), read_sfr(generic, SFR_T2L)])
+                    .wrapping_add(1);
+            if next == 0 {
+                write_sfr(generic, SFR_T2H, self.reload_high);
+                write_sfr(generic, SFR_T2L, self.reload_low);
+            } else {
+                let [t2h, t2l] = next.to_be_bytes();
+                write_sfr(generic, SFR_T2H, t2h);
+                write_sfr(generic, SFR_T2L, t2l);
+            }
         }
         self.prev_p3 = p3;
         Ok(())
@@ -322,7 +338,7 @@ struct Pca {
 }
 
 impl Pca {
-    fn tick(&mut self, generic: &mut [u8; 128]) -> Result<()> {
+    fn tick(&mut self, ticks: u32, generic: &mut [u8; 128]) -> Result<()> {
         if read_sfr(generic, SFR_CCON) & CCON_CR == 0 {
             self.divider = 0;
             return Ok(());
@@ -335,19 +351,23 @@ impl Pca {
             );
         }
 
-        self.divider = self.divider.saturating_add(1);
+        self.divider = self.divider.saturating_add(u64::from(ticks));
         if self.divider < CPU_TICKS_PER_US {
             return Ok(());
         }
-        self.divider = 0;
+        let increments = self.divider / CPU_TICKS_PER_US;
+        self.divider %= CPU_TICKS_PER_US;
 
-        let counter = u16::from_be_bytes([read_sfr(generic, SFR_CH), read_sfr(generic, SFR_CL)])
-            .wrapping_add(1);
-        let [ch, cl] = counter.to_be_bytes();
-        write_sfr(generic, SFR_CH, ch);
-        write_sfr(generic, SFR_CL, cl);
-        if counter == 0 {
-            write_sfr(generic, SFR_CCON, read_sfr(generic, SFR_CCON) | CCON_CF);
+        for _ in 0..increments {
+            let counter =
+                u16::from_be_bytes([read_sfr(generic, SFR_CH), read_sfr(generic, SFR_CL)])
+                    .wrapping_add(1);
+            let [ch, cl] = counter.to_be_bytes();
+            write_sfr(generic, SFR_CH, ch);
+            write_sfr(generic, SFR_CL, cl);
+            if counter == 0 {
+                write_sfr(generic, SFR_CCON, read_sfr(generic, SFR_CCON) | CCON_CF);
+            }
         }
         Ok(())
     }
@@ -361,19 +381,15 @@ fn write_sfr(generic: &mut [u8; 128], addr: u8, value: u8) {
     generic[usize::from(addr.wrapping_sub(0x80))] = value;
 }
 
-fn timer_tick_ready(one_t: bool, divider: &mut u8) -> bool {
+fn timer_tick_count(one_t: bool, divider: &mut u8, ticks: u32) -> u32 {
     if one_t {
         *divider = 0;
-        return true;
+        return ticks;
     }
 
-    *divider = divider.saturating_add(1);
-    if *divider >= 12 {
-        *divider = 0;
-        true
-    } else {
-        false
-    }
+    let total = u32::from(*divider).saturating_add(ticks);
+    *divider = (total % 12) as u8;
+    total / 12
 }
 
 #[cfg(test)]
@@ -398,7 +414,7 @@ mod tests {
         assert!(timers.write(&mut generic, SFR_TH0, 0xFF));
         assert!(timers.write(&mut generic, SFR_TL0, 0xFF));
 
-        timers.tick_timers01_t2(0xFF, AUXR_T0_X12, &mut generic)?;
+        timers.tick_timers01_t2(0xFF, AUXR_T0_X12, 1, &mut generic)?;
 
         let snapshot = timers.snapshot(&generic);
         assert_eq!(snapshot.th0, 0xFF);
@@ -416,7 +432,7 @@ mod tests {
         assert!(timers.write(&mut generic, SFR_TMOD, 0x20));
         assert!(timers.write(&mut generic, SFR_TCON, TCON_TR1));
 
-        timers.tick_timers01_t2(0xFF, AUXR_T1_X12, &mut generic)?;
+        timers.tick_timers01_t2(0xFF, AUXR_T1_X12, 1, &mut generic)?;
 
         let snapshot = timers.snapshot(&generic);
         assert_eq!(snapshot.tl1, 0xA5);
@@ -433,7 +449,7 @@ mod tests {
         write_sfr(&mut generic, SFR_T2H, 0xFF);
         write_sfr(&mut generic, SFR_T2L, 0xFF);
 
-        timers.tick_timers01_t2(0xFF, AUXR_T2_RUN | AUXR_T2_X12, &mut generic)?;
+        timers.tick_timers01_t2(0xFF, AUXR_T2_RUN | AUXR_T2_X12, 1, &mut generic)?;
 
         assert_eq!(read_sfr(&generic, SFR_T2H), 0x12);
         assert_eq!(read_sfr(&generic, SFR_T2L), 0x34);
@@ -448,7 +464,7 @@ mod tests {
         assert!(timers.write(&mut generic, SFR_TCON, TCON_TR0));
 
         let err = timers
-            .tick_timers01_t2(0xFF, AUXR_T0_X12, &mut generic)
+            .tick_timers01_t2(0xFF, AUXR_T0_X12, 1, &mut generic)
             .expect_err("mode3 should fail");
         assert!(err.to_string().contains("模式3"));
         Ok(())
@@ -460,14 +476,12 @@ mod tests {
         let mut generic = generic();
         write_sfr(&mut generic, SFR_CCON, CCON_CR);
 
-        for _ in 0..super::super::CPU_TICKS_PER_US {
-            timers.tick_pca(&mut generic)?;
-        }
+        timers.tick_pca(super::super::CPU_TICKS_PER_US as u32, &mut generic)?;
         assert_eq!(read_sfr(&generic, SFR_CL), 1);
 
         write_sfr(&mut generic, SFR_CMOD, 0x01);
         let err = timers
-            .tick_pca(&mut generic)
+            .tick_pca(1, &mut generic)
             .expect_err("non-zero CMOD should fail");
         assert!(err.to_string().contains("CMOD=00"));
         Ok(())

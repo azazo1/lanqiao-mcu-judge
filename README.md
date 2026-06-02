@@ -10,6 +10,9 @@
 
 可执行文件名为 `stcjudge`. 例如执行 `cargo build --release` 之后, 可以直接运行 `target/release/stcjudge`.
 
+> [!note]
+> 使用 `--release` 运行会比开发中运行快上不少.
+
 按脚本文件执行:
 
 ```bash

@@ -23,3 +23,5 @@
 修改 评测脚本 的内容需要同步更改 [docs/judge-script-manual.md](docs/judge-script-manual.md).
 
 编写 rust 仿真代码的时候, 不要基于 sample 中的模块使用设计来设计仿真代码, 比如 pca 和 超声波 的耦合, 其他人可能设计代码的时候, 超声波使用 timer0/1/2 而不是使用 pca 导致功能无法正常仿真.
+
+测试运行的时候, 尽量使用 `--release`, 不然耗时太久了.

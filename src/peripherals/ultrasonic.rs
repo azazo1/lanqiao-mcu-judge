@@ -51,16 +51,17 @@ impl UltrasonicDevice {
         self.tx_prev_high = tx_high;
     }
 
-    pub(crate) fn tick(&mut self) {
+    pub(crate) fn tick_ticks(&mut self, ticks: u32) {
         let Some(remaining) = self.echo_ticks_remaining else {
             return;
         };
-        if remaining <= 1 {
+        let elapsed = u64::from(ticks);
+        if remaining <= elapsed {
             self.rx_high = false;
             self.echo_ticks_remaining = None;
             self.waiting_for_trigger_release = false;
         } else {
-            self.echo_ticks_remaining = Some(remaining - 1);
+            self.echo_ticks_remaining = Some(remaining - elapsed);
         }
     }
 

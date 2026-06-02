@@ -74,7 +74,7 @@ impl Outputs {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct DigitSample {
     pub(crate) segments: u8,
     pub(crate) seen: bool,

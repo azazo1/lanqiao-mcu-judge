@@ -85,32 +85,20 @@ impl Ds1302 {
         Ok(())
     }
 
-    pub(crate) fn tick(&mut self) {
+    pub(crate) fn tick_ticks(&mut self, ticks: u64) {
         if self.halted {
             return;
         }
 
-        self.sub_us += 1;
+        self.sub_us = self.sub_us.saturating_add(ticks);
         if self.sub_us < TICKS_PER_SECOND {
             return;
         }
-        self.sub_us = 0;
-        self.second += 1;
-        if self.second < 60 {
-            return;
+        let elapsed_seconds = self.sub_us / TICKS_PER_SECOND;
+        self.sub_us %= TICKS_PER_SECOND;
+        for _ in 0..elapsed_seconds {
+            self.advance_one_second();
         }
-        self.second = 0;
-        self.minute += 1;
-        if self.minute < 60 {
-            return;
-        }
-        self.minute = 0;
-        self.hour += 1;
-        if self.hour < 24 {
-            return;
-        }
-        self.hour = 0;
-        self.increment_date();
     }
 
     pub(crate) fn sample(&mut self, ce: bool, clk: bool, io: bool) {
@@ -196,6 +184,25 @@ impl Ds1302 {
 
         self.month = 1;
         self.year = (self.year + 1) % 100;
+    }
+
+    fn advance_one_second(&mut self) {
+        self.second += 1;
+        if self.second < 60 {
+            return;
+        }
+        self.second = 0;
+        self.minute += 1;
+        if self.minute < 60 {
+            return;
+        }
+        self.minute = 0;
+        self.hour += 1;
+        if self.hour < 24 {
+            return;
+        }
+        self.hour = 0;
+        self.increment_date();
     }
 
     fn days_in_month(&self) -> u8 {
@@ -439,9 +446,7 @@ mod tests {
         ds1302.write_register(0x80);
         assert!(ds1302.halted);
 
-        for _ in 0..TICKS_PER_SECOND {
-            ds1302.tick();
-        }
+        ds1302.tick_ticks(TICKS_PER_SECOND);
 
         assert_eq!(ds1302.second, 0);
         assert_eq!(ds1302.read_register(), 0x80);
@@ -463,9 +468,7 @@ mod tests {
         assert_eq!(ds1302.second, 25);
         assert_eq!(ds1302.read_register(), 0x25);
 
-        for _ in 0..TICKS_PER_SECOND {
-            ds1302.tick();
-        }
+        ds1302.tick_ticks(TICKS_PER_SECOND);
 
         assert_eq!(ds1302.second, 26);
         assert_eq!(ds1302.read_register(), 0x26);
@@ -516,7 +519,7 @@ mod tests {
             ..Ds1302::default()
         };
 
-        ds1302.tick();
+        ds1302.tick_ticks(1);
 
         assert_eq!(ds1302.hour, 0);
         assert_eq!(ds1302.minute, 0);
