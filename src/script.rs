@@ -585,6 +585,64 @@ fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
         },
     );
 
+    let sim_display_number = Arc::clone(sim);
+    engine.register_fn(
+        "display_number",
+        move || -> Result<i64, Box<EvalAltResult>> {
+            sim_display_number
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .display_number()
+                .map_err(|err| runtime_error(err.to_string()))
+        },
+    );
+
+    let sim_display_number_window = Arc::clone(sim);
+    engine.register_fn(
+        "display_number",
+        move |duration_ms: i64| -> Result<i64, Box<EvalAltResult>> {
+            let duration_ms = u64::try_from(duration_ms)
+                .map_err(|_| runtime_error("duration_ms 参数必须 >= 0"))?;
+            sim_display_number_window
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .observe_display_number(duration_ms)
+                .map_err(|err| runtime_error(err.to_string()))
+        },
+    );
+
+    let sim_display_number_range = Arc::clone(sim);
+    engine.register_fn(
+        "display_number",
+        move |start: i64, end: i64| -> Result<i64, Box<EvalAltResult>> {
+            let start =
+                usize::try_from(start).map_err(|_| runtime_error("start 参数必须 >= 0"))?;
+            let end = usize::try_from(end).map_err(|_| runtime_error("end 参数必须 >= 0"))?;
+            sim_display_number_range
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .display_number_in_range(start, end)
+                .map_err(|err| runtime_error(err.to_string()))
+        },
+    );
+
+    let sim_display_number_range_window = Arc::clone(sim);
+    engine.register_fn(
+        "display_number",
+        move |start: i64, end: i64, duration_ms: i64| -> Result<i64, Box<EvalAltResult>> {
+            let start =
+                usize::try_from(start).map_err(|_| runtime_error("start 参数必须 >= 0"))?;
+            let end = usize::try_from(end).map_err(|_| runtime_error("end 参数必须 >= 0"))?;
+            let duration_ms = u64::try_from(duration_ms)
+                .map_err(|_| runtime_error("duration_ms 参数必须 >= 0"))?;
+            sim_display_number_range_window
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .observe_display_number_in_range(start, end, duration_ms)
+                .map_err(|err| runtime_error(err.to_string()))
+        },
+    );
+
     let sim_seg_decode = Arc::clone(sim);
     engine.register_fn(
         "set_seg_decode",

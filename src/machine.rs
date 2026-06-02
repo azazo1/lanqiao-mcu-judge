@@ -231,6 +231,29 @@ impl Simulator {
         Ok(initial)
     }
 
+    pub fn display_number(&self) -> Result<i64> {
+        parse_display_number(&self.display_text())
+    }
+
+    pub fn observe_display_number(&mut self, duration_ms: u64) -> Result<i64> {
+        let text = self.observe_display_text(duration_ms)?;
+        parse_display_number(&text)
+    }
+
+    pub fn display_number_in_range(&self, start: usize, end: usize) -> Result<i64> {
+        parse_display_number_in_range(&self.display_text(), start, end)
+    }
+
+    pub fn observe_display_number_in_range(
+        &mut self,
+        start: usize,
+        end: usize,
+        duration_ms: u64,
+    ) -> Result<i64> {
+        let text = self.observe_display_text(duration_ms)?;
+        parse_display_number_in_range(&text, start, end)
+    }
+
     pub fn set_seg_decode(&mut self, pattern: u8, text: &str) -> Result<()> {
         self.seg_decoder.set_mapping(pattern, text)
     }
@@ -388,6 +411,7 @@ impl Simulator {
             let auxr = self.ctx.ports.generic_get(SFR_AUXR);
             self.ctx.ports.timer.tick(p3, auxr);
             self.ctx.ports.tick_ultrasonic(&mut self.ctx.board);
+            self.ctx.ports.tick_pca_counter();
             self.ctx.ports.uart1.tick();
             let responses = self.ctx.ports.uart2.tick();
             for response in responses {
@@ -609,6 +633,7 @@ struct MachinePorts {
     board_latches: [u8; 4],
     board_latch_versions: [u64; 4],
     latch_used: bool,
+    pca_sub_ticks: u64,
     timer: Timer01,
     uart1: Uart,
     uart2: Uart,
@@ -632,6 +657,7 @@ impl MachinePorts {
             board_latches: [0; 4],
             board_latch_versions: [0; 4],
             latch_used: false,
+            pca_sub_ticks: 0,
             timer: Timer01::default(),
             uart1: Uart::new(UART1_SFR_SCON, UART1_SFR_SBUF, uart_frame_ticks(9_600)),
             uart2: Uart::new(UART2_SFR_S2CON, UART2_SFR_S2BUF, uart_frame_ticks(9_600)),
@@ -672,12 +698,21 @@ impl MachinePorts {
     fn tick_ultrasonic(&mut self, board: &mut BoardModel) {
         let tx_high = self.port_latch[1] & (1 << 0) != 0;
         board.ultrasonic.sample_trigger(tx_high);
+        board.ultrasonic.tick();
+    }
 
+    fn tick_pca_counter(&mut self) {
         let running = self.generic_get(SFR_CCON) & CCON_CR != 0;
         if !running {
-            board.ultrasonic.stop_measurement();
+            self.pca_sub_ticks = 0;
             return;
         }
+
+        self.pca_sub_ticks = self.pca_sub_ticks.saturating_add(1);
+        if self.pca_sub_ticks < CPU_TICKS_PER_US {
+            return;
+        }
+        self.pca_sub_ticks = 0;
 
         let counter = u16::from_be_bytes([self.generic_get(SFR_CH), self.generic_get(SFR_CL)])
             .wrapping_add(1);
@@ -687,9 +722,6 @@ impl MachinePorts {
         if counter == 0 {
             self.generic_set(SFR_CCON, self.generic_get(SFR_CCON) | CCON_CF);
         }
-
-        let timeout = self.generic_get(SFR_CMOD) & 0x80 != 0;
-        board.ultrasonic.sample_counter(counter, timeout);
     }
 
     fn strobe_board_latch(&mut self, select: u8, value: u8) {
@@ -1247,6 +1279,55 @@ fn set_bit_level(value: u8, bit: u8, high: bool) -> u8 {
     }
 }
 
+fn parse_display_number(text: &str) -> Result<i64> {
+    parse_display_number_slice(text)
+}
+
+fn parse_display_number_in_range(text: &str, start: usize, end: usize) -> Result<i64> {
+    if start == 0 || end == 0 {
+        bail!("显示位范围必须从 1 开始: start={start}, end={end}");
+    }
+    if start > end {
+        bail!("显示位范围必须满足 start <= end: start={start}, end={end}");
+    }
+    let chars = text.chars().collect::<Vec<_>>();
+    if end > chars.len() {
+        bail!(
+            "显示位范围越界: 文本长度为 {}, 请求范围 {}..={}",
+            chars.len(),
+            start,
+            end
+        );
+    }
+    let slice = chars[start - 1..end].iter().collect::<String>();
+    parse_display_number_slice(&slice)
+}
+
+fn parse_display_number_slice(text: &str) -> Result<i64> {
+    let mut numbers = Vec::new();
+    let mut current = String::new();
+
+    for ch in text.chars() {
+        if ch.is_ascii_digit() || (ch == '-' && current.is_empty()) {
+            current.push(ch);
+        } else if !current.is_empty() {
+            numbers.push(current.clone());
+            current.clear();
+        }
+    }
+    if !current.is_empty() {
+        numbers.push(current);
+    }
+
+    match numbers.as_slice() {
+        [value] => value
+            .parse::<i64>()
+            .map_err(|err| anyhow::anyhow!("解析显示数字失败: {err}")),
+        [] => bail!("显示内容中没有可解析的数字: `{text}`"),
+        _ => bail!("显示内容中包含多个数字, 无法唯一提取: `{text}`"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -1379,6 +1460,67 @@ mod tests {
         sim.run_ms(220).expect("run with S7 pressed");
         assert_eq!(sim.display_text(), "       8");
         assert!(sim.led_on(4).expect("read L4"));
+    }
+
+    #[test]
+    fn us_sample_tracks_distance_and_speed_setting() {
+        let mut sim = Simulator::from_hex_path(
+            &sample_path("sample/us/prj/Objects/us.hex"),
+            false,
+        )
+        .expect("load us");
+
+        sim.run_ms(220).expect("run us to idle");
+        assert_eq!(sim.seg_pattern(1).expect("read L pattern"), 0x38);
+        assert_eq!(
+            sim.observe_display_number_in_range(2, 8, 30)
+                .expect("read initial distance"),
+            0
+        );
+
+        sim.set_distance_cm(20.0);
+        sim.run_ms(220).expect("run us with 20cm obstacle");
+        let default_distance = sim
+            .observe_display_number_in_range(4, 8, 30)
+            .expect("read default distance");
+        assert!((18..=20).contains(&default_distance));
+
+        sim.tap_key("S4", 80).expect("switch to speed page");
+        sim.run_ms(220).expect("run us after switching menu");
+        assert_eq!(sim.seg_pattern(1).expect("read P pattern"), 0x73);
+        assert_eq!(
+            sim.observe_display_number_in_range(6, 8, 30)
+                .expect("read default speed"),
+            340
+        );
+
+        sim.tap_key("S9", 80).expect("increase speed");
+        sim.run_ms(220).expect("run us after increasing speed");
+        assert_eq!(
+            sim.observe_display_number_in_range(6, 8, 30)
+                .expect("read increased speed"),
+            345
+        );
+
+        sim.tap_key("S4", 80).expect("switch back to distance page");
+        sim.run_ms(220).expect("run us after returning to distance page");
+        let adjusted_distance = sim
+            .observe_display_number_in_range(4, 8, 30)
+            .expect("read adjusted distance");
+        assert!((19..=21).contains(&adjusted_distance));
+    }
+
+    #[test]
+    fn display_number_range_extracts_requested_digits() {
+        assert_eq!(
+            super::parse_display_number_in_range("23-59-50", 1, 2).expect("read hour"),
+            23
+        );
+        assert_eq!(
+            super::parse_display_number_in_range("23-59-50", 4, 5).expect("read minute"),
+            59
+        );
+        assert!(super::parse_display_number("23-59-50").is_err());
     }
 
     #[test]

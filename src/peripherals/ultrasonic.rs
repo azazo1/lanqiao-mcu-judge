@@ -7,9 +7,9 @@ pub(crate) struct UltrasonicDevice {
     pub(crate) distance_cm: f32,
     pending_rx: VecDeque<u8>,
     tx_prev_high: bool,
-    waiting_for_measure: bool,
+    waiting_for_trigger_release: bool,
     rx_high: bool,
-    target_counter: Option<u16>,
+    echo_ticks_remaining: Option<u64>,
 }
 
 impl Default for UltrasonicDevice {
@@ -18,9 +18,9 @@ impl Default for UltrasonicDevice {
             distance_cm: 0.0,
             pending_rx: VecDeque::new(),
             tx_prev_high: false,
-            waiting_for_measure: false,
+            waiting_for_trigger_release: false,
             rx_high: true,
-            target_counter: None,
+            echo_ticks_remaining: None,
         }
     }
 }
@@ -42,45 +42,35 @@ impl UltrasonicDevice {
 
     pub(crate) fn sample_trigger(&mut self, tx_high: bool) {
         if tx_high && !self.tx_prev_high {
-            self.waiting_for_measure = true;
+            self.waiting_for_trigger_release = true;
             self.rx_high = true;
-            self.target_counter = None;
-        } else if !tx_high && self.tx_prev_high && self.waiting_for_measure {
-            self.target_counter = Some(self.distance_counter());
+            self.echo_ticks_remaining = None;
+        } else if !tx_high && self.tx_prev_high && self.waiting_for_trigger_release {
+            self.echo_ticks_remaining = Some(self.distance_ticks());
         }
         self.tx_prev_high = tx_high;
     }
 
-    pub(crate) fn sample_counter(&mut self, counter: u16, timeout: bool) {
-        if timeout {
-            self.rx_high = false;
-            self.target_counter = None;
-            self.waiting_for_measure = false;
+    pub(crate) fn tick(&mut self) {
+        let Some(remaining) = self.echo_ticks_remaining else {
             return;
-        }
-
-        if let Some(target) = self.target_counter
-            && counter >= target
-        {
+        };
+        if remaining <= 1 {
             self.rx_high = false;
-            self.target_counter = None;
-            self.waiting_for_measure = false;
+            self.echo_ticks_remaining = None;
+            self.waiting_for_trigger_release = false;
+        } else {
+            self.echo_ticks_remaining = Some(remaining - 1);
         }
-    }
-
-    pub(crate) fn stop_measurement(&mut self) {
-        self.rx_high = true;
-        self.target_counter = None;
-        self.waiting_for_measure = false;
     }
 
     pub(crate) fn rx_level(&self) -> bool {
         self.rx_high
     }
 
-    fn distance_counter(&self) -> u16 {
+    fn distance_ticks(&self) -> u64 {
         ((self.distance_cm.max(0.0) / 0.017) * CPU_TICKS_PER_US as f32)
             .round()
-            .clamp(0.0, u16::MAX as f32) as u16
+            .clamp(0.0, u64::MAX as f32) as u64
     }
 }

@@ -107,6 +107,10 @@ LED:
 
 - `display_text()`
 - `display_text(window_ms)`
+- `display_number()`
+- `display_number(window_ms)`
+- `display_number(start, end)`
+- `display_number(start, end, window_ms)`
 - `snapshot_text()`
 - `uart_take()`
 - `relay_on()`
@@ -123,6 +127,12 @@ LED:
 - 如果窗口内文本发生变化, 直接报错.
 
 这样更适合判断一段时间内显示是否稳定, 而不是只看某个瞬间.
+
+`display_number()` 和 `display_number(window_ms)` 会从当前显示文本里提取唯一的整数. 如果显示内容里没有数字, 或者同时出现了多个数字, 会直接报错.
+
+如果一屏里同时存在多个数字片段, 可以改用 `display_number(start, end)` 或 `display_number(start, end, window_ms)`, 在指定的数码管位范围内提取数字. 位号和 `seg_pattern(1)` 一样, 都是从左到右按 `1..=8` 计数.
+
+这更适合超声波, 温度, 电压这类量测题, 可以直接写布尔表达式判断范围, 避免按整串字符串做数值断言.
 
 ## 按键模式
 
@@ -186,7 +196,8 @@ assert_eq_str(display_text(), "       0", "上电显示");
 
 set_key(S4, true);
 run_ms(220);
-assert_eq_str(display_text(30), "       1", "显示稳定");
+let value = display_number(8, 8, 30);
+assert(value == 1, "显示稳定");
 assert(led_on(L1), "L1 应点亮");
 
 print(snapshot_text());
