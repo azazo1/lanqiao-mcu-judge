@@ -1,0 +1,2 @@
+pub const CPU_TICKS_PER_US: u64 = 35;
+pub const TICKS_PER_SECOND: u64 = 1_000_000 * CPU_TICKS_PER_US;

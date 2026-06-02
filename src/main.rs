@@ -1,7 +1,11 @@
 mod app;
 mod hex;
+mod ids;
 mod machine;
+mod peripherals;
+mod registers;
 mod script;
+mod timing;
 
 use anyhow::Result;
 
