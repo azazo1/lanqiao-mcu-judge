@@ -4,19 +4,9 @@ use anyhow::Result;
 
 use crate::ids::VoltageChannel;
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct AnalogInputs {
     voltages: BTreeMap<String, f32>,
-    pub(crate) eeprom: [u8; 256],
-}
-
-impl Default for AnalogInputs {
-    fn default() -> Self {
-        Self {
-            voltages: BTreeMap::new(),
-            eeprom: [0; 256],
-        }
-    }
 }
 
 impl AnalogInputs {

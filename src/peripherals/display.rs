@@ -6,6 +6,7 @@ use anyhow::{Result, bail};
 pub(crate) struct Outputs {
     pub(crate) leds: [bool; 8],
     pub(crate) relay_on: bool,
+    pub(crate) motor_on: bool,
     pub(crate) buzzer_on: bool,
     pub(crate) digits: [DigitSample; 8],
     segment_latch: u8,
@@ -24,6 +25,7 @@ impl Outputs {
 
         let ctrl = latches[1];
         self.relay_on = ctrl & (1 << 4) != 0;
+        self.motor_on = ctrl & (1 << 5) != 0;
         self.buzzer_on = ctrl & (1 << 6) != 0;
 
         if versions[2] != self.last_com_strobe {

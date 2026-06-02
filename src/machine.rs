@@ -15,7 +15,8 @@ use crate::{
     hex::load_ihex,
     ids::{KeyId, KeyMode, LedId, VoltageChannel},
     peripherals::{
-        AnalogInputs, Ds1302, Ds18b20, I2cBus, Key, Outputs, Rtc, SegmentDecoder, UltrasonicDevice,
+        AnalogInputs, At24c02, Ds1302, Ds18b20, I2cBus, Key, Ne555, Outputs, Pcf8591,
+        SegmentDecoder, UltrasonicDevice,
     },
     registers::*,
     timing::{CPU_TICKS_PER_US, TICKS_PER_SECOND},
@@ -86,7 +87,7 @@ impl Simulator {
     }
 
     pub fn set_rtc(&mut self, hour: u8, minute: u8, second: u8) -> Result<()> {
-        self.ctx.board.rtc.set_hms(hour, minute, second)
+        self.ctx.board.ds1302.set_hms(hour, minute, second)
     }
 
     pub fn set_temperature_c(&mut self, value: f32) {
@@ -98,7 +99,7 @@ impl Simulator {
     }
 
     pub fn set_frequency_hz(&mut self, value: f32) {
-        self.ctx.board.frequency_hz = value.max(0.0);
+        self.ctx.board.ne555.set_frequency_hz(value);
     }
 
     pub fn set_voltage(&mut self, name: &str, value: f32) -> Result<()> {
@@ -123,6 +124,10 @@ impl Simulator {
 
     pub fn buzzer_on(&self) -> bool {
         self.ctx.board.outputs.buzzer_on
+    }
+
+    pub fn motor_on(&self) -> bool {
+        self.ctx.board.outputs.motor_on
     }
 
     pub fn led_on(&self, index: usize) -> Result<bool> {
@@ -261,8 +266,15 @@ impl Simulator {
         );
         let _ = writeln!(
             out,
-            "rtc: {:02}:{:02}:{:02}",
-            self.ctx.board.rtc.hour, self.ctx.board.rtc.minute, self.ctx.board.rtc.second
+            "rtc: 20{:02}-{:02}-{:02} w{} {:02}:{:02}:{:02} halted={}",
+            self.ctx.board.ds1302.year,
+            self.ctx.board.ds1302.month,
+            self.ctx.board.ds1302.date,
+            self.ctx.board.ds1302.day_of_week,
+            self.ctx.board.ds1302.hour,
+            self.ctx.board.ds1302.minute,
+            self.ctx.board.ds1302.second,
+            self.ctx.board.ds1302.halted
         );
         let _ = writeln!(out, "display: {}", self.display_text());
         let digit_segments = self
@@ -294,6 +306,7 @@ impl Simulator {
         let _ = writeln!(out, "leds: [{}]", leds);
         let _ = writeln!(out, "relay: {}", self.relay_on());
         let _ = writeln!(out, "buzzer: {}", self.buzzer_on());
+        let _ = writeln!(out, "motor: {}", self.motor_on());
         let _ = writeln!(out, "uart: {}", self.ctx.ports.uart1.tx_text());
         let _ = writeln!(
             out,
@@ -1015,22 +1028,23 @@ impl Uart {
 #[derive(Debug, Default)]
 struct BoardModel {
     ticks: u64,
-    rtc: Rtc,
     outputs: Outputs,
     ds18b20: Ds18b20,
     ds1302: Ds1302,
     i2c: I2cBus,
+    pcf8591: Pcf8591,
+    at24c02: At24c02,
+    ne555: Ne555,
     ultrasonic: UltrasonicDevice,
     keys: Key,
     key_mode: KeyMode,
     analog: AnalogInputs,
-    frequency_hz: f32,
 }
 
 impl BoardModel {
     fn tick_rtc(&mut self) {
         self.ticks = self.ticks.saturating_add(1);
-        self.rtc.tick();
+        self.ds1302.tick();
     }
 
     fn tick_protocols(
@@ -1045,13 +1059,14 @@ impl BoardModel {
             (p1 & (1 << 3)) != 0,
             (p1 & (1 << 7)) != 0,
             (p2 & (1 << 3)) != 0,
-            &mut self.rtc,
         );
         self.ds18b20.sample(self.ticks, (p1 & (1 << 4)) != 0);
         self.i2c.sample(
             (p2 & (1 << 0)) != 0,
             (p2 & (1 << 1)) != 0,
             &self.analog,
+            &mut self.pcf8591,
+            &mut self.at24c02,
         );
         self.outputs
             .sample_from_latches(board_latches, board_latch_versions);
@@ -1102,13 +1117,7 @@ impl BoardModel {
     }
 
     fn frequency_level(&self) -> bool {
-        if self.frequency_hz <= 0.0 {
-            return true;
-        }
-        let effective_hz = self.frequency_hz * (CPU_TICKS_PER_US as f32 / 12.0);
-        let period_ticks = (TICKS_PER_SECOND as f32 / effective_hz).max(1.0);
-        let half = (period_ticks / 2.0).max(1.0) as u64;
-        (self.ticks / half).is_multiple_of(2)
+        self.ne555.level(self.ticks)
     }
 
     fn read_hall_level(&self) -> bool {

@@ -5,8 +5,11 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
-use rhai::{Dynamic, Engine, EvalAltResult, ImmutableString, Scope};
-use tracing::debug;
+use rhai::{
+    Dynamic, Engine, EvalAltResult, ImmutableString, Position, Scope,
+    debugger::{DebuggerCommand, DebuggerEvent},
+};
+use tracing::{debug, trace};
 
 use crate::{
     ids::{KeyId, KeyMode, LedId, VoltageChannel},
@@ -32,7 +35,8 @@ pub fn run_script_stdin(sim: Simulator) -> Result<()> {
 
 pub fn run_repl(sim: Simulator) -> Result<()> {
     let shared = Arc::new(Mutex::new(sim));
-    let engine = build_engine(&shared);
+    let trace_state = Arc::new(Mutex::new(ScriptTraceState::default()));
+    let engine = build_engine(&shared, &trace_state);
     let mut scope = build_scope();
     let stdin = io::stdin();
     let mut reader = stdin.lock();
@@ -68,7 +72,13 @@ pub fn run_repl(sim: Simulator) -> Result<()> {
         }
 
         debug!(line_no, statement, "执行 REPL 语句");
-        if let Err(err) = engine.eval_with_scope::<Dynamic>(&mut scope, &line) {
+        if let Err(err) = eval_source_with_engine(
+            &engine,
+            &mut scope,
+            &trace_state,
+            &format!("repl:{line_no}"),
+            &line,
+        ) {
             eprintln!("{err}");
         }
         line_no = line_no.saturating_add(1);
@@ -79,24 +89,148 @@ pub fn run_repl(sim: Simulator) -> Result<()> {
 
 fn eval_source(sim: Simulator, label: &str, source: &str) -> Result<()> {
     let shared = Arc::new(Mutex::new(sim));
-    let engine = build_engine(&shared);
+    let trace_state = Arc::new(Mutex::new(ScriptTraceState::default()));
+    let engine = build_engine(&shared, &trace_state);
     let mut scope = build_scope();
     debug!(label, lines = source.lines().count(), "开始执行评测脚本");
+    eval_source_with_engine(&engine, &mut scope, &trace_state, label, source)?;
+    Ok(())
+}
+
+fn eval_source_with_engine(
+    engine: &Engine,
+    scope: &mut Scope<'_>,
+    trace_state: &Arc<Mutex<ScriptTraceState>>,
+    label: &str,
+    source: &str,
+) -> Result<()> {
+    update_script_trace_state(trace_state, label, source);
+    let mut ast = engine
+        .compile_with_scope(scope, source)
+        .map_err(|err| anyhow!(err.to_string()))?;
+    ast.set_source(label);
     let _ = engine
-        .eval_with_scope::<Dynamic>(&mut scope, source)
+        .eval_ast_with_scope::<Dynamic>(scope, &ast)
         .map_err(|err| anyhow!(err.to_string()))?;
     Ok(())
 }
 
-fn build_engine(sim: &Arc<Mutex<Simulator>>) -> Engine {
+fn build_engine(sim: &Arc<Mutex<Simulator>>, trace_state: &Arc<Mutex<ScriptTraceState>>) -> Engine {
     let mut engine = Engine::new();
     engine.on_print(|text| println!("{text}"));
+    register_script_progress_debugger(&mut engine, trace_state);
     engine.register_type_with_name::<LedId>("Led");
     engine.register_type_with_name::<KeyId>("Key");
     engine.register_type_with_name::<KeyMode>("KeyMode");
     engine.register_type_with_name::<VoltageChannel>("VoltageChannel");
     register_api(&mut engine, sim);
     engine
+}
+
+#[derive(Debug, Default)]
+struct ScriptTraceState {
+    label: String,
+    lines: Vec<String>,
+    step: u64,
+}
+
+fn update_script_trace_state(trace_state: &Arc<Mutex<ScriptTraceState>>, label: &str, source: &str) {
+    let mut state = trace_state.lock().expect("script trace state lock");
+    state.label.clear();
+    state.label.push_str(label);
+    state.lines = source.lines().map(str::to_owned).collect();
+    state.step = 0;
+}
+
+fn source_line_snippet(lines: &[String], pos: Position) -> String {
+    let Some(line_no) = pos.line() else {
+        return String::new();
+    };
+    lines.get(line_no.saturating_sub(1))
+        .map(|line| line.trim().to_owned())
+        .unwrap_or_default()
+}
+
+fn script_event_name(event: DebuggerEvent<'_>) -> &'static str {
+    match event {
+        DebuggerEvent::Start => "start",
+        DebuggerEvent::Step => "step",
+        DebuggerEvent::BreakPoint(_) => "breakpoint",
+        DebuggerEvent::FunctionExitWithValue(_) => "fn_return",
+        DebuggerEvent::FunctionExitWithError(_) => "fn_error",
+        DebuggerEvent::End => "end",
+        _ => "other",
+    }
+}
+
+fn register_script_progress_debugger(
+    engine: &mut Engine,
+    trace_state: &Arc<Mutex<ScriptTraceState>>,
+) {
+    let trace_state = Arc::clone(trace_state);
+    #[allow(deprecated)]
+    engine.register_debugger(
+        |_, debugger| debugger,
+        move |context, event, node, source, pos| {
+            let mut label = source.unwrap_or("").to_owned();
+            let mut step = 0_u64;
+            let mut snippet = String::new();
+
+            if let Ok(mut state) = trace_state.lock() {
+                if label.is_empty() {
+                    label = state.label.clone();
+                }
+                if matches!(event, DebuggerEvent::End) {
+                    step = state.step;
+                } else {
+                    state.step = state.step.saturating_add(1);
+                    step = state.step;
+                }
+                snippet = source_line_snippet(&state.lines, pos);
+            }
+
+            match event {
+                DebuggerEvent::Start | DebuggerEvent::Step | DebuggerEvent::BreakPoint(_) => {
+                    debug!(
+                        target: "script_progress",
+                        label,
+                        event = script_event_name(event),
+                        step,
+                        line = pos.line().unwrap_or(0),
+                        column = pos.position().unwrap_or(0),
+                        call_level = context.call_level(),
+                        snippet,
+                        is_stmt = node.is_stmt(),
+                        "执行评测脚本语句"
+                    );
+                    Ok(DebuggerCommand::Next)
+                }
+                DebuggerEvent::FunctionExitWithValue(_) | DebuggerEvent::FunctionExitWithError(_) => {
+                    trace!(
+                        target: "script_progress",
+                        label,
+                        event = script_event_name(event),
+                        line = pos.line().unwrap_or(0),
+                        column = pos.position().unwrap_or(0),
+                        call_level = context.call_level(),
+                        "脚本函数返回"
+                    );
+                    Ok(DebuggerCommand::Next)
+                }
+                DebuggerEvent::End => {
+                    debug!(
+                        target: "script_progress",
+                        label,
+                        event = script_event_name(event),
+                        steps = step,
+                        "评测脚本执行结束"
+                    );
+                    Ok(DebuggerCommand::Continue)
+                }
+                _ => Ok(DebuggerCommand::Next),
+            }
+        },
+    );
 }
 
 fn build_scope() -> Scope<'static> {
@@ -457,6 +591,15 @@ fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
             .lock()
             .map_err(|_| runtime_error("仿真器锁已损坏"))?
             .buzzer_on();
+        Ok(value)
+    });
+
+    let sim_motor = Arc::clone(sim);
+    engine.register_fn("motor_on", move || -> Result<bool, Box<EvalAltResult>> {
+        let value = sim_motor
+            .lock()
+            .map_err(|_| runtime_error("仿真器锁已损坏"))?
+            .motor_on();
         Ok(value)
     });
 

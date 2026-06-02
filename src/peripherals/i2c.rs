@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use super::AnalogInputs;
+use super::{AnalogInputs, At24c02, Pcf8591};
 
 #[derive(Debug, Default)]
 pub(crate) struct I2cBus {
@@ -12,8 +12,6 @@ pub(crate) struct I2cBus {
     pub(crate) scl_drive_low: bool,
     active: Option<I2cDevice>,
     mode: I2cMode,
-    pcf8591_control: u8,
-    eeprom_addr: u8,
     read_buffer: VecDeque<u8>,
 }
 
@@ -33,7 +31,14 @@ enum I2cDevice {
 }
 
 impl I2cBus {
-    pub(crate) fn sample(&mut self, scl_high: bool, sda_high: bool, analog: &AnalogInputs) {
+    pub(crate) fn sample(
+        &mut self,
+        scl_high: bool,
+        sda_high: bool,
+        analog: &AnalogInputs,
+        pcf8591: &mut Pcf8591,
+        at24c02: &mut At24c02,
+    ) {
         if self.sda_prev && !sda_high && scl_high {
             self.mode = I2cMode::Address;
             self.bit_count = 0;
@@ -53,7 +58,7 @@ impl I2cBus {
                     self.shift = (self.shift << 1) | u8::from(sda_high);
                     self.bit_count += 1;
                     if self.bit_count == 8 {
-                        self.handle_received_byte(analog);
+                        self.handle_received_byte(analog, pcf8591, at24c02);
                         self.bit_count = 0;
                         self.shift = 0;
                         self.sda_drive_low = true;
@@ -70,6 +75,9 @@ impl I2cBus {
                         self.bit_count = 0;
                         self.sda_drive_low = false;
                         self.read_buffer.pop_front();
+                        if self.read_buffer.is_empty() {
+                            self.refill_read_buffer(analog, pcf8591, at24c02);
+                        }
                     } else {
                         let bit = self.shift & 0x80 != 0;
                         self.sda_drive_low = !bit;
@@ -88,7 +96,12 @@ impl I2cBus {
         self.sda_prev = sda_high;
     }
 
-    fn handle_received_byte(&mut self, analog: &AnalogInputs) {
+    fn handle_received_byte(
+        &mut self,
+        analog: &AnalogInputs,
+        pcf8591: &mut Pcf8591,
+        at24c02: &mut At24c02,
+    ) {
         match self.mode {
             I2cMode::Address => {
                 let address = self.shift >> 1;
@@ -98,21 +111,22 @@ impl I2cBus {
                     0x50 => Some(I2cDevice::Eeprom),
                     _ => None,
                 };
+
                 match (self.active, read) {
                     (Some(I2cDevice::Pcf8591), true) => {
                         self.mode = I2cMode::Read;
-                        let value = analog.channel_value(self.pcf8591_control & 0x03);
-                        self.read_buffer.push_back(value);
+                        self.read_buffer.push_back(pcf8591.read_byte(analog));
                     }
                     (Some(I2cDevice::Pcf8591), false) => {
+                        pcf8591.begin_write();
                         self.mode = I2cMode::Write;
                     }
                     (Some(I2cDevice::Eeprom), true) => {
                         self.mode = I2cMode::Read;
-                        self.read_buffer
-                            .push_back(analog.eeprom[self.eeprom_addr as usize]);
+                        self.read_buffer.push_back(at24c02.read_byte());
                     }
                     (Some(I2cDevice::Eeprom), false) => {
+                        at24c02.begin_write();
                         self.mode = I2cMode::Write;
                     }
                     (None, _) => {
@@ -122,14 +136,27 @@ impl I2cBus {
             }
             I2cMode::Write => match self.active {
                 Some(I2cDevice::Pcf8591) => {
-                    self.pcf8591_control = self.shift;
+                    pcf8591.write_byte(self.shift);
                 }
                 Some(I2cDevice::Eeprom) => {
-                    self.eeprom_addr = self.shift;
+                    at24c02.write_byte(self.shift);
                 }
                 None => {}
             },
             I2cMode::Idle | I2cMode::Read => {}
+        }
+    }
+
+    fn refill_read_buffer(
+        &mut self,
+        analog: &AnalogInputs,
+        pcf8591: &mut Pcf8591,
+        at24c02: &mut At24c02,
+    ) {
+        match self.active {
+            Some(I2cDevice::Pcf8591) => self.read_buffer.push_back(pcf8591.read_byte(analog)),
+            Some(I2cDevice::Eeprom) => self.read_buffer.push_back(at24c02.read_byte()),
+            None => {}
         }
     }
 }

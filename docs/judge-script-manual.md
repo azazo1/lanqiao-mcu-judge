@@ -27,11 +27,25 @@ stcjudge run --hex sample/key_seg/prj/Objects/key_seg.hex --stdin < sample/key_s
 stcjudge repl --hex sample/key_seg/prj/Objects/key_seg.hex
 ```
 
+脚本逐语句 tracing:
+
+```bash
+RUST_LOG=debug stcjudge run --hex sample/key_seg/prj/Objects/key_seg.hex --script sample/key_seg/judge/smoke.rhai
+```
+
 REPL 内置命令:
 
 - `:help`
 - `:quit`
 - `:exit`
+
+打开 `RUST_LOG=debug` 后, 评测器会输出 Rhai 脚本的逐语句执行进度, 包括:
+
+- 当前脚本标签
+- 步号
+- 行号和列号
+- 调用层级
+- 当前语句所在源码行
 
 ## 内置常量
 
@@ -50,6 +64,11 @@ LED:
 
 - `RB2` `RB3` `RB4` `RD1`
 
+按键模式:
+
+- `KEYBOARD` `KBD`
+- `BUTTON` `BTN`
+
 这些常量可以直接传给脚本函数, 不需要再写成字符串.
 
 ## 执行控制
@@ -64,6 +83,8 @@ LED:
 - `set_key(S4, true)`
 - `set_key("S4", true)`
 - `tap_key(S4, 50)`
+- `key_mode(BTN)`
+- `key_mode("kbd")`
 - `set_rtc(23, 59, 50)`
 - `set_temperature_c(25)`
 - `set_distance_cm(35)`
@@ -80,6 +101,7 @@ LED:
 - `uart_take()`
 - `relay_on()`
 - `buzzer_on()`
+- `motor_on()`
 - `led_on(1)`
 - `led_on(L1)`
 
@@ -91,6 +113,14 @@ LED:
 - 如果窗口内文本发生变化, 直接报错.
 
 这样更适合判断一段时间内显示是否稳定, 而不是只看某个瞬间.
+
+## 按键模式
+
+默认模式是 `KEYBOARD`.
+
+- 矩阵键盘题直接使用默认值即可.
+- 独立按键题先调用 `key_mode(BTN)`.
+- 也支持字符串形式, 比如 `key_mode("kbd")` 和 `key_mode("btn")`.
 
 ## LED 频率观察
 

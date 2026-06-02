@@ -93,3 +93,32 @@ fn cli_accepts_stdin_script_and_builtin_constants() {
         "stdout: {stdout}"
     );
 }
+
+#[test]
+fn debug_tracing_keeps_script_execution_working() {
+    let script_path = temp_script_path();
+    std::fs::write(&script_path, "run_ms(220);\nset_key(S4, true);\nrun_ms(220);\n")
+        .expect("write script");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_stcjudge"))
+        .env("RUST_LOG", "debug")
+        .args([
+            "run",
+            "--hex",
+            sample_path("sample/key_seg/prj/Objects/key_seg.hex")
+                .to_str()
+                .expect("hex path"),
+            "--script",
+            script_path.to_str().expect("script path"),
+        ])
+        .output()
+        .expect("run cli with debug tracing");
+
+    let _ = std::fs::remove_file(&script_path);
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
