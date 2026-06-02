@@ -12,7 +12,7 @@ use rhai::{
 use tracing::{debug, trace};
 
 use crate::{
-    ids::{KeyId, KeyMode, LedId, VoltageChannel},
+    ids::{KeyId, KeyMode, LedId, SignalId, VoltageChannel},
     machine::Simulator,
 };
 
@@ -123,6 +123,7 @@ fn build_engine(sim: &Arc<Mutex<Simulator>>, trace_state: &Arc<Mutex<ScriptTrace
     engine.register_type_with_name::<KeyId>("Key");
     engine.register_type_with_name::<KeyMode>("KeyMode");
     engine.register_type_with_name::<VoltageChannel>("VoltageChannel");
+    engine.register_type_with_name::<SignalId>("Signal");
     register_api(&mut engine, sim);
     engine
 }
@@ -279,6 +280,8 @@ fn build_scope() -> Scope<'static> {
     scope.push_constant("KBD", KeyMode::Keyboard);
     scope.push_constant("BUTTON", KeyMode::Button);
     scope.push_constant("BTN", KeyMode::Button);
+    scope.push_constant("SIG_OUT", SignalId::SigOut);
+    scope.push_constant("NET_SIG", SignalId::NetSig);
     scope
 }
 
@@ -430,6 +433,78 @@ fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
                 .map_err(|_| runtime_error("仿真器锁已损坏"))?
                 .set_frequency_hz(hz as f32);
             Ok(())
+        },
+    );
+
+    let sim_jumper_on = Arc::clone(sim);
+    engine.register_fn(
+        "jumper_on",
+        move |left: SignalId, right: SignalId| -> Result<(), Box<EvalAltResult>> {
+            sim_jumper_on
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .jumper_on(left, right)
+                .map_err(|err| runtime_error(err.to_string()))
+        },
+    );
+
+    let sim_jumper_on_name = Arc::clone(sim);
+    engine.register_fn(
+        "jumper_on",
+        move |left: ImmutableString, right: ImmutableString| -> Result<(), Box<EvalAltResult>> {
+            sim_jumper_on_name
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .jumper_on_named(left.as_str(), right.as_str())
+                .map_err(|err| runtime_error(err.to_string()))
+        },
+    );
+
+    let sim_jumper_off = Arc::clone(sim);
+    engine.register_fn(
+        "jumper_off",
+        move |left: SignalId, right: SignalId| -> Result<(), Box<EvalAltResult>> {
+            sim_jumper_off
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .jumper_off(left, right)
+                .map_err(|err| runtime_error(err.to_string()))
+        },
+    );
+
+    let sim_jumper_off_name = Arc::clone(sim);
+    engine.register_fn(
+        "jumper_off",
+        move |left: ImmutableString, right: ImmutableString| -> Result<(), Box<EvalAltResult>> {
+            sim_jumper_off_name
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .jumper_off_named(left.as_str(), right.as_str())
+                .map_err(|err| runtime_error(err.to_string()))
+        },
+    );
+
+    let sim_jumper_installed = Arc::clone(sim);
+    engine.register_fn(
+        "jumper_installed",
+        move |left: SignalId, right: SignalId| -> Result<bool, Box<EvalAltResult>> {
+            let installed = sim_jumper_installed
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .jumper_installed(left, right);
+            Ok(installed)
+        },
+    );
+
+    let sim_jumper_installed_name = Arc::clone(sim);
+    engine.register_fn(
+        "jumper_installed",
+        move |left: ImmutableString, right: ImmutableString| -> Result<bool, Box<EvalAltResult>> {
+            sim_jumper_installed_name
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .jumper_installed_named(left.as_str(), right.as_str())
+                .map_err(|err| runtime_error(err.to_string()))
         },
     );
 

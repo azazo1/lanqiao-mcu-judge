@@ -153,3 +153,26 @@ impl KeyMode {
         }
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum SignalId {
+    SigOut,
+    NetSig,
+}
+
+impl SignalId {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SigOut => "SIG_OUT",
+            Self::NetSig => "NET_SIG",
+        }
+    }
+
+    pub fn parse(name: &str) -> Result<Self> {
+        match name.trim().to_ascii_uppercase().as_str() {
+            "SIG_OUT" | "SIGOUT" => Ok(Self::SigOut),
+            "NET_SIG" | "NETSIG" => Ok(Self::NetSig),
+            _ => bail!("未知跳帽信号: {name}"),
+        }
+    }
+}

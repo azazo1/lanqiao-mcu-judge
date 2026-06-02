@@ -69,6 +69,11 @@ LED:
 - `KEYBOARD` `KBD`
 - `BUTTON` `BTN`
 
+跳帽信号:
+
+- `SIG_OUT`
+- `NET_SIG`
+
 这些常量可以直接传给脚本函数, 不需要再写成字符串.
 
 ## 执行控制
@@ -92,6 +97,11 @@ LED:
 - `set_voltage(RB2, 2.3)`
 - `set_voltage("RB2", 2.3)`
 - `uart_write("(F,?)")`
+- `jumper_on(NET_SIG, SIG_OUT)`
+- `jumper_off(NET_SIG, SIG_OUT)`
+- `jumper_installed(NET_SIG, SIG_OUT)`
+
+默认跳帽状态按开发板原理图处理. 例如 `NET_SIG` 和 `SIG_OUT` 在板内默认没有硬连, 所以仅仅 `set_frequency_hz(...)` 不会自动影响 `P3.4/T0`. 如果题目或评测需要把 NE555 输出接到单片机频率输入, 需要先显式调用 `jumper_on(NET_SIG, SIG_OUT)`.
 
 ## 输出观察
 

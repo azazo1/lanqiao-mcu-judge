@@ -6,6 +6,7 @@ mod peripherals;
 mod registers;
 mod script;
 mod timing;
+mod jumper;
 
 use anyhow::Result;
 

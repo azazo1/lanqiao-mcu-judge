@@ -1,4 +1,5 @@
 use std::{
+    cell::Cell,
     collections::VecDeque,
     fmt::Write as _,
     fs,
@@ -9,15 +10,16 @@ use anyhow::{Context, Result, bail};
 use i8051::{
     Cpu, CpuContext, CpuView, Instruction, MemoryMapper, PortMapper, ReadOnlyMemoryMapper, Register,
 };
-use tracing::trace;
+use tracing::{trace, warn};
 
 use crate::{
     hex::load_ihex,
-    ids::{KeyId, KeyMode, LedId, VoltageChannel},
+    ids::{KeyId, KeyMode, LedId, SignalId, VoltageChannel},
     peripherals::{
         AnalogInputs, At24c02, Ds1302, Ds18b20, I2cBus, Key, Ne555, Outputs, Pcf8591,
         SegmentDecoder, UltrasonicDevice,
     },
+    jumper::{BoardJumpers, LineDrive, resolve_line},
     registers::*,
     timing::{CPU_TICKS_PER_US, TICKS_PER_SECOND},
 };
@@ -100,6 +102,30 @@ impl Simulator {
 
     pub fn set_frequency_hz(&mut self, value: f32) {
         self.ctx.board.ne555.set_frequency_hz(value);
+    }
+
+    pub fn jumper_on(&mut self, left: SignalId, right: SignalId) -> Result<()> {
+        self.ctx.board.jumper_on(left, right)
+    }
+
+    pub fn jumper_on_named(&mut self, left: &str, right: &str) -> Result<()> {
+        self.jumper_on(SignalId::parse(left)?, SignalId::parse(right)?)
+    }
+
+    pub fn jumper_off(&mut self, left: SignalId, right: SignalId) -> Result<()> {
+        self.ctx.board.jumper_off(left, right)
+    }
+
+    pub fn jumper_off_named(&mut self, left: &str, right: &str) -> Result<()> {
+        self.jumper_off(SignalId::parse(left)?, SignalId::parse(right)?)
+    }
+
+    pub fn jumper_installed(&self, left: SignalId, right: SignalId) -> bool {
+        self.ctx.board.jumper_installed(left, right)
+    }
+
+    pub fn jumper_installed_named(&self, left: &str, right: &str) -> Result<bool> {
+        Ok(self.jumper_installed(SignalId::parse(left)?, SignalId::parse(right)?))
     }
 
     pub fn set_voltage(&mut self, name: &str, value: f32) -> Result<()> {
@@ -330,6 +356,7 @@ impl Simulator {
             self.ctx.ports.board_latches[3]
         );
         let _ = writeln!(out, "board_latch_source: {}", self.ctx.board_latch_source());
+        let _ = writeln!(out, "jumpers: {}", self.ctx.board.jumpers.describe());
         let _ = writeln!(
             out,
             "port_latch: P0={:02X} P1={:02X} P2={:02X} P3={:02X} P4={:02X} P5={:02X}",
@@ -1039,6 +1066,8 @@ struct BoardModel {
     keys: Key,
     key_mode: KeyMode,
     analog: AnalogInputs,
+    jumpers: BoardJumpers,
+    p34_conflict_active: Cell<bool>,
 }
 
 impl BoardModel {
@@ -1087,7 +1116,7 @@ impl BoardModel {
                 value = apply_push_pull_bit(value, 4, self.read_hall_level());
             }
             3 => {
-                value = apply_push_pull_bit(value, 4, self.frequency_level());
+                value = set_bit_level(value, 4, self.read_p34_level(latch, all_latches));
                 let rows = [(0_u8, 0_u8), (1, 1), (2, 2), (3, 3)];
                 for (bit, row) in rows {
                     let low = match self.key_mode {
@@ -1116,12 +1145,85 @@ impl BoardModel {
         self.analog.set_voltage(name, value)
     }
 
+    fn jumper_on(&mut self, left: SignalId, right: SignalId) -> Result<()> {
+        self.jumpers.install(left, right)
+    }
+
+    fn jumper_off(&mut self, left: SignalId, right: SignalId) -> Result<()> {
+        self.jumpers.remove(left, right)
+    }
+
+    fn jumper_installed(&self, left: SignalId, right: SignalId) -> bool {
+        self.jumpers.is_installed(left, right)
+    }
+
     fn frequency_level(&self) -> bool {
         self.ne555.level(self.ticks)
     }
 
     fn read_hall_level(&self) -> bool {
         true
+    }
+
+    fn read_p34_level(&self, latch: u8, all_latches: [u8; 6]) -> bool {
+        let drivers = [
+            (
+                "mcu.p3.4",
+                if latch & (1 << 4) != 0 {
+                    LineDrive::PullHigh
+                } else {
+                    LineDrive::DriveLow
+                },
+            ),
+            (
+                "key.col4",
+                if self.key_mode == KeyMode::Keyboard && self.keys.col_low(3, all_latches) {
+                    LineDrive::DriveLow
+                } else {
+                    LineDrive::HighZ
+                },
+            ),
+            (
+                "ne555.net_sig",
+                if self.jumper_installed(SignalId::NetSig, SignalId::SigOut) {
+                    if self.frequency_level() {
+                        LineDrive::DriveHigh
+                    } else {
+                        LineDrive::DriveLow
+                    }
+                } else {
+                    LineDrive::HighZ
+                },
+            ),
+        ];
+        let resolution = resolve_line(&drivers.map(|(_, drive)| drive));
+        self.update_p34_conflict(&drivers, resolution.conflict);
+        resolution.level
+    }
+
+    fn update_p34_conflict(&self, drivers: &[(&str, LineDrive); 3], conflict: bool) {
+        if conflict {
+            if !self.p34_conflict_active.replace(true) {
+                let low = drivers
+                    .iter()
+                    .filter_map(|(name, drive)| (*drive == LineDrive::DriveLow).then_some(*name))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let high = drivers
+                    .iter()
+                    .filter_map(|(name, drive)| (*drive == LineDrive::DriveHigh).then_some(*name))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                warn!(
+                    line = "P3.4/SIG_OUT",
+                    low,
+                    high,
+                    "检测到线路驱动冲突, 按低电平处理"
+                );
+            }
+        } else {
+            self.p34_conflict_active.set(false);
+        }
     }
 }
 
@@ -1149,12 +1251,22 @@ fn set_bit_level(value: u8, bit: u8, high: bool) -> u8 {
 mod tests {
     use std::path::PathBuf;
 
-    use crate::ids::{KeyMode, LedId};
+    use crate::ids::{KeyId, KeyMode, LedId, SignalId};
 
     use super::Simulator;
 
     fn sample_path(relative: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(relative)
+    }
+
+    fn default_port_latches() -> [u8; 6] {
+        let mut latches = [0xFF_u8; 6];
+        latches[5] = 0x3F;
+        latches
+    }
+
+    fn p34_level(board: &super::BoardModel, all_latches: [u8; 6]) -> bool {
+        board.read_port(3, all_latches[3], all_latches) & (1 << 4) != 0
     }
 
     #[test]
@@ -1171,6 +1283,43 @@ mod tests {
                 .expect("watch L1 changes"),
             29
         );
+    }
+
+    #[test]
+    fn net_sig_requires_explicit_jumper_to_reach_p34() {
+        let mut board = super::BoardModel::default();
+        let latches = default_port_latches();
+        board.ne555.set_frequency_hz(2_200.0);
+
+        let saw_low_without_bridge = (0..20_000_u64).any(|tick| {
+            board.ticks = tick;
+            !p34_level(&board, latches)
+        });
+        assert!(!saw_low_without_bridge);
+
+        board
+            .jumper_on(SignalId::NetSig, SignalId::SigOut)
+            .expect("install NET_SIG to SIG_OUT jumper");
+        let saw_low_with_bridge = (0..20_000_u64).any(|tick| {
+            board.ticks = tick;
+            !p34_level(&board, latches)
+        });
+        assert!(saw_low_with_bridge);
+    }
+
+    #[test]
+    fn p34_conflict_prefers_low_when_key_column_and_ne555_disagree() {
+        let mut board = super::BoardModel::default();
+        let mut latches = default_port_latches();
+        board.ne555.set_frequency_hz(2_200.0);
+        board
+            .jumper_on(SignalId::NetSig, SignalId::SigOut)
+            .expect("install NET_SIG to SIG_OUT jumper");
+        board.keys.set_key_id(KeyId::S16, true);
+        latches[3] &= !(1 << 3);
+        board.ticks = 0;
+
+        assert!(!p34_level(&board, latches));
     }
 
     #[test]
