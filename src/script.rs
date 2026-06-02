@@ -13,6 +13,7 @@ pub fn run_script(sim: Simulator, path: &Path) -> Result<()> {
         .with_context(|| format!("读取脚本失败: {}", path.display()))?;
     let shared = Arc::new(Mutex::new(sim));
     let mut engine = Engine::new();
+    engine.on_print(|text| println!("{text}"));
     register_api(&mut engine, &shared);
     let mut scope = Scope::new();
     let _ = engine
