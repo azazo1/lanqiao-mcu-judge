@@ -7,14 +7,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use i8051::{
-    Cpu,
-    CpuContext,
-    CpuView,
-    Instruction,
-    MemoryMapper,
-    PortMapper,
-    Register,
-    ReadOnlyMemoryMapper,
+    Cpu, CpuContext, CpuView, Instruction, MemoryMapper, PortMapper, ReadOnlyMemoryMapper, Register,
 };
 use tracing::trace;
 
@@ -173,6 +166,36 @@ impl Simulator {
         Ok(self.ctx.board.outputs.leds[index - 1])
     }
 
+    pub fn count_line_changes(&mut self, name: &str, duration_ms: u64) -> Result<u64> {
+        let line = ObservedLine::parse(name)?;
+        let sample_us = 100;
+        let mut remaining_us = duration_ms.saturating_mul(1_000);
+        let mut previous = self.read_observed_line(line);
+        let mut changes = 0_u64;
+
+        while remaining_us > 0 {
+            let step_us = remaining_us.min(sample_us);
+            self.run_us(step_us)?;
+            remaining_us -= step_us;
+
+            let current = self.read_observed_line(line);
+            if current != previous {
+                changes += 1;
+                previous = current;
+            }
+        }
+
+        Ok(changes)
+    }
+
+    pub fn line_change_frequency_hz(&mut self, name: &str, duration_ms: u64) -> Result<f64> {
+        if duration_ms == 0 {
+            bail!("统计时长必须 > 0");
+        }
+        let changes = self.count_line_changes(name, duration_ms)?;
+        Ok(changes as f64 * 1_000.0 / duration_ms as f64)
+    }
+
     pub fn display_text(&self) -> String {
         self.ctx.board.outputs.display_text()
     }
@@ -218,15 +241,12 @@ impl Simulator {
         let _ = writeln!(
             out,
             "ds1302_read: {:02X}:{:02X}",
-            self.ctx.board.ds1302.last_read_reg,
-            self.ctx.board.ds1302.last_read_value
+            self.ctx.board.ds1302.last_read_reg, self.ctx.board.ds1302.last_read_value
         );
         let _ = writeln!(
             out,
             "rtc: {:02}:{:02}:{:02}",
-            self.ctx.board.rtc.hour,
-            self.ctx.board.rtc.minute,
-            self.ctx.board.rtc.second
+            self.ctx.board.rtc.hour, self.ctx.board.rtc.minute, self.ctx.board.rtc.second
         );
         let _ = writeln!(out, "display: {}", self.display_text());
         let digit_segments = self
@@ -261,10 +281,7 @@ impl Simulator {
         let _ = writeln!(
             out,
             "board_latches: [{:02X}, {:02X}, {:02X}, {:02X}]",
-            board_latches[0],
-            board_latches[1],
-            board_latches[2],
-            board_latches[3]
+            board_latches[0], board_latches[1], board_latches[2], board_latches[3]
         );
         let _ = writeln!(
             out,
@@ -282,11 +299,7 @@ impl Simulator {
             self.ctx.ports.board_latches[2],
             self.ctx.ports.board_latches[3]
         );
-        let _ = writeln!(
-            out,
-            "board_latch_source: {}",
-            self.ctx.board_latch_source()
-        );
+        let _ = writeln!(out, "board_latch_source: {}", self.ctx.board_latch_source());
         let _ = writeln!(
             out,
             "port_latch: P0={:02X} P1={:02X} P2={:02X} P3={:02X} P4={:02X} P5={:02X}",
@@ -337,6 +350,39 @@ impl Simulator {
     fn current_instruction_ticks(&self) -> u32 {
         let instruction = self.cpu.decode_pc(&self.ctx);
         approximate_instruction_ticks(&instruction)
+    }
+
+    fn read_observed_line(&self, line: ObservedLine) -> bool {
+        match line {
+            ObservedLine::Led(index) => self.ctx.board.outputs.leds[index - 1],
+            ObservedLine::Relay => self.ctx.board.outputs.relay_on,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ObservedLine {
+    Led(usize),
+    Relay,
+}
+
+impl ObservedLine {
+    fn parse(name: &str) -> Result<Self> {
+        let upper = name.trim().to_ascii_uppercase();
+        if upper == "RELAY" {
+            return Ok(Self::Relay);
+        }
+
+        if let Some(suffix) = upper.strip_prefix('L') {
+            let index = suffix
+                .parse::<usize>()
+                .with_context(|| format!("未知线路: {name}"))?;
+            if (1..=8).contains(&index) {
+                return Ok(Self::Led(index));
+            }
+        }
+
+        bail!("未知线路: {name}")
     }
 }
 
@@ -498,11 +544,7 @@ impl BoardXdata {
     }
 
     fn normalize_ram_addr(addr: u16) -> u16 {
-        if addr < 0x8000 {
-            addr & 0x07FF
-        } else {
-            addr
-        }
+        if addr < 0x8000 { addr & 0x07FF } else { addr }
     }
 }
 
@@ -580,7 +622,8 @@ impl MachinePorts {
 
     fn refresh_inputs(&mut self, board: &BoardModel) {
         for index in 0..self.port_input.len() {
-            self.port_input[index] = board.read_port(index, self.port_latch[index], self.port_latch);
+            self.port_input[index] =
+                board.read_port(index, self.port_latch[index], self.port_latch);
         }
     }
 
@@ -658,7 +701,9 @@ impl PortMapper for MachinePorts {
     fn write(&mut self, value: Self::WriteValue) {
         let (addr, byte) = value;
         match addr {
-            SFR_TCON | SFR_TMOD | SFR_TL0 | SFR_TL1 | SFR_TH0 | SFR_TH1 => self.timer.write(addr, byte),
+            SFR_TCON | SFR_TMOD | SFR_TL0 | SFR_TL1 | SFR_TH0 | SFR_TH1 => {
+                self.timer.write(addr, byte)
+            }
             UART1_SFR_SCON | UART1_SFR_SBUF => self.uart1.write(addr, byte),
             UART2_SFR_S2CON | UART2_SFR_S2BUF => self.uart2.write(addr, byte),
             SFR_P0 | SFR_P1 | SFR_P2 | SFR_P3 | SFR_P4 | SFR_P5 => {
@@ -908,7 +953,11 @@ impl Uart {
 
         if let Some((ticks, byte)) = self.tx_countdown.take() {
             if ticks <= 1 {
-                self.control |= if self.scon_addr == UART2_SFR_S2CON { S2CON_TI } else { SCON_TI };
+                self.control |= if self.scon_addr == UART2_SFR_S2CON {
+                    S2CON_TI
+                } else {
+                    SCON_TI
+                };
                 self.tx_queue.push_back(byte);
                 sent.push(byte);
             } else {
@@ -924,8 +973,16 @@ impl Uart {
 
         if let Some((ticks, byte)) = self.rx_countdown.take() {
             if ticks <= 1 {
-                let ren_flag = if self.scon_addr == UART2_SFR_S2CON { S2CON_REN } else { SCON_REN };
-                let ri_flag = if self.scon_addr == UART2_SFR_S2CON { S2CON_RI } else { SCON_RI };
+                let ren_flag = if self.scon_addr == UART2_SFR_S2CON {
+                    S2CON_REN
+                } else {
+                    SCON_REN
+                };
+                let ri_flag = if self.scon_addr == UART2_SFR_S2CON {
+                    S2CON_RI
+                } else {
+                    SCON_RI
+                };
                 if self.control & ren_flag != 0 {
                     self.rx_sbuf = byte;
                     self.control |= ri_flag;
@@ -1008,12 +1065,7 @@ impl BoardModel {
             }
             3 => {
                 value = apply_push_pull_bit(value, 4, self.frequency_level());
-                let rows = [
-                    (0_u8, 0_u8),
-                    (1, 1),
-                    (2, 2),
-                    (3, 3),
-                ];
+                let rows = [(0_u8, 0_u8), (1, 1), (2, 2), (3, 3)];
                 for (bit, row) in rows {
                     let low = self.key_matrix.row_low(row, all_latches);
                     value = set_bit_level(value, bit, !low);
@@ -1310,7 +1362,9 @@ impl AnalogInputs {
     }
 
     fn channel_value(&self, channel: u8) -> u8 {
-        ((self.channel_voltage(channel) / 5.0) * 255.0).round().clamp(0.0, 255.0) as u8
+        ((self.channel_voltage(channel) / 5.0) * 255.0)
+            .round()
+            .clamp(0.0, 255.0) as u8
     }
 }
 
@@ -1595,7 +1649,8 @@ impl Ds18b20 {
             self.low_since = Some(ticks);
         }
 
-        if line_high && !self.line_prev
+        if line_high
+            && !self.line_prev
             && let Some(start) = self.low_since.take()
         {
             let width = ticks.saturating_sub(start);
@@ -1780,7 +1835,8 @@ impl I2cBus {
                     }
                     (Some(I2cDevice::Eeprom), true) => {
                         self.mode = I2cMode::Read;
-                        self.read_buffer.push_back(analog.eeprom[self.eeprom_addr as usize]);
+                        self.read_buffer
+                            .push_back(analog.eeprom[self.eeprom_addr as usize]);
                     }
                     (Some(I2cDevice::Eeprom), false) => {
                         self.mode = I2cMode::Write;
@@ -1840,27 +1896,26 @@ mod tests {
     }
 
     #[test]
-    fn led_flicker_toggles_l1() {
+    fn led_flicker_counts_expected_toggles_per_second() {
         let mut sim = Simulator::from_hex_path(
             &sample_path("sample/led_flicker/prj/Objects/led_flicker.hex"),
             false,
         )
         .expect("load led_flicker");
 
-        sim.run_ms(120).expect("run to 120ms");
-        assert!(sim.led_on(1).expect("read L1 at 120ms"));
-
-        sim.run_ms(100).expect("run to 220ms");
-        assert!(!sim.led_on(1).expect("read L1 at 220ms"));
+        sim.run_ms(20).expect("run to 20ms");
+        assert_eq!(
+            sim.count_line_changes("L1", 1000)
+                .expect("count L1 changes"),
+            29
+        );
     }
 
     #[test]
     fn na16_shows_boot_time_at_50ms() {
-        let mut sim = Simulator::from_hex_path(
-            &sample_path("sample/na16/prj/Objects/na16.hex"),
-            false,
-        )
-        .expect("load na16");
+        let mut sim =
+            Simulator::from_hex_path(&sample_path("sample/na16/prj/Objects/na16.hex"), false)
+                .expect("load na16");
 
         sim.run_ms(50).expect("run na16 to 50ms");
         assert_eq!(sim.display_text(), "23-59-50");
