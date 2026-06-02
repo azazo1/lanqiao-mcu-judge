@@ -12,3 +12,7 @@
 - STC15_DS.pdf: STC15 系列芯片的用户手册.
 - knowledge-points.pdf: 十五届单片机考纲.
 - Datasheet: 板上各个外设的用户手册.
+
+## sample
+
+评测真题示例.
