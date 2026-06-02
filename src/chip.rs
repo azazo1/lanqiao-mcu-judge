@@ -415,8 +415,15 @@ impl Simulator {
             return Ok(());
         }
 
+        let start_ticks = self.ctx.board.ticks;
         self.ctx.board.advance_ticks(u64::from(ticks));
-        self.ctx.ports.tick_timers01_t2(&self.ctx.board, ticks)?;
+        let t0_falling_edges =
+            self.ctx
+                .board
+                .t0_falling_edges(&self.ctx.ports.port_latch, start_ticks);
+        self.ctx
+            .ports
+            .tick_timers01_t2(&self.ctx.board, ticks, t0_falling_edges)?;
         self.ctx.ports.tick_ultrasonic(&mut self.ctx.board, ticks);
         self.ctx.ports.tick_pca(ticks)?;
         self.ctx.ports.uart1.tick_ticks(ticks);
@@ -707,10 +714,16 @@ impl MachinePorts {
         board.ultrasonic.tick_ticks(ticks);
     }
 
-    fn tick_timers01_t2(&mut self, board: &BoardModel, ticks: u32) -> Result<()> {
+    fn tick_timers01_t2(
+        &mut self,
+        board: &BoardModel,
+        ticks: u32,
+        t0_falling_edges: u32,
+    ) -> Result<()> {
         let p3 = self.sample_port_p3(board);
         let auxr = self.generic_get(SFR_AUXR);
-        self.timers.tick_timers01_t2(p3, auxr, ticks, &mut self.generic)
+        self.timers
+            .tick_timers01_t2(p3, auxr, ticks, t0_falling_edges, &mut self.generic)
     }
 
     fn tick_pca(&mut self, ticks: u32) -> Result<()> {
@@ -1004,6 +1017,24 @@ impl BoardModel {
 
     fn frequency_level(&self) -> bool {
         self.ne555.level(self.ticks)
+    }
+
+    fn t0_falling_edges(&self, all_latches: &[u8; 6], start_ticks: u64) -> u32 {
+        let end_ticks = self.ticks;
+        if end_ticks <= start_ticks {
+            return 0;
+        }
+        if !self.jumper_installed(SignalId::NetSig, SignalId::SigOut) {
+            return 0;
+        }
+        if all_latches[3] & (1 << 4) == 0 {
+            return 0;
+        }
+        if self.key_mode == KeyMode::Keyboard && self.keys.col_low(3, all_latches) {
+            return 0;
+        }
+
+        self.ne555.falling_edges_between(start_ticks, end_ticks)
     }
 
     fn read_hall_level(&self) -> bool {

@@ -62,9 +62,10 @@ impl TimerBlock {
         p3: u8,
         auxr: u8,
         ticks: u32,
+        t0_falling_edges: u32,
         generic: &mut [u8; 128],
     ) -> Result<()> {
-        self.timer01.tick(p3, auxr, ticks)?;
+        self.timer01.tick(p3, auxr, ticks, t0_falling_edges)?;
         self.timer2.tick(p3, auxr, ticks, generic)?;
         Ok(())
     }
@@ -145,14 +146,20 @@ impl Timer01 {
         }
     }
 
-    fn tick(&mut self, p3: u8, auxr: u8, ticks: u32) -> Result<()> {
-        self.tick_timer0(p3, auxr, ticks)?;
+    fn tick(&mut self, p3: u8, auxr: u8, ticks: u32, t0_falling_edges: u32) -> Result<()> {
+        self.tick_timer0(p3, auxr, ticks, t0_falling_edges)?;
         self.tick_timer1(p3, auxr, ticks);
         self.prev_p3 = p3;
         Ok(())
     }
 
-    fn tick_timer0(&mut self, p3: u8, auxr: u8, ticks: u32) -> Result<()> {
+    fn tick_timer0(
+        &mut self,
+        p3: u8,
+        auxr: u8,
+        ticks: u32,
+        t0_falling_edges: u32,
+    ) -> Result<()> {
         if self.tcon & TCON_TR0 == 0 {
             self.div0 = 0;
             return Ok(());
@@ -163,7 +170,7 @@ impl Timer01 {
         }
 
         let tick_count = if self.tmod & TMOD_C_T0 != 0 {
-            u32::from(self.prev_p3 & P3_T0 != 0 && p3 & P3_T0 == 0)
+            t0_falling_edges
         } else {
             timer_tick_count(auxr & AUXR_T0_X12 != 0, &mut self.div0, ticks)
         };
@@ -414,7 +421,7 @@ mod tests {
         assert!(timers.write(&mut generic, SFR_TH0, 0xFF));
         assert!(timers.write(&mut generic, SFR_TL0, 0xFF));
 
-        timers.tick_timers01_t2(0xFF, AUXR_T0_X12, 1, &mut generic)?;
+        timers.tick_timers01_t2(0xFF, AUXR_T0_X12, 1, 0, &mut generic)?;
 
         let snapshot = timers.snapshot(&generic);
         assert_eq!(snapshot.th0, 0xFF);
@@ -432,7 +439,7 @@ mod tests {
         assert!(timers.write(&mut generic, SFR_TMOD, 0x20));
         assert!(timers.write(&mut generic, SFR_TCON, TCON_TR1));
 
-        timers.tick_timers01_t2(0xFF, AUXR_T1_X12, 1, &mut generic)?;
+        timers.tick_timers01_t2(0xFF, AUXR_T1_X12, 1, 0, &mut generic)?;
 
         let snapshot = timers.snapshot(&generic);
         assert_eq!(snapshot.tl1, 0xA5);
@@ -449,7 +456,7 @@ mod tests {
         write_sfr(&mut generic, SFR_T2H, 0xFF);
         write_sfr(&mut generic, SFR_T2L, 0xFF);
 
-        timers.tick_timers01_t2(0xFF, AUXR_T2_RUN | AUXR_T2_X12, 1, &mut generic)?;
+        timers.tick_timers01_t2(0xFF, AUXR_T2_RUN | AUXR_T2_X12, 1, 0, &mut generic)?;
 
         assert_eq!(read_sfr(&generic, SFR_T2H), 0x12);
         assert_eq!(read_sfr(&generic, SFR_T2L), 0x34);
@@ -464,9 +471,23 @@ mod tests {
         assert!(timers.write(&mut generic, SFR_TCON, TCON_TR0));
 
         let err = timers
-            .tick_timers01_t2(0xFF, AUXR_T0_X12, 1, &mut generic)
+            .tick_timers01_t2(0xFF, AUXR_T0_X12, 1, 0, &mut generic)
             .expect_err("mode3 should fail");
         assert!(err.to_string().contains("模式3"));
+        Ok(())
+    }
+
+    #[test]
+    fn timer0_counter_mode_accepts_multiple_external_edges_per_step() -> Result<()> {
+        let mut timers = TimerBlock::default();
+        let mut generic = generic();
+        assert!(timers.write(&mut generic, SFR_TMOD, TMOD_C_T0));
+        assert!(timers.write(&mut generic, SFR_TCON, TCON_TR0));
+
+        timers.tick_timers01_t2(0xFF, AUXR_T0_X12, 4, 3, &mut generic)?;
+
+        let snapshot = timers.snapshot(&generic);
+        assert_eq!(snapshot.tl0, 3);
         Ok(())
     }
 
