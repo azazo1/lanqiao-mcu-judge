@@ -124,6 +124,7 @@ pub const P3_INT0: u8 = 1 << 2;
 pub const P3_INT1: u8 = 1 << 3;
 pub const P3_T0: u8 = 1 << 4;
 pub const P3_T1: u8 = 1 << 5;
+pub const P3_T2: u8 = 1 << 1;
 
 pub const TCON_TR0: u8 = 1 << 4;
 pub const TCON_TF0: u8 = 1 << 5;
@@ -145,9 +146,12 @@ pub const S2CON_RI: u8 = 1 << 0;
 
 pub const AUXR_T0_X12: u8 = 1 << 7;
 pub const AUXR_T1_X12: u8 = 1 << 6;
-pub const AUXR_T2_X12: u8 = 1 << 5;
-pub const AUXR_S1ST2: u8 = 1 << 2;
+pub const AUXR_UART_M0_X6: u8 = 1 << 5;
+pub const AUXR_T2_RUN: u8 = 1 << 4;
+pub const AUXR_T2_C_T: u8 = 1 << 3;
+pub const AUXR_T2_X12: u8 = 1 << 2;
 pub const AUXR_EXTRAM: u8 = 1 << 1;
+pub const AUXR_S1ST2: u8 = 1 << 0;
 
 pub const CCON_CR: u8 = 1 << 6;
 pub const CCON_CF: u8 = 1 << 7;

@@ -1,6 +1,6 @@
 use anyhow::{Result, bail};
 
-use crate::timing::TICKS_PER_SECOND;
+use crate::chip::TICKS_PER_SECOND;
 
 #[derive(Debug, Clone)]
 pub(crate) struct Ds1302 {
@@ -368,7 +368,7 @@ fn decode_hour(value: u8) -> (u8, bool) {
 #[cfg(test)]
 mod tests {
     use super::Ds1302;
-    use crate::timing::TICKS_PER_SECOND;
+    use crate::chip::TICKS_PER_SECOND;
 
     #[test]
     fn reads_and_writes_calendar_registers() {

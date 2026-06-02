@@ -1,4 +1,4 @@
-use crate::timing::{CPU_TICKS_PER_US, TICKS_PER_SECOND};
+use crate::chip::{CPU_TICKS_PER_US, TICKS_PER_SECOND};
 
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct Ne555 {

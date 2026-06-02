@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use tracing_subscriber::{EnvFilter, fmt};
 
-use crate::machine::Simulator;
+use crate::chip::Simulator;
 
 #[derive(Debug, Parser)]
 #[command(author, version, about = "STC15F2K60S2 + 蓝桥杯 4T 开发板仿真评测工具")]

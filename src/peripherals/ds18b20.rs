@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use crate::timing::CPU_TICKS_PER_US;
+use crate::chip::CPU_TICKS_PER_US;
 
 #[derive(Debug, Default)]
 pub(crate) struct Ds18b20 {

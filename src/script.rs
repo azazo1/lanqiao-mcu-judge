@@ -13,7 +13,7 @@ use tracing::{debug, trace};
 
 use crate::{
     ids::{KeyId, KeyMode, LedId, SignalId, VoltageChannel},
-    machine::Simulator,
+    chip::Simulator,
 };
 
 pub fn run_script(sim: Simulator, path: &Path) -> Result<()> {

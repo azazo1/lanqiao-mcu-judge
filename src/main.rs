@@ -1,11 +1,9 @@
 mod app;
+mod chip;
 mod hex;
 mod ids;
-mod machine;
 mod peripherals;
-mod registers;
 mod script;
-mod timing;
 mod jumper;
 
 use anyhow::Result;

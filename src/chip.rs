@@ -12,17 +12,24 @@ use i8051::{
 };
 use tracing::{trace, warn};
 
+pub(crate) const CPU_TICKS_PER_US: u64 = 35;
+pub(crate) const TICKS_PER_SECOND: u64 = 1_000_000 * CPU_TICKS_PER_US;
+
 use crate::{
     hex::load_ihex,
     ids::{KeyId, KeyMode, LedId, SignalId, VoltageChannel},
+    jumper::{BoardJumpers, LineDrive, resolve_line},
     peripherals::{
         AnalogInputs, At24c02, Ds1302, Ds18b20, I2cBus, Key, Ne555, Outputs, Pcf8591,
         SegmentDecoder, UltrasonicDevice,
     },
-    jumper::{BoardJumpers, LineDrive, resolve_line},
-    registers::*,
-    timing::{CPU_TICKS_PER_US, TICKS_PER_SECOND},
 };
+
+mod registers;
+mod timers;
+
+use registers::*;
+use timers::TimerBlock;
 
 pub struct Simulator {
     cpu: Cpu,
@@ -55,7 +62,7 @@ impl Simulator {
             .ticks
             .saturating_add(us.saturating_mul(CPU_TICKS_PER_US));
         while self.ctx.board.ticks < target {
-            self.step_once();
+            self.step_once()?;
         }
         Ok(())
     }
@@ -177,7 +184,7 @@ impl Simulator {
         let mut changes = 0_u64;
 
         while self.ctx.board.ticks < target {
-            self.step_once();
+            self.step_once()?;
             let current = self.led_on_id(led);
             if current != previous {
                 changes += 1;
@@ -220,7 +227,7 @@ impl Simulator {
             .ticks
             .saturating_add(duration_ms.saturating_mul(1_000).saturating_mul(CPU_TICKS_PER_US));
         while self.ctx.board.ticks < target {
-            self.step_once();
+            self.step_once()?;
             let current = self.display_text();
             if current != initial {
                 bail!(
@@ -273,6 +280,7 @@ impl Simulator {
     pub fn snapshot_text(&self) -> String {
         let mut out = String::new();
         let board_latches = self.ctx.effective_board_latches();
+        let timer = self.ctx.ports.timers.snapshot(&self.ctx.ports.generic);
         let _ = writeln!(out, "ticks: {}", self.ctx.board.ticks);
         let _ = writeln!(out, "pc: 0x{:04X}", self.cpu.pc);
         let _ = writeln!(
@@ -285,13 +293,18 @@ impl Simulator {
         let _ = writeln!(
             out,
             "timer: TCON={:02X} TMOD={:02X} TL0={:02X} TH0={:02X} TL1={:02X} TH1={:02X} AUXR={:02X}",
-            self.ctx.ports.timer.tcon,
-            self.ctx.ports.timer.tmod,
-            self.ctx.ports.timer.tl0,
-            self.ctx.ports.timer.th0,
-            self.ctx.ports.timer.tl1,
-            self.ctx.ports.timer.th1,
+            timer.tcon,
+            timer.tmod,
+            timer.tl0,
+            timer.th0,
+            timer.tl1,
+            timer.th1,
             self.ctx.ports.generic_get(SFR_AUXR)
+        );
+        let _ = writeln!(
+            out,
+            "timer2_pca: T2H={:02X} T2L={:02X} CMOD={:02X} CCON={:02X} CH={:02X} CL={:02X}",
+            timer.t2h, timer.t2l, timer.cmod, timer.ccon, timer.ch, timer.cl
         );
         let _ = writeln!(
             out,
@@ -393,7 +406,7 @@ impl Simulator {
         out
     }
 
-    fn step_once(&mut self) {
+    fn step_once(&mut self) -> Result<()> {
         let ticks = self.current_instruction_ticks();
         self.ctx.ports.refresh_inputs(&self.ctx.board);
         if self.trace_cpu {
@@ -401,17 +414,15 @@ impl Simulator {
             trace!("{instruction:#}");
         }
         let _ = self.cpu.step(&mut self.ctx);
-        self.tick_devices(ticks);
+        self.tick_devices(ticks)
     }
 
-    fn tick_devices(&mut self, ticks: u32) {
+    fn tick_devices(&mut self, ticks: u32) -> Result<()> {
         for _ in 0..ticks {
             self.ctx.board.tick_rtc();
-            let p3 = self.ctx.ports.sample_port_p3(&self.ctx.board);
-            let auxr = self.ctx.ports.generic_get(SFR_AUXR);
-            self.ctx.ports.timer.tick(p3, auxr);
+            self.ctx.ports.tick_timers01_t2(&self.ctx.board)?;
             self.ctx.ports.tick_ultrasonic(&mut self.ctx.board);
-            self.ctx.ports.tick_pca_counter();
+            self.ctx.ports.tick_pca()?;
             self.ctx.ports.uart1.tick();
             let responses = self.ctx.ports.uart2.tick();
             for response in responses {
@@ -427,6 +438,7 @@ impl Simulator {
                 .tick_protocols(&self.ctx.ports, &board_latches, &board_latch_versions);
             self.ctx.ports.refresh_inputs(&self.ctx.board);
         }
+        Ok(())
     }
 
     fn current_instruction_ticks(&self) -> u32 {
@@ -633,8 +645,7 @@ struct MachinePorts {
     board_latches: [u8; 4],
     board_latch_versions: [u64; 4],
     latch_used: bool,
-    pca_sub_ticks: u64,
-    timer: Timer01,
+    timers: TimerBlock,
     uart1: Uart,
     uart2: Uart,
 }
@@ -657,8 +668,7 @@ impl MachinePorts {
             board_latches: [0; 4],
             board_latch_versions: [0; 4],
             latch_used: false,
-            pca_sub_ticks: 0,
-            timer: Timer01::default(),
+            timers: TimerBlock::default(),
             uart1: Uart::new(UART1_SFR_SCON, UART1_SFR_SBUF, uart_frame_ticks(9_600)),
             uart2: Uart::new(UART2_SFR_S2CON, UART2_SFR_S2BUF, uart_frame_ticks(9_600)),
         }
@@ -701,27 +711,14 @@ impl MachinePorts {
         board.ultrasonic.tick();
     }
 
-    fn tick_pca_counter(&mut self) {
-        let running = self.generic_get(SFR_CCON) & CCON_CR != 0;
-        if !running {
-            self.pca_sub_ticks = 0;
-            return;
-        }
+    fn tick_timers01_t2(&mut self, board: &BoardModel) -> Result<()> {
+        let p3 = self.sample_port_p3(board);
+        let auxr = self.generic_get(SFR_AUXR);
+        self.timers.tick_timers01_t2(p3, auxr, &mut self.generic)
+    }
 
-        self.pca_sub_ticks = self.pca_sub_ticks.saturating_add(1);
-        if self.pca_sub_ticks < CPU_TICKS_PER_US {
-            return;
-        }
-        self.pca_sub_ticks = 0;
-
-        let counter = u16::from_be_bytes([self.generic_get(SFR_CH), self.generic_get(SFR_CL)])
-            .wrapping_add(1);
-        let [ch, cl] = counter.to_be_bytes();
-        self.generic_set(SFR_CH, ch);
-        self.generic_set(SFR_CL, cl);
-        if counter == 0 {
-            self.generic_set(SFR_CCON, self.generic_get(SFR_CCON) | CCON_CF);
-        }
+    fn tick_pca(&mut self) -> Result<()> {
+        self.timers.tick_pca(&mut self.generic)
     }
 
     fn strobe_board_latch(&mut self, select: u8, value: u8) {
@@ -749,7 +746,7 @@ impl PortMapper for MachinePorts {
 
     fn read<C: CpuView>(&self, _cpu: &C, addr: u8) -> u8 {
         match addr {
-            SFR_TCON | SFR_TMOD | SFR_TL0 | SFR_TL1 | SFR_TH0 | SFR_TH1 => self.timer.read(addr),
+            addr if TimerBlock::handles(addr) => self.timers.read(&self.generic, addr).unwrap_or(0),
             UART1_SFR_SCON | UART1_SFR_SBUF => self.uart1.read(addr),
             UART2_SFR_S2CON | UART2_SFR_S2BUF => self.uart2.read(addr),
             SFR_P0 | SFR_P1 | SFR_P2 | SFR_P3 | SFR_P4 | SFR_P5 => {
@@ -766,6 +763,9 @@ impl PortMapper for MachinePorts {
         if let Some(index) = Self::port_index(addr) {
             return self.port_latch[index];
         }
+        if TimerBlock::handles(addr) {
+            return self.timers.read(&self.generic, addr).unwrap_or(0);
+        }
         self.generic_get(addr)
     }
 
@@ -776,8 +776,8 @@ impl PortMapper for MachinePorts {
     fn write(&mut self, value: Self::WriteValue) {
         let (addr, byte) = value;
         match addr {
-            SFR_TCON | SFR_TMOD | SFR_TL0 | SFR_TL1 | SFR_TH0 | SFR_TH1 => {
-                self.timer.write(addr, byte)
+            addr if TimerBlock::handles(addr) => {
+                let _ = self.timers.write(&mut self.generic, addr, byte);
             }
             UART1_SFR_SCON | UART1_SFR_SBUF => self.uart1.write(addr, byte),
             UART2_SFR_S2CON | UART2_SFR_S2BUF => self.uart2.write(addr, byte),
@@ -792,189 +792,6 @@ impl PortMapper for MachinePorts {
                 }
             }
             _ => self.generic_set(addr, byte),
-        }
-    }
-}
-
-#[derive(Debug, Default)]
-struct Timer01 {
-    tcon: u8,
-    tmod: u8,
-    tl0: u8,
-    tl1: u8,
-    th0: u8,
-    th1: u8,
-    rl_tl0: u8,
-    rl_tl1: u8,
-    rl_th0: u8,
-    rl_th1: u8,
-    div0: u8,
-    div1: u8,
-    prev_p3: u8,
-}
-
-impl Timer01 {
-    fn read(&self, addr: u8) -> u8 {
-        match addr {
-            SFR_TCON => self.tcon,
-            SFR_TMOD => self.tmod,
-            SFR_TL0 => self.tl0,
-            SFR_TL1 => self.tl1,
-            SFR_TH0 => self.th0,
-            SFR_TH1 => self.th1,
-            _ => 0,
-        }
-    }
-
-    fn write(&mut self, addr: u8, value: u8) {
-        match addr {
-            SFR_TCON => self.tcon = value,
-            SFR_TMOD => self.tmod = value,
-            SFR_TL0 => {
-                self.tl0 = value;
-                self.rl_tl0 = value;
-            }
-            SFR_TL1 => {
-                self.tl1 = value;
-                self.rl_tl1 = value;
-            }
-            SFR_TH0 => {
-                self.th0 = value;
-                self.rl_th0 = value;
-            }
-            SFR_TH1 => {
-                self.th1 = value;
-                self.rl_th1 = value;
-            }
-            _ => {}
-        }
-    }
-
-    fn tick(&mut self, p3: u8, auxr: u8) {
-        self.tick_timer0(p3, auxr);
-        self.tick_timer1(p3, auxr);
-        self.prev_p3 = p3;
-    }
-
-    fn tick_timer0(&mut self, p3: u8, auxr: u8) {
-        let tr0 = (self.tcon & TCON_TR0) != 0;
-        if !tr0 {
-            self.div0 = 0;
-            return;
-        }
-        let gate0 = (self.tmod & TMOD_GATE0) != 0;
-        let counter0 = (self.tmod & TMOD_C_T0) != 0;
-        if gate0 && (p3 & P3_INT0 == 0) {
-            self.div0 = 0;
-            return;
-        }
-        let should_tick = if counter0 {
-            self.prev_p3 & P3_T0 != 0 && p3 & P3_T0 == 0
-        } else {
-            Self::timer_tick_ready(auxr & 0x80 != 0, &mut self.div0)
-        };
-        if !should_tick {
-            return;
-        }
-        match self.tmod & 0x03 {
-            0x00 => {
-                let next = u16::from_be_bytes([self.th0, self.tl0]).wrapping_add(1);
-                if next == 0 {
-                    let [th0, tl0] = [self.rl_th0, self.rl_tl0];
-                    self.th0 = th0;
-                    self.tl0 = tl0;
-                    self.tcon |= TCON_TF0;
-                } else {
-                    let [th0, tl0] = next.to_be_bytes();
-                    self.th0 = th0;
-                    self.tl0 = tl0;
-                }
-            }
-            0x01 => {
-                let next = u16::from_be_bytes([self.th0, self.tl0]).wrapping_add(1);
-                let [th0, tl0] = next.to_be_bytes();
-                self.th0 = th0;
-                self.tl0 = tl0;
-                if next == 0 {
-                    self.tcon |= TCON_TF0;
-                }
-            }
-            0x02 => {
-                self.tl0 = self.tl0.wrapping_add(1);
-                if self.tl0 == 0 {
-                    self.tl0 = self.th0;
-                    self.tcon |= TCON_TF0;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn tick_timer1(&mut self, p3: u8, auxr: u8) {
-        let tr1 = (self.tcon & TCON_TR1) != 0;
-        if !tr1 {
-            self.div1 = 0;
-            return;
-        }
-        let gate1 = (self.tmod & TMOD_GATE1) != 0;
-        let counter1 = (self.tmod & TMOD_C_T1) != 0;
-        if gate1 && (p3 & P3_INT1 == 0) {
-            self.div1 = 0;
-            return;
-        }
-        let should_tick = if counter1 {
-            self.prev_p3 & P3_T1 != 0 && p3 & P3_T1 == 0
-        } else {
-            Self::timer_tick_ready(auxr & 0x40 != 0, &mut self.div1)
-        };
-        if !should_tick {
-            return;
-        }
-        match (self.tmod >> 4) & 0x03 {
-            0x00 => {
-                let next = u16::from_be_bytes([self.th1, self.tl1]).wrapping_add(1);
-                if next == 0 {
-                    let [th1, tl1] = [self.rl_th1, self.rl_tl1];
-                    self.th1 = th1;
-                    self.tl1 = tl1;
-                    self.tcon |= TCON_TF1;
-                } else {
-                    let [th1, tl1] = next.to_be_bytes();
-                    self.th1 = th1;
-                    self.tl1 = tl1;
-                }
-            }
-            0x01 => {
-                let next = u16::from_be_bytes([self.th1, self.tl1]).wrapping_add(1);
-                let [th1, tl1] = next.to_be_bytes();
-                self.th1 = th1;
-                self.tl1 = tl1;
-                if next == 0 {
-                    self.tcon |= TCON_TF1;
-                }
-            }
-            0x02 => {
-                self.tl1 = self.tl1.wrapping_add(1);
-                if self.tl1 == 0 {
-                    self.tl1 = self.th1;
-                    self.tcon |= TCON_TF1;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn timer_tick_ready(one_t: bool, divider: &mut u8) -> bool {
-        if one_t {
-            *divider = 0;
-            return true;
-        }
-        *divider = divider.saturating_add(1);
-        if *divider >= 12 {
-            *divider = 0;
-            true
-        } else {
-            false
         }
     }
 }
