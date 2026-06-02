@@ -2,9 +2,9 @@ mod app;
 mod chip;
 mod hex;
 mod ids;
+mod jumper;
 mod peripherals;
 mod script;
-mod jumper;
 
 use anyhow::Result;
 

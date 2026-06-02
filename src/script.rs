@@ -5,6 +5,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
+use regex::Regex;
 use rhai::{
     Dynamic, Engine, EvalAltResult, ImmutableString, Position, Scope,
     debugger::{DebuggerCommand, DebuggerEvent},
@@ -12,8 +13,8 @@ use rhai::{
 use tracing::{debug, trace};
 
 use crate::{
-    ids::{KeyId, KeyMode, LedId, SignalId, VoltageChannel},
     chip::Simulator,
+    ids::{KeyId, KeyMode, LedId, SignalId, VoltageChannel},
 };
 
 pub fn run_script(sim: Simulator, path: &Path) -> Result<()> {
@@ -51,11 +52,7 @@ pub fn run_repl(sim: Simulator) -> Result<()> {
             io::stdout().flush().context("刷新 REPL 提示符失败")?;
         }
 
-        if reader
-            .read_line(&mut line)
-            .context("读取 REPL 输入失败")?
-            == 0
-        {
+        if reader.read_line(&mut line).context("读取 REPL 输入失败")? == 0 {
             break;
         }
 
@@ -135,7 +132,11 @@ struct ScriptTraceState {
     step: u64,
 }
 
-fn update_script_trace_state(trace_state: &Arc<Mutex<ScriptTraceState>>, label: &str, source: &str) {
+fn update_script_trace_state(
+    trace_state: &Arc<Mutex<ScriptTraceState>>,
+    label: &str,
+    source: &str,
+) {
     let mut state = trace_state.lock().expect("script trace state lock");
     state.label.clear();
     state.label.push_str(label);
@@ -147,7 +148,8 @@ fn source_line_snippet(lines: &[String], pos: Position) -> String {
     let Some(line_no) = pos.line() else {
         return String::new();
     };
-    lines.get(line_no.saturating_sub(1))
+    lines
+        .get(line_no.saturating_sub(1))
         .map(|line| line.trim().to_owned())
         .unwrap_or_default()
 }
@@ -206,7 +208,8 @@ fn register_script_progress_debugger(
                     );
                     Ok(DebuggerCommand::Next)
                 }
-                DebuggerEvent::FunctionExitWithValue(_) | DebuggerEvent::FunctionExitWithError(_) => {
+                DebuggerEvent::FunctionExitWithValue(_)
+                | DebuggerEvent::FunctionExitWithError(_) => {
                     trace!(
                         target: "script_progress",
                         label,
@@ -374,7 +377,8 @@ fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
     engine.register_fn(
         "key_mode",
         move |mode: ImmutableString| -> Result<(), Box<EvalAltResult>> {
-            let mode = KeyMode::parse(mode.as_str()).map_err(|err| runtime_error(err.to_string()))?;
+            let mode =
+                KeyMode::parse(mode.as_str()).map_err(|err| runtime_error(err.to_string()))?;
             sim_key_mode_name
                 .lock()
                 .map_err(|_| runtime_error("仿真器锁已损坏"))?
@@ -523,9 +527,7 @@ fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
     let sim_voltage_id = Arc::clone(sim);
     engine.register_fn(
         "set_voltage",
-        move |channel: VoltageChannel,
-              voltage: rhai::FLOAT|
-              -> Result<(), Box<EvalAltResult>> {
+        move |channel: VoltageChannel, voltage: rhai::FLOAT| -> Result<(), Box<EvalAltResult>> {
             sim_voltage_id
                 .lock()
                 .map_err(|_| runtime_error("仿真器锁已损坏"))?
@@ -615,9 +617,7 @@ fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
     engine.register_fn(
         "display_number",
         move |start: i64, end: i64| -> Result<i64, Box<EvalAltResult>> {
-            let start =
-                usize::try_from(start).map_err(|_| runtime_error("start 参数必须 >= 0"))?;
-            let end = usize::try_from(end).map_err(|_| runtime_error("end 参数必须 >= 0"))?;
+            let (start, end) = script_range(start, end)?;
             sim_display_number_range
                 .lock()
                 .map_err(|_| runtime_error("仿真器锁已损坏"))?
@@ -630,9 +630,7 @@ fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
     engine.register_fn(
         "display_number",
         move |start: i64, end: i64, duration_ms: i64| -> Result<i64, Box<EvalAltResult>> {
-            let start =
-                usize::try_from(start).map_err(|_| runtime_error("start 参数必须 >= 0"))?;
-            let end = usize::try_from(end).map_err(|_| runtime_error("end 参数必须 >= 0"))?;
+            let (start, end) = script_range(start, end)?;
             let duration_ms = u64::try_from(duration_ms)
                 .map_err(|_| runtime_error("duration_ms 参数必须 >= 0"))?;
             sim_display_number_range_window
@@ -640,6 +638,28 @@ fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
                 .map_err(|_| runtime_error("仿真器锁已损坏"))?
                 .observe_display_number_in_range(start, end, duration_ms)
                 .map_err(|err| runtime_error(err.to_string()))
+        },
+    );
+
+    engine.register_fn(
+        "regex_is_match",
+        move |text: ImmutableString,
+              pattern: ImmutableString|
+              -> Result<bool, Box<EvalAltResult>> {
+            let regex = Regex::new(pattern.as_str())
+                .map_err(|err| runtime_error(format!("正则表达式编译失败: {err}")))?;
+            Ok(regex.is_match(text.as_str()))
+        },
+    );
+
+    engine.register_fn(
+        "regex_match",
+        move |text: ImmutableString,
+              pattern: ImmutableString|
+              -> Result<bool, Box<EvalAltResult>> {
+            let regex = Regex::new(pattern.as_str())
+                .map_err(|err| runtime_error(format!("正则表达式编译失败: {err}")))?;
+            Ok(regex.is_match(text.as_str()))
         },
     );
 
@@ -751,13 +771,16 @@ fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
     );
 
     let sim_led_id = Arc::clone(sim);
-    engine.register_fn("led_on", move |led: LedId| -> Result<bool, Box<EvalAltResult>> {
-        let value = sim_led_id
-            .lock()
-            .map_err(|_| runtime_error("仿真器锁已损坏"))?
-            .led_on_id(led);
-        Ok(value)
-    });
+    engine.register_fn(
+        "led_on",
+        move |led: LedId| -> Result<bool, Box<EvalAltResult>> {
+            let value = sim_led_id
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .led_on_id(led);
+            Ok(value)
+        },
+    );
 
     let sim_watch_led = Arc::clone(sim);
     engine.register_fn(
@@ -862,4 +885,10 @@ fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
 
 fn runtime_error(message: impl Into<String>) -> Box<EvalAltResult> {
     EvalAltResult::ErrorRuntime(message.into().into(), rhai::Position::NONE).into()
+}
+
+fn script_range(start: i64, end: i64) -> Result<(usize, usize), Box<EvalAltResult>> {
+    let start = usize::try_from(start).map_err(|_| runtime_error("start 参数必须 >= 0"))?;
+    let end = usize::try_from(end).map_err(|_| runtime_error("end 参数必须 >= 0"))?;
+    Ok((start, end))
 }

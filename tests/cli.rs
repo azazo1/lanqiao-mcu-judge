@@ -1,6 +1,6 @@
 use std::{
-    path::PathBuf,
     io::Write,
+    path::PathBuf,
     process::{Command, Stdio},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -97,8 +97,11 @@ fn cli_accepts_stdin_script_and_builtin_constants() {
 #[test]
 fn debug_tracing_keeps_script_execution_working() {
     let script_path = temp_script_path();
-    std::fs::write(&script_path, "run_ms(220);\nset_key(S4, true);\nrun_ms(220);\n")
-        .expect("write script");
+    std::fs::write(
+        &script_path,
+        "run_ms(220);\nset_key(S4, true);\nrun_ms(220);\n",
+    )
+    .expect("write script");
 
     let output = Command::new(env!("CARGO_BIN_EXE_stcjudge"))
         .env("RUST_LOG", "debug")
@@ -113,6 +116,37 @@ fn debug_tracing_keeps_script_execution_working() {
         ])
         .output()
         .expect("run cli with debug tracing");
+
+    let _ = std::fs::remove_file(&script_path);
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn rhai_regex_and_native_string_slice_work() {
+    let script_path = temp_script_path();
+    std::fs::write(
+        &script_path,
+        "let s = \"Hello, World!\";\nassert_eq_str(s[0..5], \"Hello\", \"slice\");\nassert(regex_is_match(\"23-59-50\", \"^\\\\d{2}-\\\\d{2}-\\\\d{2}$\"), \"regex\");\nassert(parse_int(\" 20\") == 20, \"parse_int\");\nassert(parse_float(\"123.45\") > 123.4, \"parse_float\");\n",
+    )
+    .expect("write script");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_stcjudge"))
+        .args([
+            "run",
+            "--hex",
+            sample_path("sample/key_seg/prj/Objects/key_seg.hex")
+                .to_str()
+                .expect("hex path"),
+            "--script",
+            script_path.to_str().expect("script path"),
+        ])
+        .output()
+        .expect("run cli");
 
     let _ = std::fs::remove_file(&script_path);
 

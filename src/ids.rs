@@ -146,9 +146,7 @@ impl KeyMode {
     pub fn parse(name: &str) -> Result<Self> {
         match name.trim().to_ascii_lowercase().as_str() {
             "keyboard" | "matrix" | "matrix_keypad" | "kbd" => Ok(Self::Keyboard),
-            "button" | "buttons" | "independent" | "independent_button" | "btn" => {
-                Ok(Self::Button)
-            }
+            "button" | "buttons" | "independent" | "independent_button" | "btn" => Ok(Self::Button),
             _ => bail!("未知按键模式: {name}"),
         }
     }

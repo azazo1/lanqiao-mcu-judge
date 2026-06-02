@@ -132,7 +132,28 @@ LED:
 
 如果一屏里同时存在多个数字片段, 可以改用 `display_number(start, end)` 或 `display_number(start, end, window_ms)`, 在指定的数码管位范围内提取数字. 位号和 `seg_pattern(1)` 一样, 都是从左到右按 `1..=8` 计数.
 
+`display_number(...)` 接受前导零, 但返回值只保留数值本身. 如果题目要求精确判断位宽, 前导零, 空白位, 固定符号位, 请直接对 `display_text(...)` 的结果做字符串切片和正则判断.
+
 这更适合超声波, 温度, 电压这类量测题, 可以直接写布尔表达式判断范围, 避免按整串字符串做数值断言.
+
+## Rhai 字符串切片和正则
+
+- `regex_is_match(text, pattern)`
+- `regex_match(text, pattern)`
+
+Rhai 自带字符串切片语法, 可以直接写 `text[0..5]`. 这里的范围是 `start..end`, 也就是 0 基, 右边界不包含在结果里.
+
+Rhai 也自带数值解析函数, 例如:
+
+- `parse_int("123")`
+- `parse_float("123.45")`
+- `parse_int("ff", 16)`
+
+推荐写法:
+
+- 数值部分优先用 `display_text(...)[start..end]` 再配合 `parse_int(...)` 或 `parse_float(...)`.
+- 固定字符, 空白位, 前导零, 分隔符等格式要求, 直接用 `display_text(...)[start..end]` 判断.
+- 需要描述整串格式时, 再配合 `regex_is_match(...)`.
 
 ## 按键模式
 
@@ -192,11 +213,12 @@ assert_eq_int(watch_led_changes(L1, 1000), 29, "1 秒内 L1 线路变化次数")
 
 ```rhai
 run_ms(220);
-assert_eq_str(display_text(), "       0", "上电显示");
+assert(regex_is_match(display_text(30), "^\\s{7}0$"), "上电显示格式");
+assert_eq_str(display_text()[0..7], "       ", "前7位空白");
 
 set_key(S4, true);
 run_ms(220);
-let value = display_number(8, 8, 30);
+let value = parse_int(display_text()[7..8]);
 assert(value == 1, "显示稳定");
 assert(led_on(L1), "L1 应点亮");
 

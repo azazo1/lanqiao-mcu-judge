@@ -29,14 +29,7 @@ impl TimerBlock {
     pub(crate) fn handles(addr: u8) -> bool {
         matches!(
             addr,
-            SFR_TCON
-                | SFR_TMOD
-                | SFR_TL0
-                | SFR_TL1
-                | SFR_TH0
-                | SFR_TH1
-                | SFR_T2H
-                | SFR_T2L
+            SFR_TCON | SFR_TMOD | SFR_TL0 | SFR_TL1 | SFR_TH0 | SFR_TH1 | SFR_T2H | SFR_T2L
         )
     }
 
@@ -387,8 +380,8 @@ fn timer_tick_ready(one_t: bool, divider: &mut u8) -> bool {
 mod tests {
     use anyhow::Result;
 
-    use super::{TimerBlock, read_sfr, write_sfr};
     use super::super::registers::*;
+    use super::{TimerBlock, read_sfr, write_sfr};
 
     fn generic() -> [u8; 128] {
         [0; 128]
@@ -473,7 +466,9 @@ mod tests {
         assert_eq!(read_sfr(&generic, SFR_CL), 1);
 
         write_sfr(&mut generic, SFR_CMOD, 0x01);
-        let err = timers.tick_pca(&mut generic).expect_err("non-zero CMOD should fail");
+        let err = timers
+            .tick_pca(&mut generic)
+            .expect_err("non-zero CMOD should fail");
         assert!(err.to_string().contains("CMOD=00"));
         Ok(())
     }

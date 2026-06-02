@@ -148,12 +148,9 @@ impl SegmentDecoder {
         if self.blank_patterns.contains(&pattern) {
             return ' ';
         }
-        self.char_map.get(&(pattern & 0x7F)).copied().unwrap_or({
-            if pattern & 0x80 != 0 {
-                '.'
-            } else {
-                '?'
-            }
-        })
+        self.char_map
+            .get(&(pattern & 0x7F))
+            .copied()
+            .unwrap_or(if pattern & 0x80 != 0 { '.' } else { '?' })
     }
 }

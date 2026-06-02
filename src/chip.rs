@@ -1,10 +1,4 @@
-use std::{
-    cell::Cell,
-    collections::VecDeque,
-    fmt::Write as _,
-    fs,
-    path::Path,
-};
+use std::{cell::Cell, collections::VecDeque, fmt::Write as _, fs, path::Path};
 
 use anyhow::{Context, Result, bail};
 use i8051::{
@@ -20,7 +14,7 @@ use crate::{
     ids::{KeyId, KeyMode, LedId, SignalId, VoltageChannel},
     jumper::{BoardJumpers, LineDrive, resolve_line},
     peripherals::{
-        AnalogInputs, At24c02, Ds1302, Ds18b20, I2cBus, Key, Ne555, Outputs, Pcf8591,
+        AnalogInputs, At24c02, Ds18b20, Ds1302, I2cBus, Key, Ne555, Outputs, Pcf8591,
         SegmentDecoder, UltrasonicDevice,
     },
 };
@@ -175,11 +169,11 @@ impl Simulator {
     }
 
     pub fn watch_led_changes(&mut self, led: LedId, duration_ms: u64) -> Result<u64> {
-        let target = self
-            .ctx
-            .board
-            .ticks
-            .saturating_add(duration_ms.saturating_mul(1_000).saturating_mul(CPU_TICKS_PER_US));
+        let target = self.ctx.board.ticks.saturating_add(
+            duration_ms
+                .saturating_mul(1_000)
+                .saturating_mul(CPU_TICKS_PER_US),
+        );
         let mut previous = self.led_on_id(led);
         let mut changes = 0_u64;
 
@@ -221,18 +215,16 @@ impl Simulator {
             return Ok(initial);
         }
 
-        let target = self
-            .ctx
-            .board
-            .ticks
-            .saturating_add(duration_ms.saturating_mul(1_000).saturating_mul(CPU_TICKS_PER_US));
+        let target = self.ctx.board.ticks.saturating_add(
+            duration_ms
+                .saturating_mul(1_000)
+                .saturating_mul(CPU_TICKS_PER_US),
+        );
         while self.ctx.board.ticks < target {
             self.step_once()?;
             let current = self.display_text();
             if current != initial {
-                bail!(
-                    "display_text 在观察窗口内发生变化: 初始 `{initial}`, 后续 `{current}`"
-                );
+                bail!("display_text 在观察窗口内发生变化: 初始 `{initial}`, 后续 `{current}`");
             }
         }
         Ok(initial)
@@ -1065,9 +1057,7 @@ impl BoardModel {
                     .join(",");
                 warn!(
                     line = "P3.4/SIG_OUT",
-                    low,
-                    high,
-                    "检测到线路驱动冲突, 按低电平处理"
+                    low, high, "检测到线路驱动冲突, 按低电平处理"
                 );
             }
         } else {
@@ -1096,50 +1086,92 @@ fn set_bit_level(value: u8, bit: u8, high: bool) -> u8 {
     }
 }
 
-fn parse_display_number(text: &str) -> Result<i64> {
-    parse_display_number_slice(text)
-}
-
-fn parse_display_number_in_range(text: &str, start: usize, end: usize) -> Result<i64> {
+fn slice_text_range(text: &str, start: usize, end: usize) -> Result<String> {
     if start == 0 || end == 0 {
-        bail!("显示位范围必须从 1 开始: start={start}, end={end}");
+        bail!("字符串切片范围必须从 1 开始: start={start}, end={end}");
     }
     if start > end {
-        bail!("显示位范围必须满足 start <= end: start={start}, end={end}");
+        bail!("字符串切片范围必须满足 start <= end: start={start}, end={end}");
     }
     let chars = text.chars().collect::<Vec<_>>();
     if end > chars.len() {
         bail!(
-            "显示位范围越界: 文本长度为 {}, 请求范围 {}..={}",
+            "字符串切片范围越界: 文本长度为 {}, 请求范围 {}..={}",
             chars.len(),
             start,
             end
         );
     }
-    let slice = chars[start - 1..end].iter().collect::<String>();
-    parse_display_number_slice(&slice)
+    Ok(chars[start - 1..end].iter().collect::<String>())
 }
 
-fn parse_display_number_slice(text: &str) -> Result<i64> {
-    let mut numbers = Vec::new();
-    let mut current = String::new();
+fn parse_display_number(text: &str) -> Result<i64> {
+    parse_display_integer_slice(text)
+}
 
-    for ch in text.chars() {
-        if ch.is_ascii_digit() || (ch == '-' && current.is_empty()) {
-            current.push(ch);
-        } else if !current.is_empty() {
-            numbers.push(current.clone());
-            current.clear();
+fn parse_display_number_in_range(text: &str, start: usize, end: usize) -> Result<i64> {
+    parse_display_integer_slice(&slice_text_range(text, start, end)?)
+}
+
+fn parse_display_integer_slice(text: &str) -> Result<i64> {
+    let value = extract_unique_numeric_token(text, false)?;
+    value
+        .parse::<i64>()
+        .map_err(|err| anyhow::anyhow!("解析显示整数失败: {err}"))
+}
+
+fn extract_unique_numeric_token(text: &str, allow_decimal: bool) -> Result<String> {
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut numbers = Vec::new();
+    let mut index = 0_usize;
+
+    while index < chars.len() {
+        let ch = chars[index];
+        let starts_negative = ch == '-'
+            && chars
+                .get(index + 1)
+                .is_some_and(|next| next.is_ascii_digit());
+        if !ch.is_ascii_digit() && !starts_negative {
+            index += 1;
+            continue;
         }
-    }
-    if !current.is_empty() {
-        numbers.push(current);
+
+        let mut current = String::new();
+        let mut has_dot = false;
+        if starts_negative {
+            current.push('-');
+            index += 1;
+        }
+
+        while index < chars.len() {
+            let ch = chars[index];
+            if ch.is_ascii_digit() {
+                current.push(ch);
+                index += 1;
+                continue;
+            }
+            if allow_decimal
+                && ch == '.'
+                && !has_dot
+                && chars
+                    .get(index + 1)
+                    .is_some_and(|next| next.is_ascii_digit())
+            {
+                has_dot = true;
+                current.push('.');
+                index += 1;
+                continue;
+            }
+            break;
+        }
+
+        if current != "-" {
+            numbers.push(current);
+        }
     }
 
     match numbers.as_slice() {
-        [value] => value
-            .parse::<i64>()
-            .map_err(|err| anyhow::anyhow!("解析显示数字失败: {err}")),
+        [value] => Ok(value.clone()),
         [] => bail!("显示内容中没有可解析的数字: `{text}`"),
         _ => bail!("显示内容中包含多个数字, 无法唯一提取: `{text}`"),
     }
@@ -1281,11 +1313,8 @@ mod tests {
 
     #[test]
     fn us_sample_tracks_distance_and_speed_setting() {
-        let mut sim = Simulator::from_hex_path(
-            &sample_path("sample/us/prj/Objects/us.hex"),
-            false,
-        )
-        .expect("load us");
+        let mut sim = Simulator::from_hex_path(&sample_path("sample/us/prj/Objects/us.hex"), false)
+            .expect("load us");
 
         sim.run_ms(220).expect("run us to idle");
         assert_eq!(sim.seg_pattern(1).expect("read L pattern"), 0x38);
@@ -1320,7 +1349,8 @@ mod tests {
         );
 
         sim.tap_key("S4", 80).expect("switch back to distance page");
-        sim.run_ms(220).expect("run us after returning to distance page");
+        sim.run_ms(220)
+            .expect("run us after returning to distance page");
         let adjusted_distance = sim
             .observe_display_number_in_range(4, 8, 30)
             .expect("read adjusted distance");
@@ -1337,7 +1367,19 @@ mod tests {
             super::parse_display_number_in_range("23-59-50", 4, 5).expect("read minute"),
             59
         );
+        assert_eq!(
+            super::parse_display_number_in_range("0007", 1, 4).expect("read leading zero int"),
+            7
+        );
         assert!(super::parse_display_number("23-59-50").is_err());
+    }
+
+    #[test]
+    fn slice_text_range_uses_display_style_positions() {
+        assert_eq!(
+            super::slice_text_range("23-59-50", 4, 5).expect("slice text"),
+            "59"
+        );
     }
 
     #[test]

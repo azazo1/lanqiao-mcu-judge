@@ -342,6 +342,7 @@ dependencies = [
  "clap",
  "i8051",
  "ihex",
+ "regex",
  "rhai",
  "tokio",
  "tracing",
