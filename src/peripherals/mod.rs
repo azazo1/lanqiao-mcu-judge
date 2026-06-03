@@ -4,6 +4,7 @@ mod display;
 mod ds1302;
 mod ds18b20;
 mod i2c;
+mod i2c_slave;
 mod keys;
 mod ne555;
 mod pcf8591;

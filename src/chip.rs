@@ -1158,8 +1158,13 @@ impl BoardModel {
     }
 
     fn read_i2c_lines(&self, latch: u8) -> (bool, bool) {
-        self.i2c
-            .line_levels((latch & (1 << 0)) != 0, (latch & (1 << 1)) != 0)
+        let (slave_scl_low, slave_sda_low) = self.i2c.slave_drives_low(&self.pcf8591, &self.at24c02);
+        self.i2c.line_levels(
+            (latch & (1 << 0)) != 0,
+            (latch & (1 << 1)) != 0,
+            slave_scl_low,
+            slave_sda_low,
+        )
     }
 
     fn read_port(&self, index: usize, latch: u8, all_latches: &[u8; 6]) -> u8 {
@@ -1550,13 +1555,13 @@ mod tests {
 
         assert_eq!(board.read_i2c_lines(0xFF), (true, true));
 
-        board.i2c.sda_drive_low = true;
+        board.pcf8591.force_lines_for_test(false, true);
         assert_eq!(board.read_i2c_lines(0xFF), (true, false));
 
-        board.i2c.scl_drive_low = true;
+        board.pcf8591.force_lines_for_test(true, true);
         assert_eq!(board.read_i2c_lines(0xFF), (false, false));
 
-        board.i2c.sda_drive_low = false;
+        board.pcf8591.force_lines_for_test(false, false);
         assert_eq!(board.read_i2c_lines(0xFC), (false, false));
     }
 
@@ -1569,7 +1574,7 @@ mod tests {
         ];
         let mut cpu = Cpu::new();
         let mut ctx = super::MachineContext::new(code);
-        ctx.board.i2c.sda_drive_low = true;
+        ctx.board.pcf8591.force_lines_for_test(false, true);
         ctx.ports.refresh_inputs(&ctx.board);
 
         let _ = cpu.step(&mut ctx);
