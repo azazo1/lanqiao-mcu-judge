@@ -96,6 +96,9 @@ LED:
 - `key_mode("kbd")`
 - `set_rtc(23, 59, 50)`
 - `set_temperature_c(25)`
+- `set_temperature_c(25.9375)`
+- `set_ds18b20_rom("280123456789AB")`
+- `set_ds18b20_parasite_power(true)`
 - `set_distance_cm(35)`
 - `set_frequency_hz(2200)`
 - `set_voltage(AIN3, 2.3)`

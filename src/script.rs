@@ -448,6 +448,42 @@ fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
         },
     );
 
+    let sim_temp_float = Arc::clone(sim);
+    engine.register_fn(
+        "set_temperature_c",
+        move |temp: rhai::FLOAT| -> Result<(), Box<EvalAltResult>> {
+            sim_temp_float
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .set_temperature_c(temp as f32);
+            Ok(())
+        },
+    );
+
+    let sim_ds18b20_rom = Arc::clone(sim);
+    engine.register_fn(
+        "set_ds18b20_rom",
+        move |rom: ImmutableString| -> Result<(), Box<EvalAltResult>> {
+            sim_ds18b20_rom
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .set_ds18b20_rom(rom.as_str())
+                .map_err(|err| runtime_error(err.to_string()))
+        },
+    );
+
+    let sim_ds18b20_parasite = Arc::clone(sim);
+    engine.register_fn(
+        "set_ds18b20_parasite_power",
+        move |enabled: bool| -> Result<(), Box<EvalAltResult>> {
+            sim_ds18b20_parasite
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .set_ds18b20_parasite_power(enabled);
+            Ok(())
+        },
+    );
+
     let sim_distance = Arc::clone(sim);
     engine.register_fn(
         "set_distance_cm",

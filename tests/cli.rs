@@ -249,3 +249,65 @@ fn rhai_voltage_aliases_drive_pcf8591_inputs() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn rhai_ds18b20_resolution_levels_follow_float_temperature() {
+    let script_path = temp_script_path();
+    std::fs::write(
+        &script_path,
+        "set_temperature_c(25.9375);\nrun_ms(700);\nassert(display_number(1, 6) == 25500, \"level0 temp\");\nassert(display_number(8, 8) == 0, \"level0\");\ntap_key(S5, 80);\nrun_ms(400);\nassert(display_number(1, 6) == 25750, \"level1 temp\");\nassert(display_number(8, 8) == 1, \"level1\");\ntap_key(S5, 80);\nrun_ms(400);\nassert(display_number(1, 6) == 25875, \"level2 temp\");\nassert(display_number(8, 8) == 2, \"level2\");\ntap_key(S5, 80);\nrun_ms(400);\nassert(display_number(1, 6) == 25937, \"level3 temp\");\nassert(display_number(8, 8) == 3, \"level3\");\n",
+    )
+    .expect("write script");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_stcjudge"))
+        .args([
+            "run",
+            "--hex",
+            sample_path("sample/ds18b20/prj/Objects/ds18b20.hex")
+                .to_str()
+                .expect("hex path"),
+            "--script",
+            script_path.to_str().expect("script path"),
+        ])
+        .output()
+        .expect("run cli");
+
+    let _ = std::fs::remove_file(&script_path);
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn rhai_ds18b20_temperature_range_handles_negative_and_high_values() {
+    let script_path = temp_script_path();
+    std::fs::write(
+        &script_path,
+        "set_temperature_c(-25);\nrun_ms(700);\nassert(display_number(1, 6) == -25000, \"minus25\");\nset_temperature_c(100);\nrun_ms(700);\nassert(display_number(1, 6) == 100000, \"plus100\");\n",
+    )
+    .expect("write script");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_stcjudge"))
+        .args([
+            "run",
+            "--hex",
+            sample_path("sample/ds18b20/prj/Objects/ds18b20.hex")
+                .to_str()
+                .expect("hex path"),
+            "--script",
+            script_path.to_str().expect("script path"),
+        ])
+        .output()
+        .expect("run cli");
+
+    let _ = std::fs::remove_file(&script_path);
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

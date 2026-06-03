@@ -129,6 +129,14 @@ impl Simulator {
         self.ctx.board.ds18b20.temperature_c = value;
     }
 
+    pub fn set_ds18b20_rom(&mut self, rom: &str) -> Result<()> {
+        self.ctx.board.ds18b20.set_rom_hex(rom)
+    }
+
+    pub fn set_ds18b20_parasite_power(&mut self, enabled: bool) {
+        self.ctx.board.ds18b20.set_parasite_power(enabled);
+    }
+
     pub fn set_distance_cm(&mut self, value: f32) {
         self.ctx.board.ultrasonic.distance_cm = value.max(0.0);
     }
