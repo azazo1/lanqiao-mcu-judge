@@ -2,15 +2,18 @@ use std::{cell::Cell, collections::VecDeque, fmt::Write as _, fs, path::Path};
 
 use anyhow::{Context, Result, bail};
 use i8051::{
-    Cpu, CpuContext, CpuView, Flag, MemoryMapper, PortMapper, ReadOnlyMemoryMapper, Register,
+    Cpu, CpuContext, CpuView, Flag, Interrupt as CpuInterrupt, MemoryMapper, PortMapper,
+    ReadOnlyMemoryMapper, Register,
 };
 use tracing::{trace, warn};
 
-pub(crate) const CPU_HZ: u64 = 12_000_000;
+pub(crate) const SYSTEM_HZ: u64 = 12_000_000;
+pub(crate) const CPU_EXEC_HZ: u64 = 12_000_000;
 pub(crate) const NS_PER_SECOND: u64 = 1_000_000_000;
 pub(crate) const NS_PER_MILLISECOND: u64 = 1_000_000;
 pub(crate) const NS_PER_MICROSECOND: u64 = 1_000;
 const BOARD_POWER_ON_LATCHES: [u8; 4] = [0x00, 0x70, 0x00, 0x00];
+const INTERRUPT_ENTRY_TICKS: u32 = 3;
 
 use crate::{
     hex::load_ihex,
@@ -48,6 +51,33 @@ struct BoardRetainedState {
     ds18b20_parasite_power: bool,
     ultrasonic_distance_cm: f32,
     ne555_frequency_hz: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum InterruptSource {
+    External0,
+    Timer0,
+    External1,
+    Timer1,
+    Serial,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PendingInterrupt {
+    source: InterruptSource,
+    tcon_clear_mask: u8,
+}
+
+impl PendingInterrupt {
+    fn cpu_interrupt(self) -> CpuInterrupt {
+        match self.source {
+            InterruptSource::External0 => CpuInterrupt::External0,
+            InterruptSource::Timer0 => CpuInterrupt::Timer0,
+            InterruptSource::External1 => CpuInterrupt::External1,
+            InterruptSource::Timer1 => CpuInterrupt::Timer1,
+            InterruptSource::Serial => CpuInterrupt::Serial,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -483,8 +513,11 @@ impl Simulator {
     }
 
     fn step_once(&mut self) -> Result<()> {
-        let ticks = self.current_instruction_ticks();
         self.ctx.ports.refresh_inputs(&self.ctx.board);
+        if self.try_enter_pending_interrupt()? {
+            return Ok(());
+        }
+        let ticks = self.current_instruction_ticks();
         if self.trace_cpu {
             let instruction = self.cpu.decode_pc(&self.ctx);
             trace!("{instruction:#}");
@@ -493,24 +526,107 @@ impl Simulator {
         self.tick_devices(ticks)
     }
 
+    fn try_enter_pending_interrupt(&mut self) -> Result<bool> {
+        let Some(pending) = self.pending_interrupt() else {
+            return Ok(false);
+        };
+        if !self.cpu.interrupt(pending.cpu_interrupt()) {
+            return Ok(false);
+        }
+        if pending.tcon_clear_mask != 0 {
+            let tcon = self.cpu.sfr(SFR_TCON, &self.ctx);
+            self.cpu
+                .sfr_set(SFR_TCON, tcon & !pending.tcon_clear_mask, &mut self.ctx);
+        }
+        trace!(
+            pc = self.cpu.pc_ext(&self.ctx),
+            interrupt = ?pending.source,
+            delay_ticks = INTERRUPT_ENTRY_TICKS,
+            "enter interrupt"
+        );
+        self.tick_devices(INTERRUPT_ENTRY_TICKS)?;
+        Ok(true)
+    }
+
+    fn pending_interrupt(&self) -> Option<PendingInterrupt> {
+        let ie = self.cpu.register(Register::IE) as u8;
+        if ie & IE_EA == 0 {
+            return None;
+        }
+
+        let ip = self.cpu.register(Register::IP) as u8;
+        let tcon = self.cpu.sfr(SFR_TCON, &self.ctx);
+        let scon = self.cpu.sfr(SFR_SCON, &self.ctx);
+        let p3 = self.cpu.sfr(SFR_P3, &self.ctx);
+
+        for high_priority in [true, false] {
+            for candidate in [
+                PendingInterrupt {
+                    source: InterruptSource::External0,
+                    tcon_clear_mask: 0,
+                },
+                PendingInterrupt {
+                    source: InterruptSource::Timer0,
+                    tcon_clear_mask: TCON_TF0,
+                },
+                PendingInterrupt {
+                    source: InterruptSource::External1,
+                    tcon_clear_mask: 0,
+                },
+                PendingInterrupt {
+                    source: InterruptSource::Timer1,
+                    tcon_clear_mask: TCON_TF1,
+                },
+                PendingInterrupt {
+                    source: InterruptSource::Serial,
+                    tcon_clear_mask: 0,
+                },
+            ] {
+                let (enable_mask, pending, priority_high) = match candidate.source {
+                    InterruptSource::External0 => {
+                        (IE_EX0, p3 & P3_INT0 == 0, ip & IE_EX0 != 0)
+                    }
+                    InterruptSource::Timer0 => {
+                        (IE_ET0, tcon & TCON_TF0 != 0, ip & IE_ET0 != 0)
+                    }
+                    InterruptSource::External1 => {
+                        (IE_EX1, p3 & P3_INT1 == 0, ip & IE_EX1 != 0)
+                    }
+                    InterruptSource::Timer1 => {
+                        (IE_ET1, tcon & TCON_TF1 != 0, ip & IE_ET1 != 0)
+                    }
+                    InterruptSource::Serial => {
+                        (IE_ES, scon & (SCON_RI | SCON_TI) != 0, ip & IE_ES != 0)
+                    }
+                };
+                if ie & enable_mask == 0 || !pending || priority_high != high_priority {
+                    continue;
+                }
+                return Some(candidate);
+            }
+        }
+
+        None
+    }
+
     fn tick_devices(&mut self, cycles: u32) -> Result<()> {
         if cycles == 0 {
             return Ok(());
         }
 
         let start_time_ns = self.ctx.board.sim_time_ns;
-        let elapsed_ns = self.ctx.board.advance_cycles(u64::from(cycles));
+        let (elapsed_ns, system_cycles) = self.ctx.board.advance_cycles(u64::from(cycles));
         let t0_falling_edges = self
             .ctx
             .board
             .t0_falling_edges(&self.ctx.ports.port_latch, start_time_ns);
         self.ctx
             .ports
-            .tick_timers01_t2(&self.ctx.board, cycles, t0_falling_edges)?;
+            .tick_timers01_t2(&self.ctx.board, system_cycles, t0_falling_edges)?;
         self.ctx
             .ports
             .tick_ultrasonic(&mut self.ctx.board, elapsed_ns);
-        self.ctx.ports.tick_pca(cycles)?;
+        self.ctx.ports.tick_pca(system_cycles)?;
         self.ctx.ports.uart1.tick_ns(elapsed_ns);
         let responses = self.ctx.ports.uart2.tick_ns(elapsed_ns);
         for response in responses {
@@ -543,8 +659,15 @@ impl Simulator {
 fn approximate_instruction_ticks(op: u8) -> u32 {
     match op {
         0x00 => 1,
+        0x01 | 0x11 | 0x21 | 0x31 | 0x41 | 0x51 | 0x61 | 0x71 | 0x81 | 0x91 | 0xA1
+        | 0xB1 | 0xC1 | 0xD1 | 0xE1 | 0xF1 => 2,
         0x02 | 0x12 | 0x22 | 0x32 => 2,
         0x10 | 0x20 | 0x30 | 0x40 | 0x50 | 0x60 | 0x70 | 0x80 => 2,
+        0x76 | 0x77 | 0x86 | 0x87 | 0x88..=0x8F | 0x90 | 0xA6..=0xAF => 2,
+        0x05 | 0x15 | 0x42 | 0x45 | 0x52 | 0x55 | 0x62 | 0x65 | 0xA2 | 0xA3 | 0xB2
+        | 0xC2 | 0xD2 | 0xE5 | 0xF5 => 1,
+        0x43 | 0x53 | 0x63 | 0x75 | 0x85 | 0x92 | 0xB4..=0xBF => 2,
+        0xC0 | 0xD0 | 0xD5 | 0xD8..=0xDF => 2,
         0x73 | 0x83 | 0x93 => 2,
         0xA4 | 0x84 => 4,
         0xE0 | 0xE2 | 0xE3 | 0xF0 | 0xF2 | 0xF3 => 2,
@@ -567,7 +690,7 @@ struct MachineContext {
 
 impl MachineContext {
     fn new(code: Vec<u8>) -> Self {
-        let mut board = BoardModel::default();
+        let mut board = BoardModel::new();
         board
             .outputs
             .sample_from_latches(&BOARD_POWER_ON_LATCHES, &[0; 4]);
@@ -880,7 +1003,7 @@ impl MachinePorts {
 }
 
 impl PortMapper for MachinePorts {
-    type WriteValue = (u8, u8, bool);
+    type WriteValue = (u8, u8);
 
     fn interest<C: CpuView>(&self, _cpu: &C, _addr: u8) -> bool {
         true
@@ -912,18 +1035,12 @@ impl PortMapper for MachinePorts {
     }
 
     fn prepare_write<C: CpuView>(&self, _cpu: &C, addr: u8, value: u8) -> Self::WriteValue {
-        let opcode = _cpu.read_code(_cpu.pc_ext());
-        let preserve_i2c_bits = addr == SFR_P2
-            && matches!(
-                opcode,
-                0x05 | 0x15 | 0x42 | 0x43 | 0x52 | 0x53 | 0x62 | 0x63 | 0x85 | 0xD5 | 0xF5
-            );
         let value = self.rewrite_port_rmw(_cpu, addr, value);
-        (addr, value, preserve_i2c_bits)
+        (addr, value)
     }
 
     fn write(&mut self, value: Self::WriteValue) {
-        let (addr, mut byte, preserve_i2c_bits) = value;
+        let (addr, byte) = value;
         match addr {
             addr if TimerBlock::handles(addr) => {
                 let _ = self.timers.write(&mut self.generic, addr, byte);
@@ -932,9 +1049,6 @@ impl PortMapper for MachinePorts {
             UART2_SFR_S2CON | UART2_SFR_S2BUF => self.uart2.write(addr, byte),
             SFR_P0 | SFR_P1 | SFR_P2 | SFR_P3 | SFR_P4 | SFR_P5 => {
                 let index = Self::port_index(addr).expect("port index");
-                if preserve_i2c_bits {
-                    byte = (byte & !0x03) | (self.port_latch[2] & 0x03);
-                }
                 self.port_latch[index] = byte;
                 self.generic_set(addr, byte);
                 if addr == SFR_P2 {
@@ -1051,11 +1165,12 @@ impl Uart {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct BoardModel {
     cpu_cycles: u64,
     sim_time_ns: u64,
     sim_time_ns_remainder: u64,
+    system_cycle_remainder: u64,
     outputs: Outputs,
     ds18b20: Ds18b20,
     ds1302: Ds1302,
@@ -1072,6 +1187,28 @@ struct BoardModel {
 }
 
 impl BoardModel {
+    fn new() -> Self {
+        Self {
+            cpu_cycles: 0,
+            sim_time_ns: 0,
+            sim_time_ns_remainder: 0,
+            system_cycle_remainder: 0,
+            outputs: Outputs::default(),
+            ds18b20: Ds18b20::default(),
+            ds1302: Ds1302::default(),
+            i2c: I2cBus,
+            pcf8591: Pcf8591::default(),
+            at24c02: At24c02::default(),
+            ne555: Ne555::default(),
+            ultrasonic: UltrasonicDevice::default(),
+            keys: Key::default(),
+            key_mode: KeyMode::default(),
+            analog: AnalogInputs::default(),
+            jumpers: BoardJumpers::default(),
+            p34_conflict_active: Cell::new(false),
+        }
+    }
+
     fn persistent_state(&self) -> PersistentState {
         PersistentState {
             ds18b20: self.ds18b20.persistent_state(),
@@ -1113,15 +1250,20 @@ impl BoardModel {
         self.ne555.set_frequency_hz(state.ne555_frequency_hz);
     }
 
-    fn advance_cycles(&mut self, cycles: u64) -> u64 {
+    fn advance_cycles(&mut self, cycles: u64) -> (u64, u32) {
         self.cpu_cycles = self.cpu_cycles.saturating_add(cycles);
         let total_ns = u128::from(self.sim_time_ns_remainder)
             .saturating_add(u128::from(cycles).saturating_mul(u128::from(NS_PER_SECOND)));
-        let elapsed_ns = (total_ns / u128::from(CPU_HZ)).min(u128::from(u64::MAX)) as u64;
-        self.sim_time_ns_remainder = (total_ns % u128::from(CPU_HZ)) as u64;
+        let elapsed_ns = (total_ns / u128::from(CPU_EXEC_HZ)).min(u128::from(u64::MAX)) as u64;
+        self.sim_time_ns_remainder = (total_ns % u128::from(CPU_EXEC_HZ)) as u64;
         self.sim_time_ns = self.sim_time_ns.saturating_add(elapsed_ns);
         self.ds1302.tick_ns(elapsed_ns);
-        elapsed_ns
+        let total_system_cycles = u128::from(self.system_cycle_remainder)
+            .saturating_add(u128::from(cycles).saturating_mul(u128::from(SYSTEM_HZ)));
+        let system_cycles =
+            (total_system_cycles / u128::from(CPU_EXEC_HZ)).min(u128::from(u32::MAX)) as u32;
+        self.system_cycle_remainder = (total_system_cycles % u128::from(CPU_EXEC_HZ)) as u64;
+        (elapsed_ns, system_cycles)
     }
 
     fn tick_protocols(
@@ -1308,6 +1450,12 @@ impl BoardModel {
     }
 }
 
+impl Default for BoardModel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 fn apply_open_drain_bit(mut value: u8, bit: u8, device_drive_low: bool) -> u8 {
     let mcu_high = value & (1 << bit) != 0;
     let high = mcu_high && !device_drive_low;
@@ -1423,7 +1571,7 @@ fn extract_unique_numeric_token(text: &str, allow_decimal: bool) -> Result<Strin
 mod tests {
     use std::path::PathBuf;
 
-    use i8051::Cpu;
+    use i8051::{Cpu, Register};
 
     use crate::ids::{KeyId, KeyMode, LedId, SignalId};
 
@@ -1581,6 +1729,67 @@ mod tests {
         let _ = cpu.step(&mut ctx);
 
         assert_eq!(ctx.ports.port_latch[1] & 0x01, 0x00);
+    }
+
+    #[test]
+    fn interrupt_entry_consumes_cycles_before_vector_opcode_runs() {
+        let mut code = vec![0x00; 0x20];
+        code[0x1B] = 0xC2;
+        code[0x1C] = 0x90;
+        code[0x1D] = 0x32;
+
+        let mut sim = super::Simulator {
+            cpu: Cpu::new(),
+            ctx: super::MachineContext::new(code.clone()),
+            code_image: code,
+            trace_cpu: false,
+            seg_decoder: super::SegmentDecoder::default(),
+        };
+        sim.cpu
+            .register_set(Register::IE, u16::from(super::IE_EA | super::IE_ET1));
+        sim.ctx.ports.timers.write(
+            &mut sim.ctx.ports.generic,
+            super::SFR_TCON,
+            super::TCON_TF1,
+        );
+
+        sim.step_once().expect("enter timer1 interrupt");
+
+        assert_eq!(sim.cpu.pc, 0x001B);
+        assert_eq!(sim.ctx.ports.port_latch[1] & 0x01, 0x01);
+        assert_eq!(
+            sim.ctx
+                .ports
+                .timers
+                .read(&sim.ctx.ports.generic, super::SFR_TCON),
+            Some(0x00)
+        );
+        assert_eq!(
+            sim.ctx.board.cpu_cycles,
+            u64::from(super::INTERRUPT_ENTRY_TICKS)
+        );
+
+        sim.step_once().expect("run timer1 vector instruction");
+
+        assert_eq!(sim.ctx.ports.port_latch[1] & 0x01, 0x00);
+    }
+
+    #[test]
+    fn approximate_instruction_ticks_matches_stc15_common_gpio_ops() {
+        assert_eq!(super::approximate_instruction_ticks(0xA2), 1);
+        assert_eq!(super::approximate_instruction_ticks(0xC2), 1);
+        assert_eq!(super::approximate_instruction_ticks(0xD2), 1);
+        assert_eq!(super::approximate_instruction_ticks(0xE5), 1);
+        assert_eq!(super::approximate_instruction_ticks(0xF5), 1);
+        assert_eq!(super::approximate_instruction_ticks(0x25), 1);
+        assert_eq!(super::approximate_instruction_ticks(0x35), 1);
+        assert_eq!(super::approximate_instruction_ticks(0x95), 1);
+        assert_eq!(super::approximate_instruction_ticks(0x92), 2);
+        assert_eq!(super::approximate_instruction_ticks(0x30), 2);
+        assert_eq!(super::approximate_instruction_ticks(0x53), 2);
+        assert_eq!(super::approximate_instruction_ticks(0x88), 2);
+        assert_eq!(super::approximate_instruction_ticks(0xA8), 2);
+        assert_eq!(super::approximate_instruction_ticks(0x90), 2);
     }
 
     #[test]

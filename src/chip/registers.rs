@@ -126,6 +126,13 @@ pub const P3_T0: u8 = 1 << 4;
 pub const P3_T1: u8 = 1 << 5;
 pub const P3_T2: u8 = 1 << 1;
 
+pub const IE_EX0: u8 = 1 << 0;
+pub const IE_ET0: u8 = 1 << 1;
+pub const IE_EX1: u8 = 1 << 2;
+pub const IE_ET1: u8 = 1 << 3;
+pub const IE_ES: u8 = 1 << 4;
+pub const IE_EA: u8 = 1 << 7;
+
 pub const TCON_TR0: u8 = 1 << 4;
 pub const TCON_TF0: u8 = 1 << 5;
 pub const TCON_TR1: u8 = 1 << 6;

@@ -200,7 +200,6 @@ impl I2cSlaveFrontend {
                         if ack {
                             self.write_ack_pending = true;
                             self.write_ack_clock_high = false;
-                            self.sda_drive_low = true;
                         }
                     }
                 }
@@ -211,9 +210,6 @@ impl I2cSlaveFrontend {
                     self.read_ack_master_high = sda_high;
                 } else {
                     self.bit_count += 1;
-                    let bit = self.shift & 0x80 != 0;
-                    self.sda_drive_low = !bit;
-                    self.shift <<= 1;
                     if self.bit_count == 8 {
                         self.bit_count = 0;
                         self.read_ack_pending = true;
@@ -231,13 +227,17 @@ impl I2cSlaveFrontend {
         device: &mut D,
         ctx: &D::Context,
     ) {
+        if self.write_ack_pending && !self.write_ack_clock_high {
+            self.sda_drive_low = true;
+        }
+
         if self.write_ack_pending && self.write_ack_clock_high {
             self.write_ack_pending = false;
             self.write_ack_clock_high = false;
             self.sda_drive_low = false;
             if self.enter_read_after_ack {
                 self.enter_read_after_ack = false;
-                self.mode = I2cMode::Read;
+                self.begin_read_phase();
             }
         }
 
@@ -247,14 +247,18 @@ impl I2cSlaveFrontend {
                 self.read_ack_clock_high = false;
                 if self.read_ack_master_high {
                     self.mode = I2cMode::Idle;
+                    self.sda_drive_low = false;
                     device.on_read_finished(time_ns, ctx, true);
                 } else {
-                    self.shift = device.on_read_continue(time_ns, ctx);
                     device.on_read_finished(time_ns, ctx, false);
+                    let next = device.on_read_continue(time_ns, ctx);
+                    self.load_read_byte(next);
                 }
             } else {
                 self.sda_drive_low = false;
             }
+        } else if matches!(self.mode, I2cMode::Read) && self.bit_count != 0 {
+            self.advance_read_bit();
         }
     }
 
@@ -343,6 +347,26 @@ impl I2cSlaveFrontend {
         self.sda_drive_low = false;
         device.on_i2c_stop(time_ns, ctx);
     }
+
+    fn begin_read_phase(&mut self) {
+        self.mode = I2cMode::Read;
+        self.bit_count = 0;
+        self.drive_current_read_bit();
+    }
+
+    fn load_read_byte(&mut self, byte: u8) {
+        self.shift = byte;
+        self.begin_read_phase();
+    }
+
+    fn advance_read_bit(&mut self) {
+        self.shift <<= 1;
+        self.drive_current_read_bit();
+    }
+
+    fn drive_current_read_bit(&mut self) {
+        self.sda_drive_low = self.shift & 0x80 == 0;
+    }
 }
 
 impl SclFilter {
@@ -393,5 +417,156 @@ impl SclFilter {
         } else {
             0
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{I2cMode, I2cSlaveDevice, I2cSlaveFrontend, I2cSlaveTiming};
+
+    #[derive(Debug, Default)]
+    struct ReadBackDevice {
+        first_byte: u8,
+    }
+
+    impl I2cSlaveDevice for ReadBackDevice {
+        type Context = ();
+
+        fn address7(&self) -> u8 {
+            0x50
+        }
+
+        fn timing(&self) -> I2cSlaveTiming {
+            I2cSlaveTiming {
+                min_scl_low_ns: 0,
+                min_scl_high_ns: 0,
+                min_start_stop_scl_high_ns: 0,
+            }
+        }
+
+        fn on_addressed_write(&mut self, _time_ns: u64, _ctx: &Self::Context) -> bool {
+            true
+        }
+
+        fn on_addressed_read(&mut self, _time_ns: u64, _ctx: &Self::Context) -> Option<u8> {
+            Some(self.first_byte)
+        }
+
+        fn on_write_byte(&mut self, _time_ns: u64, _byte: u8, _ctx: &Self::Context) -> bool {
+            true
+        }
+
+        fn on_read_continue(&mut self, _time_ns: u64, _ctx: &Self::Context) -> u8 {
+            0xFF
+        }
+    }
+
+    struct FrontendHarness {
+        frontend: I2cSlaveFrontend,
+        device: ReadBackDevice,
+        scl_high: bool,
+        sda_high: bool,
+        time_ns: u64,
+    }
+
+    impl FrontendHarness {
+        const STEP_NS: u64 = 10_000;
+
+        fn new(first_byte: u8) -> Self {
+            let mut harness = Self {
+                frontend: I2cSlaveFrontend::default(),
+                device: ReadBackDevice { first_byte },
+                scl_high: true,
+                sda_high: true,
+                time_ns: 0,
+            };
+            harness.tick();
+            harness
+        }
+
+        fn tick(&mut self) {
+            let line_scl_high = self.scl_high && !self.frontend.scl_drive_low();
+            let line_sda_high = self.sda_high && !self.frontend.sda_drive_low();
+            self.frontend
+                .sample(self.time_ns, line_scl_high, line_sda_high, &mut self.device, &());
+            let settled_sda_high = self.sda_high && !self.frontend.sda_drive_low();
+            self.frontend.settle_lines(settled_sda_high);
+        }
+
+        fn wait_step(&mut self) {
+            self.time_ns = self.time_ns.saturating_add(Self::STEP_NS);
+            self.tick();
+        }
+
+        fn set_scl(&mut self, level: bool) {
+            self.scl_high = level;
+            self.tick();
+        }
+
+        fn set_sda(&mut self, level: bool) {
+            self.sda_high = level;
+            self.tick();
+        }
+
+        fn line_sda_high(&self) -> bool {
+            self.sda_high && !self.frontend.sda_drive_low()
+        }
+
+        fn start(&mut self) {
+            self.set_sda(true);
+            self.wait_step();
+            self.set_scl(true);
+            self.wait_step();
+            self.set_sda(false);
+            self.wait_step();
+            self.set_scl(false);
+            self.wait_step();
+        }
+
+        fn send_byte(&mut self, byte: u8) {
+            let mut value = byte;
+            for _ in 0..8 {
+                self.set_scl(false);
+                self.wait_step();
+                self.set_sda(value & 0x80 != 0);
+                self.wait_step();
+                self.set_scl(true);
+                self.wait_step();
+                value <<= 1;
+            }
+            self.set_scl(false);
+            self.wait_step();
+        }
+
+        fn wait_ack(&mut self) -> bool {
+            self.set_sda(true);
+            self.wait_step();
+            self.set_scl(true);
+            self.wait_step();
+            let ack = self.line_sda_high();
+            self.set_scl(false);
+            self.wait_step();
+            ack
+        }
+    }
+
+    #[test]
+    fn read_mode_prepares_next_bit_during_scl_low() {
+        let mut harness = FrontendHarness::new(0x01);
+        harness.start();
+        harness.send_byte(0xA1);
+        assert!(!harness.wait_ack());
+        assert!(matches!(harness.frontend.mode, I2cMode::Read));
+
+        let mut prepared_bits = Vec::new();
+        for _ in 0..8 {
+            prepared_bits.push(u8::from(harness.line_sda_high()));
+            harness.set_scl(true);
+            harness.wait_step();
+            harness.set_scl(false);
+            harness.wait_step();
+        }
+
+        assert_eq!(prepared_bits, vec![0, 0, 0, 0, 0, 0, 0, 1]);
     }
 }

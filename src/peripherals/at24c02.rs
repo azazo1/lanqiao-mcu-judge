@@ -1,6 +1,7 @@
 use std::mem;
 
 use crate::persistent_state::At24c02PersistentState;
+use tracing::trace;
 
 use super::i2c_slave::{I2cSlaveDevice, I2cSlaveFrontend, I2cSlaveTiming};
 
@@ -39,9 +40,9 @@ impl At24c02 {
     const PAGE_MASK: u8 = Self::PAGE_SIZE - 1;
     const WRITE_CYCLE_NS: u64 = 5_000_000;
     const TIMING: I2cSlaveTiming = I2cSlaveTiming {
-        min_scl_low_ns: 1_300,
-        min_scl_high_ns: 700,
-        min_start_stop_scl_high_ns: 700,
+        min_scl_low_ns: 1_500,
+        min_scl_high_ns: 1_500,
+        min_start_stop_scl_high_ns: 1_500,
     };
 
     pub(crate) fn byte(&self, addr: u8) -> u8 {
@@ -149,37 +150,69 @@ impl I2cSlaveDevice for At24c02 {
     }
 
     fn on_i2c_stop(&mut self, time_ns: u64, _ctx: &Self::Context) {
+        trace!(
+            time_ns,
+            address_pointer = self.address_pointer,
+            dirty = self.page_dirty_mask,
+            "at24c02 stop"
+        );
         self.commit_page_write(time_ns);
     }
 
     fn on_addressed_write(&mut self, time_ns: u64, _ctx: &Self::Context) -> bool {
         if self.busy(time_ns) {
+            trace!(time_ns, "at24c02 nack write address while busy");
             return false;
         }
+        trace!(time_ns, "at24c02 ack write address");
         self.begin_write_transaction();
         true
     }
 
     fn on_addressed_read(&mut self, time_ns: u64, _ctx: &Self::Context) -> Option<u8> {
         if self.busy(time_ns) {
+            trace!(time_ns, "at24c02 nack read address while busy");
             return None;
         }
-        Some(self.read_current_byte())
+        let value = self.read_current_byte();
+        trace!(
+            time_ns,
+            value,
+            next_address_pointer = self.address_pointer,
+            "at24c02 start read"
+        );
+        Some(value)
     }
 
     fn on_write_byte(&mut self, time_ns: u64, byte: u8, _ctx: &Self::Context) -> bool {
         if self.busy(time_ns) {
+            trace!(time_ns, byte, "at24c02 nack data while busy");
             return false;
         }
+        trace!(
+            time_ns,
+            byte,
+            expecting_word_address = self.expecting_word_address,
+            write_cursor = self.write_cursor,
+            "at24c02 receive byte"
+        );
         self.buffer_write_byte(byte);
         true
     }
 
     fn on_read_continue(&mut self, time_ns: u64, _ctx: &Self::Context) -> u8 {
         if self.busy(time_ns) {
+            trace!(time_ns, "at24c02 read continue while busy");
             return 0xFF;
         }
-        self.read_current_byte()
+        let value = self.read_current_byte();
+        trace!(
+            time_ns,
+            value,
+            next_address_pointer = self.address_pointer,
+            "at24c02 continue read"
+        );
+        value
     }
 }
 
