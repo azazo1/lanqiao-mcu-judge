@@ -16,6 +16,7 @@ pub(crate) struct I2cBus {
     pub(crate) scl_drive_low: bool,
     active: Option<I2cDevice>,
     mode: I2cMode,
+    enter_read_after_ack: bool,
     read_buffer: VecDeque<u8>,
 }
 
@@ -51,6 +52,7 @@ impl I2cBus {
             self.write_ack_clock_high = false;
             self.read_ack_pending = false;
             self.read_ack_clock_high = false;
+            self.enter_read_after_ack = false;
             self.read_buffer.clear();
             self.sda_drive_low = false;
         }
@@ -61,6 +63,7 @@ impl I2cBus {
             self.write_ack_clock_high = false;
             self.read_ack_pending = false;
             self.read_ack_clock_high = false;
+            self.enter_read_after_ack = false;
             self.sda_drive_low = false;
         }
 
@@ -111,6 +114,10 @@ impl I2cBus {
                 self.write_ack_pending = false;
                 self.write_ack_clock_high = false;
                 self.sda_drive_low = false;
+                if self.enter_read_after_ack {
+                    self.enter_read_after_ack = false;
+                    self.mode = I2cMode::Read;
+                }
             }
             if self.read_ack_pending {
                 if self.read_ack_clock_high {
@@ -148,7 +155,7 @@ impl I2cBus {
 
                 match (self.active, read) {
                     (Some(I2cDevice::Pcf8591), true) => {
-                        self.mode = I2cMode::Read;
+                        self.enter_read_after_ack = true;
                         self.read_buffer.push_back(pcf8591.read_byte(analog));
                     }
                     (Some(I2cDevice::Pcf8591), false) => {
@@ -156,7 +163,7 @@ impl I2cBus {
                         self.mode = I2cMode::Write;
                     }
                     (Some(I2cDevice::Eeprom), true) => {
-                        self.mode = I2cMode::Read;
+                        self.enter_read_after_ack = true;
                         self.read_buffer.push_back(at24c02.read_byte());
                     }
                     (Some(I2cDevice::Eeprom), false) => {
@@ -164,6 +171,7 @@ impl I2cBus {
                         self.mode = I2cMode::Write;
                     }
                     (None, _) => {
+                        self.enter_read_after_ack = false;
                         self.mode = I2cMode::Idle;
                     }
                 }

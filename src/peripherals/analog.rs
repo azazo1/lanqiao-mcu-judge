@@ -22,9 +22,7 @@ impl AnalogInputs {
 
     pub(crate) fn channel_voltage(&self, channel: u8) -> f32 {
         match channel {
-            0 => *self.voltages.get("RB3").unwrap_or(&0.0),
             1 => *self.voltages.get("RD1").unwrap_or(&0.0),
-            2 => *self.voltages.get("RB4").unwrap_or(&0.0),
             3 => *self.voltages.get("RB2").unwrap_or(&0.0),
             _ => 0.0,
         }

@@ -62,7 +62,9 @@ LED:
 
 模拟量通道:
 
-- `RB2` `RB3` `RB4` `RD1`
+- `RB2` `RD1` `AIN1` `AIN3`
+
+其中 `AIN1` 和 `RD1` 是同一路输入的别名, `AIN3` 和 `RB2` 也是同一路输入的别名.
 
 按键模式:
 
@@ -96,8 +98,8 @@ LED:
 - `set_temperature_c(25)`
 - `set_distance_cm(35)`
 - `set_frequency_hz(2200)`
-- `set_voltage(RB2, 2.3)`
-- `set_voltage("RB2", 2.3)`
+- `set_voltage(AIN3, 2.3)`
+- `set_voltage("AIN1", 2.3)`
 - `uart_write("(F,?)")`
 - `jumper_on(NET_SIG, SIG_OUT)`
 - `jumper_off(NET_SIG, SIG_OUT)`

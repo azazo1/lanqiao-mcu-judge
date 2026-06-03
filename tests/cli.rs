@@ -218,3 +218,34 @@ fn rhai_da_value_reports_pcf8591_output() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn rhai_voltage_aliases_drive_pcf8591_inputs() {
+    let script_path = temp_script_path();
+    std::fs::write(
+        &script_path,
+        "key_mode(BUTTON);\nset_voltage(AIN3, 1.0);\nset_voltage(AIN1, 4.0);\nrun_ms(500);\nlet text = display_text(30);\nassert(parse_int(text[0..3]) >= 50 && parse_int(text[0..3]) <= 52, \"ain3\");\nassert(parse_int(text[4..7]) >= 203 && parse_int(text[4..7]) <= 205, \"ain1\");\nset_voltage(RB2, 4.0);\nset_voltage(RD1, 1.0);\nrun_ms(500);\nlet text2 = display_text(30);\nassert(parse_int(text2[0..3]) >= 203 && parse_int(text2[0..3]) <= 205, \"rb2\");\nassert(parse_int(text2[4..7]) >= 50 && parse_int(text2[4..7]) <= 52, \"rd1\");\n",
+    )
+    .expect("write script");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_stcjudge"))
+        .args([
+            "run",
+            "--hex",
+            sample_path("sample/ad_da/prj/Objects/ad_da.hex")
+                .to_str()
+                .expect("hex path"),
+            "--script",
+            script_path.to_str().expect("script path"),
+        ])
+        .output()
+        .expect("run cli");
+
+    let _ = std::fs::remove_file(&script_path);
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

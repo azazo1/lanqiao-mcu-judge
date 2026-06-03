@@ -109,8 +109,6 @@ impl KeyId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum VoltageChannel {
     Rb2,
-    Rb3,
-    Rb4,
     Rd1,
 }
 
@@ -118,18 +116,14 @@ impl VoltageChannel {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Rb2 => "RB2",
-            Self::Rb3 => "RB3",
-            Self::Rb4 => "RB4",
             Self::Rd1 => "RD1",
         }
     }
 
     pub fn parse(name: &str) -> Result<Self> {
         match name.trim().to_ascii_uppercase().as_str() {
-            "RB2" => Ok(Self::Rb2),
-            "RB3" => Ok(Self::Rb3),
-            "RB4" => Ok(Self::Rb4),
-            "RD1" => Ok(Self::Rd1),
+            "RB2" | "AIN3" => Ok(Self::Rb2),
+            "RD1" | "AIN1" => Ok(Self::Rd1),
             _ => bail!("未知电压通道: {name}"),
         }
     }

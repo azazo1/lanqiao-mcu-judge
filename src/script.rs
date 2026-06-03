@@ -273,9 +273,9 @@ fn build_scope() -> Scope<'static> {
     }
     for (name, channel) in [
         ("RB2", VoltageChannel::Rb2),
-        ("RB3", VoltageChannel::Rb3),
-        ("RB4", VoltageChannel::Rb4),
         ("RD1", VoltageChannel::Rd1),
+        ("AIN1", VoltageChannel::Rd1),
+        ("AIN3", VoltageChannel::Rb2),
     ] {
         scope.push_constant(name, channel);
     }
