@@ -202,3 +202,150 @@ impl I2cBus {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::I2cBus;
+    use crate::peripherals::{AnalogInputs, At24c02, Pcf8591};
+
+    struct I2cHarness {
+        bus: I2cBus,
+        analog: AnalogInputs,
+        pcf8591: Pcf8591,
+        at24c02: At24c02,
+        scl: bool,
+        sda: bool,
+    }
+
+    impl Default for I2cHarness {
+        fn default() -> Self {
+            let mut harness = Self {
+                bus: I2cBus::default(),
+                analog: AnalogInputs::default(),
+                pcf8591: Pcf8591::default(),
+                at24c02: At24c02::default(),
+                scl: true,
+                sda: true,
+            };
+            harness.tick();
+            harness
+        }
+    }
+
+    impl I2cHarness {
+        fn tick(&mut self) {
+            self.bus.sample(
+                self.scl,
+                self.sda,
+                &self.analog,
+                &mut self.pcf8591,
+                &mut self.at24c02,
+            );
+        }
+
+        fn set_scl(&mut self, level: bool) {
+            self.scl = level;
+            self.tick();
+        }
+
+        fn set_sda(&mut self, level: bool) {
+            self.sda = level;
+            self.tick();
+        }
+
+        fn line_sda_high(&self) -> bool {
+            self.sda && !self.bus.sda_drive_low
+        }
+
+        fn start(&mut self) {
+            self.set_sda(true);
+            self.set_scl(true);
+            self.set_sda(false);
+            self.set_scl(false);
+        }
+
+        fn stop(&mut self) {
+            self.set_sda(false);
+            self.set_scl(true);
+            self.set_sda(true);
+        }
+
+        fn send_byte(&mut self, byte: u8) {
+            let mut value = byte;
+            for _ in 0..8 {
+                self.set_scl(false);
+                self.set_sda(value & 0x80 != 0);
+                self.set_scl(true);
+                value <<= 1;
+            }
+            self.set_scl(false);
+        }
+
+        fn wait_ack(&mut self) -> bool {
+            self.set_scl(true);
+            let ack = self.line_sda_high();
+            self.set_scl(false);
+            ack
+        }
+
+        fn receive_byte(&mut self) -> u8 {
+            let mut value = 0_u8;
+            self.set_sda(true);
+            for _ in 0..8 {
+                self.set_scl(true);
+                value = (value << 1) | u8::from(self.line_sda_high());
+                self.set_scl(false);
+            }
+            value
+        }
+
+        fn send_ack(&mut self, ack: bool) {
+            self.set_scl(false);
+            self.set_sda(ack);
+            self.set_scl(true);
+            self.set_scl(false);
+            self.set_sda(true);
+        }
+
+        fn eeprom_write_byte(&mut self, addr: u8, value: u8) {
+            self.start();
+            self.send_byte(0xA0);
+            assert!(!self.wait_ack());
+            self.send_byte(addr);
+            assert!(!self.wait_ack());
+            self.send_byte(value);
+            assert!(!self.wait_ack());
+            self.stop();
+        }
+
+        fn eeprom_read_byte(&mut self, addr: u8) -> u8 {
+            self.start();
+            self.send_byte(0xA0);
+            assert!(!self.wait_ack());
+            self.send_byte(addr);
+            assert!(!self.wait_ack());
+            self.start();
+            self.send_byte(0xA1);
+            assert!(!self.wait_ack());
+            let value = self.receive_byte();
+            self.send_ack(true);
+            self.stop();
+            value
+        }
+    }
+
+    #[test]
+    fn eeprom_random_read_returns_written_values() {
+        let mut harness = I2cHarness::default();
+        harness.eeprom_write_byte(0x00, 0x01);
+        harness.eeprom_write_byte(0x01, 0x02);
+        harness.eeprom_write_byte(0x02, 0x03);
+        harness.eeprom_write_byte(0x20, 0x09);
+
+        assert_eq!(harness.eeprom_read_byte(0x00), 0x01);
+        assert_eq!(harness.eeprom_read_byte(0x01), 0x02);
+        assert_eq!(harness.eeprom_read_byte(0x02), 0x03);
+        assert_eq!(harness.eeprom_read_byte(0x20), 0x09);
+        assert_eq!(harness.eeprom_read_byte(0x00), 0x01);
+    }
+}

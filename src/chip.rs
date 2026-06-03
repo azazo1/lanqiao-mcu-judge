@@ -1086,6 +1086,7 @@ impl BoardModel {
     ) {
         let p1 = ports.port_latch[1];
         let p2 = ports.port_latch[2];
+        let (i2c_scl_high, i2c_sda_high) = self.read_i2c_lines(p2);
         self.ds1302.sample(
             (p1 & (1 << 3)) != 0,
             (p1 & (1 << 7)) != 0,
@@ -1093,14 +1094,25 @@ impl BoardModel {
         );
         self.ds18b20.sample(self.sim_time_ns, (p1 & (1 << 4)) != 0);
         self.i2c.sample(
-            (p2 & (1 << 0)) != 0,
-            (p2 & (1 << 1)) != 0,
+            i2c_scl_high,
+            i2c_sda_high,
             &self.analog,
             &mut self.pcf8591,
             &mut self.at24c02,
         );
         self.outputs
             .sample_from_latches(board_latches, board_latch_versions);
+    }
+
+    fn apply_i2c_lines(&self, mut value: u8) -> u8 {
+        value = apply_open_drain_bit(value, 0, self.i2c.scl_drive_low);
+        value = apply_open_drain_bit(value, 1, self.i2c.sda_drive_low);
+        value
+    }
+
+    fn read_i2c_lines(&self, latch: u8) -> (bool, bool) {
+        let value = self.apply_i2c_lines(latch);
+        ((value & (1 << 0)) != 0, (value & (1 << 1)) != 0)
     }
 
     fn read_port(&self, index: usize, latch: u8, all_latches: &[u8; 6]) -> u8 {
@@ -1112,8 +1124,7 @@ impl BoardModel {
                 value = apply_push_pull_bit(value, 1, self.ultrasonic.rx_level());
             }
             2 => {
-                value = apply_open_drain_bit(value, 0, self.i2c.scl_drive_low);
-                value = apply_open_drain_bit(value, 1, self.i2c.sda_drive_low);
+                value = self.apply_i2c_lines(value);
                 value = apply_push_pull_bit(value, 3, self.ds1302.io_level);
                 value = apply_push_pull_bit(value, 4, self.read_hall_level());
             }
@@ -1360,6 +1371,8 @@ fn extract_unique_numeric_token(text: &str, allow_decimal: bool) -> Result<Strin
 mod tests {
     use std::path::PathBuf;
 
+    use i8051::Cpu;
+
     use crate::ids::{KeyId, KeyMode, LedId, SignalId};
 
     use super::Simulator;
@@ -1482,6 +1495,40 @@ mod tests {
         board.sim_time_ns = 0;
 
         assert!(!p34_level(&board, latches));
+    }
+
+    #[test]
+    fn i2c_lines_follow_wired_and_levels() {
+        let mut board = super::BoardModel::default();
+
+        assert_eq!(board.read_i2c_lines(0xFF), (true, true));
+
+        board.i2c.sda_drive_low = true;
+        assert_eq!(board.read_i2c_lines(0xFF), (true, false));
+
+        board.i2c.scl_drive_low = true;
+        assert_eq!(board.read_i2c_lines(0xFF), (false, false));
+
+        board.i2c.sda_drive_low = false;
+        assert_eq!(board.read_i2c_lines(0xFC), (false, false));
+    }
+
+    #[test]
+    fn p2_bit_read_uses_current_pin_level() {
+        let code = vec![
+            0xA2, 0xA1, // MOV C, P2.1
+            0x92, 0x90, // MOV P1.0, C
+            0x80, 0xFE, // SJMP $
+        ];
+        let mut cpu = Cpu::new();
+        let mut ctx = super::MachineContext::new(code);
+        ctx.board.i2c.sda_drive_low = true;
+        ctx.ports.refresh_inputs(&ctx.board);
+
+        let _ = cpu.step(&mut ctx);
+        let _ = cpu.step(&mut ctx);
+
+        assert_eq!(ctx.ports.port_latch[1] & 0x01, 0x00);
     }
 
     #[test]

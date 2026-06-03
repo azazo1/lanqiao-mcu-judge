@@ -660,14 +660,18 @@ fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
     });
 
     let sim_eeprom_byte = Arc::clone(sim);
-    engine.register_fn("eeprom_byte", move |addr: i64| -> Result<i64, Box<EvalAltResult>> {
-        let addr = u8::try_from(addr).map_err(|_| runtime_error("EEPROM 地址必须在 0..=255"))?;
-        let value = sim_eeprom_byte
-            .lock()
-            .map_err(|_| runtime_error("仿真器锁已损坏"))?
-            .eeprom_byte(addr);
-        Ok(i64::from(value))
-    });
+    engine.register_fn(
+        "eeprom_byte",
+        move |addr: i64| -> Result<i64, Box<EvalAltResult>> {
+            let addr =
+                u8::try_from(addr).map_err(|_| runtime_error("EEPROM 地址必须在 0..=255"))?;
+            let value = sim_eeprom_byte
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .eeprom_byte(addr);
+            Ok(i64::from(value))
+        },
+    );
 
     let sim_uart_take = Arc::clone(sim);
     engine.register_fn(
