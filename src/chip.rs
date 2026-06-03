@@ -218,6 +218,10 @@ impl Simulator {
         self.ctx.board.pcf8591.dac_value()
     }
 
+    pub fn eeprom_byte(&self, addr: u8) -> u8 {
+        self.ctx.board.at24c02.byte(addr)
+    }
+
     pub fn uart_write(&mut self, bytes: &[u8]) {
         self.ctx.ports.uart1.feed_rx(bytes);
     }

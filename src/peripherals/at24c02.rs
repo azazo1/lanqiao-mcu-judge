@@ -25,6 +25,10 @@ impl At24c02 {
     const PAGE_SIZE: u8 = 8;
     const PAGE_MASK: u8 = Self::PAGE_SIZE - 1;
 
+    pub(crate) fn byte(&self, addr: u8) -> u8 {
+        self.memory[addr as usize]
+    }
+
     pub(crate) fn persistent_state(&self) -> At24c02PersistentState {
         At24c02PersistentState {
             memory: self.memory,

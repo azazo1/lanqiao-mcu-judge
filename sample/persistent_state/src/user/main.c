@@ -67,22 +67,12 @@ void key_proc() {
 	}
 	
 	if (is_down(9)) {
-		cur_byte = ((uint)cur_byte + 256 - 17) % 256;
-		if (cursor == CURSOR_UPPER) {
-			cursor = CURSOR_LOWER;
-		} else {
-			cursor++;
-		}
+		cur_byte--;
 		eeprom_write(cursor, &cur_byte, 1);
 	}
 	
 	if (is_down(10)) {
-		cur_byte = ((uint)cur_byte + 17) % 256;
-		if (cursor == CURSOR_UPPER) {
-			cursor = CURSOR_LOWER;
-		} else {
-			cursor++;
-		}
+		cur_byte++;
 		eeprom_write(cursor, &cur_byte, 1);
 	}
 }
