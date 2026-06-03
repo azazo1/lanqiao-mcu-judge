@@ -47,13 +47,13 @@ stcjudge dump --hex sample/key_seg/prj/Objects/key_seg.hex --ms 220
 
 - 评测脚本约定放在 `sample/xxx/judge/`.
 - 详细手册见 [docs/judge-script-manual.md](docs/judge-script-manual.md).
-- 现在支持 `print(...)`, `watch_led_changes(...)`, `display_text(window_ms)`, `display_number(...)`, `key_mode(...)`, `jumper_on(...)`, `jumper_off(...)`, `jumper_installed(...)` 以及内置常量 `L1..L8`, `S4..S19`, `RB2/RB3/RB4/RD1`, `KEYBOARD/KBD`, `BUTTON/BTN`, `SIG_OUT/NET_SIG`.
+- 现在支持 `print(...)`, `watch_led_stats(...)`, `display_text(window_ms)`, `display_number(...)`, `key_mode(...)`, `jumper_on(...)`, `jumper_off(...)`, `jumper_installed(...)` 以及内置常量 `L1..L8`, `S4..S19`, `RB2/RB3/RB4/RD1`, `KEYBOARD/KBD`, `BUTTON/BTN`, `SIG_OUT/NET_SIG`.
 - `RUST_LOG=debug` 时会输出 Rhai 脚本逐语句执行进度, 包括步号, 行列号, 调用层级和当前源码行.
 - 默认跳帽状态按原理图建模, `NET_SIG` 不会自动连到 `SIG_OUT`. 如果题目需要把 NE555 输出送到 `P3.4/T0`, 需要在脚本里显式写 `jumper_on(NET_SIG, SIG_OUT)`.
 
 ## 仿真时钟
 
-- 当前 CPU 基准按 STC15F2K60S2 的 1T 模式和 35MHz 主时钟建模.
+- 当前 CPU 基准按 STC15F2K60S2 的 1T 模式和 12MHz 主时钟建模.
 - `run_ms` 和 `run_us` 只推进虚拟时间, 不等待真实时间, 所以评测速度不受 wall clock 限制.
 - 和真机相比, 如果题目依赖外部晶振配置、时钟分频、模拟器件建立时间或未实现的片上外设细节, 结果仍可能有偏差.
 

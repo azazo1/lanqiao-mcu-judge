@@ -153,13 +153,7 @@ impl Timer01 {
         Ok(())
     }
 
-    fn tick_timer0(
-        &mut self,
-        p3: u8,
-        auxr: u8,
-        ticks: u32,
-        t0_falling_edges: u32,
-    ) -> Result<()> {
+    fn tick_timer0(&mut self, p3: u8, auxr: u8, ticks: u32, t0_falling_edges: u32) -> Result<()> {
         if self.tcon & TCON_TR0 == 0 {
             self.div0 = 0;
             return Ok(());
@@ -322,9 +316,8 @@ impl Timer2 {
         }
 
         for _ in 0..tick_count {
-            let next =
-                u16::from_be_bytes([read_sfr(generic, SFR_T2H), read_sfr(generic, SFR_T2L)])
-                    .wrapping_add(1);
+            let next = u16::from_be_bytes([read_sfr(generic, SFR_T2H), read_sfr(generic, SFR_T2L)])
+                .wrapping_add(1);
             if next == 0 {
                 write_sfr(generic, SFR_T2H, self.reload_high);
                 write_sfr(generic, SFR_T2L, self.reload_low);

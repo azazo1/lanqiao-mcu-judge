@@ -7,13 +7,13 @@ use std::{
 use anyhow::{Context, Result, anyhow, bail};
 use regex::Regex;
 use rhai::{
-    Dynamic, Engine, EvalAltResult, ImmutableString, Position, Scope,
+    Dynamic, Engine, EvalAltResult, ImmutableString, Map, Position, Scope,
     debugger::{DebuggerCommand, DebuggerEvent},
 };
 use tracing::{debug, trace};
 
 use crate::{
-    chip::Simulator,
+    chip::{LedWatchStats, Simulator},
     ids::{KeyId, KeyMode, LedId, SignalId, VoltageChannel},
 };
 
@@ -286,6 +286,38 @@ fn build_scope() -> Scope<'static> {
     scope.push_constant("SIG_OUT", SignalId::SigOut);
     scope.push_constant("NET_SIG", SignalId::NetSig);
     scope
+}
+
+fn led_stats_map(stats: LedWatchStats) -> Result<Map, Box<EvalAltResult>> {
+    let mut map = Map::new();
+    let changes =
+        i64::try_from(stats.changes).map_err(|_| runtime_error("LED 变化次数超出脚本整数范围"))?;
+    let rising_edges = i64::try_from(stats.rising_edges)
+        .map_err(|_| runtime_error("LED 上升沿次数超出脚本整数范围"))?;
+    map.insert("changes".into(), changes.into());
+    map.insert(
+        "change_frequency_hz".into(),
+        stats
+            .change_frequency_hz()
+            .map_err(|err| runtime_error(err.to_string()))?
+            .into(),
+    );
+    map.insert("rising_edges".into(), rising_edges.into());
+    map.insert(
+        "pwm_frequency_hz".into(),
+        stats
+            .pwm_frequency_hz()
+            .map_err(|err| runtime_error(err.to_string()))?
+            .into(),
+    );
+    map.insert(
+        "duty_percent".into(),
+        stats
+            .duty_percent()
+            .map_err(|err| runtime_error(err.to_string()))?
+            .into(),
+    );
+    Ok(map)
 }
 
 fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
@@ -782,63 +814,36 @@ fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
         },
     );
 
-    let sim_watch_led = Arc::clone(sim);
+    let sim_watch_led_stats = Arc::clone(sim);
     engine.register_fn(
-        "watch_led_changes",
-        move |name: ImmutableString, duration_ms: i64| -> Result<i64, Box<EvalAltResult>> {
+        "watch_led_stats",
+        move |name: ImmutableString, duration_ms: i64| -> Result<Map, Box<EvalAltResult>> {
             let duration_ms = u64::try_from(duration_ms)
                 .map_err(|_| runtime_error("duration_ms 参数必须 >= 0"))?;
-            let changes = sim_watch_led
+            let stats = sim_watch_led_stats
                 .lock()
                 .map_err(|_| runtime_error("仿真器锁已损坏"))?
-                .watch_led_changes_named(name.as_str(), duration_ms)
+                .watch_led_stats(
+                    LedId::parse(name.as_str()).map_err(|err| runtime_error(err.to_string()))?,
+                    duration_ms,
+                )
                 .map_err(|err| runtime_error(err.to_string()))?;
-            i64::try_from(changes).map_err(|_| runtime_error("LED 变化次数超出脚本整数范围"))
+            led_stats_map(stats)
         },
     );
 
-    let sim_watch_led_id = Arc::clone(sim);
+    let sim_watch_led_stats_id = Arc::clone(sim);
     engine.register_fn(
-        "watch_led_changes",
-        move |led: LedId, duration_ms: i64| -> Result<i64, Box<EvalAltResult>> {
+        "watch_led_stats",
+        move |led: LedId, duration_ms: i64| -> Result<Map, Box<EvalAltResult>> {
             let duration_ms = u64::try_from(duration_ms)
                 .map_err(|_| runtime_error("duration_ms 参数必须 >= 0"))?;
-            let changes = sim_watch_led_id
+            let stats = sim_watch_led_stats_id
                 .lock()
                 .map_err(|_| runtime_error("仿真器锁已损坏"))?
-                .watch_led_changes(led, duration_ms)
+                .watch_led_stats(led, duration_ms)
                 .map_err(|err| runtime_error(err.to_string()))?;
-            i64::try_from(changes).map_err(|_| runtime_error("LED 变化次数超出脚本整数范围"))
-        },
-    );
-
-    let sim_watch_led_frequency = Arc::clone(sim);
-    engine.register_fn(
-        "watch_led_frequency_hz",
-        move |name: ImmutableString, duration_ms: i64| -> Result<rhai::FLOAT, Box<EvalAltResult>> {
-            let duration_ms = u64::try_from(duration_ms)
-                .map_err(|_| runtime_error("duration_ms 参数必须 >= 0"))?;
-            let frequency = sim_watch_led_frequency
-                .lock()
-                .map_err(|_| runtime_error("仿真器锁已损坏"))?
-                .watch_led_frequency_hz_named(name.as_str(), duration_ms)
-                .map_err(|err| runtime_error(err.to_string()))?;
-            Ok(frequency)
-        },
-    );
-
-    let sim_watch_led_frequency_id = Arc::clone(sim);
-    engine.register_fn(
-        "watch_led_frequency_hz",
-        move |led: LedId, duration_ms: i64| -> Result<rhai::FLOAT, Box<EvalAltResult>> {
-            let duration_ms = u64::try_from(duration_ms)
-                .map_err(|_| runtime_error("duration_ms 参数必须 >= 0"))?;
-            let frequency = sim_watch_led_frequency_id
-                .lock()
-                .map_err(|_| runtime_error("仿真器锁已损坏"))?
-                .watch_led_frequency_hz(led, duration_ms)
-                .map_err(|err| runtime_error(err.to_string()))?;
-            Ok(frequency)
+            led_stats_map(stats)
         },
     );
 

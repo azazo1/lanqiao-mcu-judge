@@ -163,22 +163,39 @@ Rhai 也自带数值解析函数, 例如:
 - 独立按键题先调用 `key_mode(BTN)`.
 - 也支持字符串形式, 比如 `key_mode("kbd")` 和 `key_mode("btn")`.
 
-## LED 频率观察
+## LED 统计观察
 
-- `watch_led_changes(L1, 1000)`
-- `watch_led_changes("L1", 1000)`
-- `watch_led_frequency_hz(L1, 1000)`
+- `watch_led_stats(L1, 40)`
 
-`watch_led_changes` 是专门给 LED 评测准备的内建统计器. 它在仿真内核里逐步推进并统计状态翻转次数, 不需要在 Rhai 脚本里手写轮询循环.
+`watch_led_stats` 是专门给 LED 评测准备的内建统计器. 它在仿真内核里逐步推进并统计 LED 变化次数, 变化频率, PWM 周期频率和占空比, 不需要在 Rhai 脚本里手写轮询循环.
+
+- `watch_led_stats` 返回一个统计对象. 目前可直接读取:
+- `stats.changes`
+- `stats.change_frequency_hz`
+- `stats.rising_edges`
+- `stats.pwm_frequency_hz`
+- `stats.duty_percent`
+- `watch_led_stats` 同样会推进仿真时间. 对高频 PWM 建议至少观察多个周期, 并给结果留出范围余量.
 
 例如 `led_flicker` 可以直接这样写:
 
 ```rhai
 run_ms(20);
-assert_eq_int(watch_led_changes(L1, 1000), 29, "1 秒内 L1 线路变化次数");
+let stats = watch_led_stats(L1, 1000);
+assert(stats.changes >= 9 && stats.changes <= 11, "1 秒内 L1 线路变化次数约 10");
 ```
 
 - 但是评测最好留有余量, 防止误差.
+
+例如 `led_pwm` 可以这样写:
+
+```rhai
+run_ms(220);
+let stats = watch_led_stats(L1, 40);
+assert(stats.pwm_frequency_hz >= 950.0 && stats.pwm_frequency_hz <= 1050.0, "L1 PWM 频率约 1kHz");
+
+assert(stats.duty_percent >= 8.0 && stats.duty_percent <= 12.0, "上电占空比约 10%");
+```
 
 ## 数码管段码
 

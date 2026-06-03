@@ -156,3 +156,34 @@ fn rhai_regex_and_native_string_slice_work() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn rhai_led_pwm_watchers_work() {
+    let script_path = temp_script_path();
+    std::fs::write(
+        &script_path,
+        "run_ms(220);\nassert(parse_int(display_text(30)[0..3]) == 0, \"display\");\nlet stats = watch_led_stats(L1, 40);\nassert(stats.pwm_frequency_hz >= 950.0 && stats.pwm_frequency_hz <= 1050.0, \"freq\");\nassert(stats.duty_percent >= 8.0 && stats.duty_percent <= 12.0, \"duty\");\n",
+    )
+    .expect("write script");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_stcjudge"))
+        .args([
+            "run",
+            "--hex",
+            sample_path("sample/led_pwm/prj/Objects/led_pwm.hex")
+                .to_str()
+                .expect("hex path"),
+            "--script",
+            script_path.to_str().expect("script path"),
+        ])
+        .output()
+        .expect("run cli");
+
+    let _ = std::fs::remove_file(&script_path);
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

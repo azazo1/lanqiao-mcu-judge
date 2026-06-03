@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use i8051::{Cpu, CpuContext, CpuView, MemoryMapper, PortMapper, ReadOnlyMemoryMapper, Register};
 use tracing::{trace, warn};
 
-pub(crate) const CPU_TICKS_PER_US: u64 = 35;
+pub(crate) const CPU_TICKS_PER_US: u64 = 12;
 pub(crate) const TICKS_PER_SECOND: u64 = 1_000_000 * CPU_TICKS_PER_US;
 const BOARD_POWER_ON_LATCHES: [u8; 4] = [0x00, 0x70, 0x00, 0x00];
 
@@ -29,6 +29,37 @@ pub struct Simulator {
     ctx: MachineContext,
     trace_cpu: bool,
     seg_decoder: SegmentDecoder,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct LedWatchStats {
+    pub(crate) on_ticks: u64,
+    pub(crate) observed_ticks: u64,
+    pub(crate) changes: u64,
+    pub(crate) rising_edges: u64,
+}
+
+impl LedWatchStats {
+    pub(crate) fn change_frequency_hz(self) -> Result<f64> {
+        if self.observed_ticks == 0 {
+            bail!("统计时长必须 > 0");
+        }
+        Ok(self.changes as f64 * TICKS_PER_SECOND as f64 / self.observed_ticks as f64)
+    }
+
+    pub(crate) fn pwm_frequency_hz(self) -> Result<f64> {
+        if self.observed_ticks == 0 {
+            bail!("统计时长必须 > 0");
+        }
+        Ok(self.rising_edges as f64 * TICKS_PER_SECOND as f64 / self.observed_ticks as f64)
+    }
+
+    pub(crate) fn duty_percent(self) -> Result<f64> {
+        if self.observed_ticks == 0 {
+            bail!("统计时长必须 > 0");
+        }
+        Ok(self.on_ticks as f64 * 100.0 / self.observed_ticks as f64)
+    }
 }
 
 impl Simulator {
@@ -167,41 +198,40 @@ impl Simulator {
         self.ctx.board.outputs.leds[led.index() - 1]
     }
 
-    pub fn watch_led_changes(&mut self, led: LedId, duration_ms: u64) -> Result<u64> {
-        let target = self.ctx.board.ticks.saturating_add(
+    pub(crate) fn watch_led_stats(
+        &mut self,
+        led: LedId,
+        duration_ms: u64,
+    ) -> Result<LedWatchStats> {
+        let start = self.ctx.board.ticks;
+        let target = start.saturating_add(
             duration_ms
                 .saturating_mul(1_000)
                 .saturating_mul(CPU_TICKS_PER_US),
         );
-        let mut previous = self.led_on_id(led);
-        let mut changes = 0_u64;
+        let mut stats = LedWatchStats::default();
 
         while self.ctx.board.ticks < target {
+            let window_start = self.ctx.board.ticks;
+            let was_on = self.led_on_id(led);
             self.step_once()?;
-            let current = self.led_on_id(led);
-            if current != previous {
-                changes += 1;
-                previous = current;
+            let window_end = self.ctx.board.ticks.min(target);
+            let is_on = self.led_on_id(led);
+            if was_on {
+                stats.on_ticks = stats
+                    .on_ticks
+                    .saturating_add(window_end.saturating_sub(window_start));
+            }
+            if self.ctx.board.ticks <= target && was_on != is_on {
+                stats.changes = stats.changes.saturating_add(1);
+                if !was_on && is_on {
+                    stats.rising_edges = stats.rising_edges.saturating_add(1);
+                }
             }
         }
 
-        Ok(changes)
-    }
-
-    pub fn watch_led_changes_named(&mut self, name: &str, duration_ms: u64) -> Result<u64> {
-        self.watch_led_changes(LedId::parse(name)?, duration_ms)
-    }
-
-    pub fn watch_led_frequency_hz(&mut self, led: LedId, duration_ms: u64) -> Result<f64> {
-        if duration_ms == 0 {
-            bail!("统计时长必须 > 0");
-        }
-        let changes = self.watch_led_changes(led, duration_ms)?;
-        Ok(changes as f64 * 1_000.0 / duration_ms as f64)
-    }
-
-    pub fn watch_led_frequency_hz_named(&mut self, name: &str, duration_ms: u64) -> Result<f64> {
-        self.watch_led_frequency_hz(LedId::parse(name)?, duration_ms)
+        stats.observed_ticks = target.saturating_sub(start);
+        Ok(stats)
     }
 
     pub fn display_text(&self) -> String {
@@ -807,9 +837,7 @@ impl PortMapper for MachinePorts {
                 let index = Self::port_index(addr).expect("port index");
                 self.port_latch[index] = byte;
                 self.generic_set(addr, byte);
-                if addr == SFR_P0 {
-                    self.strobe_board_latch(self.port_latch[2], byte);
-                } else if addr == SFR_P2 {
+                if addr == SFR_P2 {
                     self.strobe_board_latch(byte, self.port_latch[0]);
                 }
             }
@@ -1256,10 +1284,63 @@ mod tests {
         .expect("load led_flicker");
 
         sim.run_ms(20).expect("run to 20ms");
-        assert_eq!(
-            sim.watch_led_changes(LedId::L1, 1000)
-                .expect("watch L1 changes"),
-            29
+        let stats = sim
+            .watch_led_stats(LedId::L1, 1000)
+            .expect("watch L1 stats");
+        assert!(
+            (9..=11).contains(&stats.changes),
+            "expected about 10 changes, got {}",
+            stats.changes
+        );
+    }
+
+    #[test]
+    fn led_pwm_reports_expected_frequency_and_duty() {
+        let mut sim = Simulator::from_hex_path(
+            &sample_path("sample/led_pwm/prj/Objects/led_pwm.hex"),
+            false,
+        )
+        .expect("load led_pwm");
+
+        sim.run_ms(220).expect("run to stable display");
+        assert_eq!(sim.display_text(), "000");
+
+        let initial_stats = sim
+            .watch_led_stats(LedId::L1, 40)
+            .expect("watch initial stats");
+        let initial_freq = initial_stats
+            .pwm_frequency_hz()
+            .expect("measure initial pwm frequency");
+        assert!(
+            (950.0..=1_050.0).contains(&initial_freq),
+            "expected about 1kHz, got {initial_freq}"
+        );
+        let initial_duty = initial_stats.duty_percent().expect("measure initial duty");
+        assert!(
+            (8.0..=12.0).contains(&initial_duty),
+            "expected about 10% duty, got {initial_duty}"
+        );
+
+        sim.tap_key_id(KeyId::S9, 80).expect("tap S9");
+        sim.run_ms(120).expect("wait display refresh");
+        assert_eq!(sim.display_text(), "001");
+
+        let increased_stats = sim
+            .watch_led_stats(LedId::L1, 40)
+            .expect("watch increased stats");
+        let increased_freq = increased_stats
+            .pwm_frequency_hz()
+            .expect("measure increased pwm frequency");
+        assert!(
+            (950.0..=1_050.0).contains(&increased_freq),
+            "expected about 1kHz after S9, got {increased_freq}"
+        );
+        let increased_duty = increased_stats
+            .duty_percent()
+            .expect("measure increased duty");
+        assert!(
+            (18.0..=22.0).contains(&increased_duty),
+            "expected about 20% duty after S9, got {increased_duty}"
         );
     }
 

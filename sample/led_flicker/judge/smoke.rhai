@@ -1,2 +1,3 @@
 run_ms(20);
-assert_eq_int(watch_led_changes(L1, 1000), 29, "1 秒内 L1 线路变化次数");
+let stats = watch_led_stats(L1, 1000);
+assert(stats.changes >= 9 && stats.changes <= 11, "1 秒内 L1 线路变化次数约 10");
