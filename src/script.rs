@@ -1,5 +1,6 @@
 use std::{
     io::{self, BufRead, IsTerminal, Read, Write},
+    ops::{Range, RangeInclusive},
     path::Path,
     sync::{Arc, Mutex},
 };
@@ -903,38 +904,206 @@ fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
     );
 
     engine.register_fn(
-        "assert_eq_str",
-        move |actual: ImmutableString,
-              expected: ImmutableString,
+        "assert_eq",
+        move |actual: Dynamic,
+              expected: Dynamic,
               label: ImmutableString|
               -> Result<(), Box<EvalAltResult>> {
-            if actual == expected {
-                return Ok(());
-            }
-            Err(runtime_error(format!(
-                "{label}: 期望 `{expected}`, 实际 `{actual}`"
-            )))
+            assert_eq_dynamic(&actual, &expected, label.as_str())
         },
     );
 
     engine.register_fn(
-        "assert_eq_int",
+        "assert_in",
         move |actual: i64,
-              expected: i64,
+              range: Range<i64>,
               label: ImmutableString|
               -> Result<(), Box<EvalAltResult>> {
-            if actual == expected {
-                return Ok(());
-            }
-            Err(runtime_error(format!(
-                "{label}: 期望 {expected}, 实际 {actual}"
-            )))
+            assert_in_int_exclusive(actual, &range, label.as_str())
+        },
+    );
+
+    engine.register_fn(
+        "assert_in",
+        move |actual: i64,
+              range: RangeInclusive<i64>,
+              label: ImmutableString|
+              -> Result<(), Box<EvalAltResult>> {
+            assert_in_int_inclusive(actual, &range, label.as_str())
+        },
+    );
+
+    engine.register_fn(
+        "assert_in",
+        move |actual: f64,
+              range: Range<i64>,
+              label: ImmutableString|
+              -> Result<(), Box<EvalAltResult>> {
+            assert_in_float_exclusive(actual, &range, label.as_str())
+        },
+    );
+
+    engine.register_fn(
+        "assert_in",
+        move |actual: f64,
+              range: RangeInclusive<i64>,
+              label: ImmutableString|
+              -> Result<(), Box<EvalAltResult>> {
+            assert_in_float_inclusive(actual, &range, label.as_str())
         },
     );
 }
 
 fn runtime_error(message: impl Into<String>) -> Box<EvalAltResult> {
     EvalAltResult::ErrorRuntime(message.into().into(), rhai::Position::NONE).into()
+}
+
+fn assert_eq_dynamic(
+    actual: &Dynamic,
+    expected: &Dynamic,
+    label: &str,
+) -> Result<(), Box<EvalAltResult>> {
+    if actual.type_id() != expected.type_id() {
+        return Err(runtime_error(format!(
+            "{label}: 期望 {} ({}) , 实际 {} ({})",
+            format_dynamic_value(expected),
+            expected.type_name(),
+            format_dynamic_value(actual),
+            actual.type_name()
+        )));
+    }
+    if dynamic_values_equal(actual, expected) {
+        return Ok(());
+    }
+    Err(runtime_error(format!(
+        "{label}: 期望 {} , 实际 {}",
+        format_dynamic_value(expected),
+        format_dynamic_value(actual)
+    )))
+}
+
+fn dynamic_values_equal(actual: &Dynamic, expected: &Dynamic) -> bool {
+    if actual.is::<ImmutableString>() {
+        return actual.clone_cast::<ImmutableString>() == expected.clone_cast::<ImmutableString>();
+    }
+    if actual.is::<i64>() {
+        return actual.clone_cast::<i64>() == expected.clone_cast::<i64>();
+    }
+    if actual.is::<f64>() {
+        return actual.clone_cast::<f64>() == expected.clone_cast::<f64>();
+    }
+    if actual.is::<bool>() {
+        return actual.clone_cast::<bool>() == expected.clone_cast::<bool>();
+    }
+    if actual.is::<char>() {
+        return actual.clone_cast::<char>() == expected.clone_cast::<char>();
+    }
+    if actual.is::<Range<i64>>() {
+        return actual.clone_cast::<Range<i64>>() == expected.clone_cast::<Range<i64>>();
+    }
+    if actual.is::<RangeInclusive<i64>>() {
+        return actual.clone_cast::<RangeInclusive<i64>>()
+            == expected.clone_cast::<RangeInclusive<i64>>();
+    }
+    if actual.is::<()>() {
+        return true;
+    }
+    format!("{actual}") == format!("{expected}")
+}
+
+fn assert_in_int_exclusive(
+    actual: i64,
+    range: &Range<i64>,
+    label: &str,
+) -> Result<(), Box<EvalAltResult>> {
+    if range.start >= range.end {
+        return Err(runtime_error(format!(
+            "{label}: 非法区间 {}..{}",
+            range.start, range.end
+        )));
+    }
+    if range.contains(&actual) {
+        return Ok(());
+    }
+    Err(runtime_error(format!(
+        "{label}: 期望 {}..{} , 实际 {}",
+        range.start, range.end, actual
+    )))
+}
+
+fn assert_in_int_inclusive(
+    actual: i64,
+    range: &RangeInclusive<i64>,
+    label: &str,
+) -> Result<(), Box<EvalAltResult>> {
+    let start = *range.start();
+    let end = *range.end();
+    if start > end {
+        return Err(runtime_error(format!(
+            "{label}: 非法区间 {}..={}",
+            start, end
+        )));
+    }
+    if range.contains(&actual) {
+        return Ok(());
+    }
+    Err(runtime_error(format!(
+        "{label}: 期望 {}..={} , 实际 {}",
+        start, end, actual
+    )))
+}
+
+fn assert_in_float_exclusive(
+    actual: f64,
+    range: &Range<i64>,
+    label: &str,
+) -> Result<(), Box<EvalAltResult>> {
+    if range.start >= range.end {
+        return Err(runtime_error(format!(
+            "{label}: 非法区间 {}..{}",
+            range.start, range.end
+        )));
+    }
+    let lower = range.start as f64;
+    let upper = range.end as f64;
+    if actual >= lower && actual < upper {
+        return Ok(());
+    }
+    Err(runtime_error(format!(
+        "{label}: 期望 {}..{} , 实际 {}",
+        range.start, range.end, actual
+    )))
+}
+
+fn assert_in_float_inclusive(
+    actual: f64,
+    range: &RangeInclusive<i64>,
+    label: &str,
+) -> Result<(), Box<EvalAltResult>> {
+    let start = *range.start();
+    let end = *range.end();
+    if start > end {
+        return Err(runtime_error(format!(
+            "{label}: 非法区间 {}..={}",
+            start, end
+        )));
+    }
+    let lower = start as f64;
+    let upper = end as f64;
+    if actual >= lower && actual <= upper {
+        return Ok(());
+    }
+    Err(runtime_error(format!(
+        "{label}: 期望 {}..={} , 实际 {}",
+        start, end, actual
+    )))
+}
+
+fn format_dynamic_value(value: &Dynamic) -> String {
+    if value.is::<ImmutableString>() {
+        return format!("`{}`", value.clone_cast::<ImmutableString>());
+    }
+    format!("{value}")
 }
 
 fn script_range(start: i64, end: i64) -> Result<(usize, usize), Box<EvalAltResult>> {

@@ -131,7 +131,7 @@ fn rhai_regex_and_native_string_slice_work() {
     let script_path = temp_script_path();
     std::fs::write(
         &script_path,
-        "let s = \"Hello, World!\";\nassert_eq_str(s[0..5], \"Hello\", \"slice\");\nassert(regex_is_match(\"23-59-50\", \"^\\\\d{2}-\\\\d{2}-\\\\d{2}$\"), \"regex\");\nassert(parse_int(\" 20\") == 20, \"parse_int\");\nassert(parse_float(\"123.45\") > 123.4, \"parse_float\");\n",
+        "let s = \"Hello, World!\";\nassert_eq(s[0..5], \"Hello\", \"slice\");\nassert_eq(parse_int(\" 20\"), 20, \"parse_int\");\nassert_eq(1.5, 1.5, \"float_eq\");\nassert_eq(regex_is_match(\"23-59-50\", \"^\\\\d{2}-\\\\d{2}-\\\\d{2}$\"), true, \"regex\");\nassert_eq(parse_float(\"123.45\"), 123.45, \"parse_float\");\nassert_in(2, 1..3, \"int_range\");\nassert_in(123.45, 123..124, \"float_range\");\n",
     )
     .expect("write script");
 
@@ -162,7 +162,7 @@ fn rhai_led_pwm_watchers_work() {
     let script_path = temp_script_path();
     std::fs::write(
         &script_path,
-        "run_ms(220);\nassert(parse_int(display_text(30)[0..3]) == 0, \"display\");\nlet stats = watch_led_stats(L1, 40);\nassert(stats.pwm_frequency_hz >= 950.0 && stats.pwm_frequency_hz <= 1050.0, \"freq\");\nassert(stats.duty_percent >= 8.0 && stats.duty_percent <= 12.0, \"duty\");\n",
+        "run_ms(220);\nassert_eq(parse_int(display_text(30)[0..3]), 0, \"display\");\nlet stats = watch_led_stats(L1, 40);\nassert_in(stats.pwm_frequency_hz, 950..=1050, \"freq\");\nassert_in(stats.duty_percent, 8..=12, \"duty\");\n",
     )
     .expect("write script");
 
@@ -193,7 +193,7 @@ fn rhai_da_value_reports_pcf8591_output() {
     let script_path = temp_script_path();
     std::fs::write(
         &script_path,
-        "key_mode(BUTTON);\nrun_ms(400);\nassert(da_value() == 127, \"boot da\");\n",
+        "key_mode(BUTTON);\nrun_ms(400);\nassert_eq(da_value(), 127, \"boot da\");\n",
     )
     .expect("write script");
 
@@ -224,7 +224,7 @@ fn rhai_voltage_aliases_drive_pcf8591_inputs() {
     let script_path = temp_script_path();
     std::fs::write(
         &script_path,
-        "key_mode(BUTTON);\nset_voltage(AIN3, 1.0);\nset_voltage(AIN1, 4.0);\nrun_ms(500);\nlet text = display_text(30);\nassert(parse_int(text[0..3]) >= 50 && parse_int(text[0..3]) <= 52, \"ain3\");\nassert(parse_int(text[4..7]) >= 203 && parse_int(text[4..7]) <= 205, \"ain1\");\nset_voltage(RB2, 4.0);\nset_voltage(RD1, 1.0);\nrun_ms(500);\nlet text2 = display_text(30);\nassert(parse_int(text2[0..3]) >= 203 && parse_int(text2[0..3]) <= 205, \"rb2\");\nassert(parse_int(text2[4..7]) >= 50 && parse_int(text2[4..7]) <= 52, \"rd1\");\n",
+        "key_mode(BUTTON);\nset_voltage(AIN3, 1.0);\nset_voltage(AIN1, 4.0);\nrun_ms(500);\nlet text = display_text(30);\nassert_in(parse_int(text[0..3]), 50..=52, \"ain3\");\nassert_in(parse_int(text[4..7]), 203..=205, \"ain1\");\nset_voltage(RB2, 4.0);\nset_voltage(RD1, 1.0);\nrun_ms(500);\nlet text2 = display_text(30);\nassert_in(parse_int(text2[0..3]), 203..=205, \"rb2\");\nassert_in(parse_int(text2[4..7]), 50..=52, \"rd1\");\n",
     )
     .expect("write script");
 
@@ -255,7 +255,7 @@ fn rhai_ds18b20_resolution_levels_follow_float_temperature() {
     let script_path = temp_script_path();
     std::fs::write(
         &script_path,
-        "run_ms(700);\nassert(display_number(1, 6) == 0, \"boot temp\");\nassert(display_number(8, 8) == 0, \"boot level\");\nset_temperature_c(25.9375);\nrun_ms(700);\nassert(display_number(1, 6) == 25500, \"level0 temp\");\nassert(display_number(8, 8) == 0, \"level0\");\ntap_key(S5, 80);\nrun_ms(400);\nassert(display_number(1, 6) == 25750, \"level1 temp\");\nassert(display_number(8, 8) == 1, \"level1\");\ntap_key(S5, 80);\nrun_ms(400);\nassert(display_number(1, 6) == 25875, \"level2 temp\");\nassert(display_number(8, 8) == 2, \"level2\");\ntap_key(S5, 80);\nrun_ms(400);\nassert(display_number(1, 6) == 25937, \"level3 temp\");\nassert(display_number(8, 8) == 3, \"level3\");\n",
+        "run_ms(700);\nassert_eq(display_number(1, 6), 0, \"boot temp\");\nassert_eq(display_number(8, 8), 0, \"boot level\");\nset_temperature_c(25.9375);\nrun_ms(700);\nassert_eq(display_number(1, 6), 25500, \"level0 temp\");\nassert_eq(display_number(8, 8), 0, \"level0\");\ntap_key(S5, 80);\nrun_ms(400);\nassert_eq(display_number(1, 6), 25750, \"level1 temp\");\nassert_eq(display_number(8, 8), 1, \"level1\");\ntap_key(S5, 80);\nrun_ms(400);\nassert_eq(display_number(1, 6), 25875, \"level2 temp\");\nassert_eq(display_number(8, 8), 2, \"level2\");\ntap_key(S5, 80);\nrun_ms(400);\nassert_eq(display_number(1, 6), 25937, \"level3 temp\");\nassert_eq(display_number(8, 8), 3, \"level3\");\n",
     )
     .expect("write script");
 
@@ -286,7 +286,7 @@ fn rhai_ds18b20_temperature_range_handles_negative_and_high_values() {
     let script_path = temp_script_path();
     std::fs::write(
         &script_path,
-        "set_temperature_c(-25);\nrun_ms(700);\nassert(display_number(1, 6) == -25000, \"minus25\");\nset_temperature_c(100);\nrun_ms(700);\nassert(display_number(1, 6) == 100000, \"plus100\");\n",
+        "set_temperature_c(-25);\nrun_ms(700);\nassert_eq(display_number(1, 6), -25000, \"minus25\");\nset_temperature_c(100);\nrun_ms(700);\nassert_eq(display_number(1, 6), 100000, \"plus100\");\n",
     )
     .expect("write script");
 
