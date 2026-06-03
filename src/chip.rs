@@ -1,13 +1,12 @@
 use std::{cell::Cell, collections::VecDeque, fmt::Write as _, fs, path::Path};
 
 use anyhow::{Context, Result, bail};
-use i8051::{
-    Cpu, CpuContext, CpuView, MemoryMapper, PortMapper, ReadOnlyMemoryMapper, Register,
-};
+use i8051::{Cpu, CpuContext, CpuView, MemoryMapper, PortMapper, ReadOnlyMemoryMapper, Register};
 use tracing::{trace, warn};
 
 pub(crate) const CPU_TICKS_PER_US: u64 = 35;
 pub(crate) const TICKS_PER_SECOND: u64 = 1_000_000 * CPU_TICKS_PER_US;
+const BOARD_POWER_ON_LATCHES: [u8; 4] = [0x00, 0x70, 0x00, 0x00];
 
 use crate::{
     hex::load_ihex,
@@ -417,10 +416,10 @@ impl Simulator {
 
         let start_ticks = self.ctx.board.ticks;
         self.ctx.board.advance_ticks(u64::from(ticks));
-        let t0_falling_edges =
-            self.ctx
-                .board
-                .t0_falling_edges(&self.ctx.ports.port_latch, start_ticks);
+        let t0_falling_edges = self
+            .ctx
+            .board
+            .t0_falling_edges(&self.ctx.ports.port_latch, start_ticks);
         self.ctx
             .ports
             .tick_timers01_t2(&self.ctx.board, ticks, t0_falling_edges)?;
@@ -482,11 +481,15 @@ struct MachineContext {
 
 impl MachineContext {
     fn new(code: Vec<u8>) -> Self {
+        let mut board = BoardModel::default();
+        board
+            .outputs
+            .sample_from_latches(&BOARD_POWER_ON_LATCHES, &[0; 4]);
         Self {
             ports: MachinePorts::new(),
             xdata: BoardXdata::default(),
             code: CodeMemory { code },
-            board: BoardModel::default(),
+            board,
         }
     }
 
@@ -496,7 +499,7 @@ impl MachineContext {
         } else if self.xdata.latch_used {
             self.xdata.board_latches
         } else {
-            [0; 4]
+            BOARD_POWER_ON_LATCHES
         }
     }
 
@@ -551,12 +554,22 @@ impl CpuContext for MachineContext {
     }
 }
 
-#[derive(Default)]
 struct BoardXdata {
     ram: Vec<u8>,
     board_latches: [u8; 4],
     board_latch_versions: [u64; 4],
     latch_used: bool,
+}
+
+impl Default for BoardXdata {
+    fn default() -> Self {
+        Self {
+            ram: Vec::new(),
+            board_latches: BOARD_POWER_ON_LATCHES,
+            board_latch_versions: [0; 4],
+            latch_used: false,
+        }
+    }
 }
 
 impl MemoryMapper for BoardXdata {
@@ -668,7 +681,7 @@ impl MachinePorts {
             generic,
             port_latch,
             port_input: port_latch,
-            board_latches: [0; 4],
+            board_latches: BOARD_POWER_ON_LATCHES,
             board_latch_versions: [0; 4],
             latch_used: false,
             timers: TimerBlock::default(),
@@ -1425,5 +1438,18 @@ mod tests {
 
         sim.run_ms(50).expect("run na16 to 50ms");
         assert_eq!(sim.display_text(), "23-59-50");
+    }
+
+    #[test]
+    fn simulator_starts_with_relay_motor_and_buzzer_enabled() {
+        let sim = Simulator::from_hex_path(
+            &sample_path("sample/key_seg/prj/Objects/key_seg.hex"),
+            false,
+        )
+        .expect("load key_seg");
+
+        assert!(sim.relay_on(), "relay should be on at boot");
+        assert!(sim.motor_on(), "motor should be on at boot");
+        assert!(sim.buzzer_on(), "buzzer should be on at boot");
     }
 }
