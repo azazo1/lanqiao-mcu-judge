@@ -1,1 +1,5 @@
 /target
+/sample/*/prj/Objects/
+!/sample/*/prj/Objects/*.hex
+/sample/*/prj/Listings/
+/sample/*/prj/*.uvgui.*
