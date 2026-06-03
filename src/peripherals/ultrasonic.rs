@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use crate::chip::CPU_TICKS_PER_US;
+use crate::chip::NS_PER_MICROSECOND;
 
 #[derive(Debug)]
 pub(crate) struct UltrasonicDevice {
@@ -9,7 +9,7 @@ pub(crate) struct UltrasonicDevice {
     tx_prev_high: bool,
     waiting_for_trigger_release: bool,
     rx_high: bool,
-    echo_ticks_remaining: Option<u64>,
+    echo_ns_remaining: Option<u64>,
 }
 
 impl Default for UltrasonicDevice {
@@ -20,7 +20,7 @@ impl Default for UltrasonicDevice {
             tx_prev_high: false,
             waiting_for_trigger_release: false,
             rx_high: true,
-            echo_ticks_remaining: None,
+            echo_ns_remaining: None,
         }
     }
 }
@@ -44,24 +44,23 @@ impl UltrasonicDevice {
         if tx_high && !self.tx_prev_high {
             self.waiting_for_trigger_release = true;
             self.rx_high = true;
-            self.echo_ticks_remaining = None;
+            self.echo_ns_remaining = None;
         } else if !tx_high && self.tx_prev_high && self.waiting_for_trigger_release {
-            self.echo_ticks_remaining = Some(self.distance_ticks());
+            self.echo_ns_remaining = Some(self.distance_ns());
         }
         self.tx_prev_high = tx_high;
     }
 
-    pub(crate) fn tick_ticks(&mut self, ticks: u32) {
-        let Some(remaining) = self.echo_ticks_remaining else {
+    pub(crate) fn tick_ns(&mut self, elapsed_ns: u64) {
+        let Some(remaining) = self.echo_ns_remaining else {
             return;
         };
-        let elapsed = u64::from(ticks);
-        if remaining <= elapsed {
+        if remaining <= elapsed_ns {
             self.rx_high = false;
-            self.echo_ticks_remaining = None;
+            self.echo_ns_remaining = None;
             self.waiting_for_trigger_release = false;
         } else {
-            self.echo_ticks_remaining = Some(remaining - elapsed);
+            self.echo_ns_remaining = Some(remaining - elapsed_ns);
         }
     }
 
@@ -69,8 +68,8 @@ impl UltrasonicDevice {
         self.rx_high
     }
 
-    fn distance_ticks(&self) -> u64 {
-        ((self.distance_cm.max(0.0) / 0.017) * CPU_TICKS_PER_US as f32)
+    fn distance_ns(&self) -> u64 {
+        ((self.distance_cm.max(0.0) / 0.017) * NS_PER_MICROSECOND as f32)
             .round()
             .clamp(0.0, u64::MAX as f32) as u64
     }

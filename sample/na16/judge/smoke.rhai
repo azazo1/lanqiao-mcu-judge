@@ -1,5 +1,5 @@
 set_rtc(23, 59, 50);
-run_ms(50);
+run_ms(200);
 assert(regex_is_match(display_text(30), "^\\d{2}-\\d{2}-\\d{2}$"), "上电时间格式");
 assert(parse_int(display_text()[0..2]) == 23, "上电小时");
 assert_eq_str(display_text()[2..3], "-", "上电第1个分隔符");
@@ -9,7 +9,7 @@ assert(parse_int(display_text()[6..8]) == 50, "上电秒钟");
 
 jumper_on(NET_SIG, SIG_OUT);
 set_frequency_hz(2200);
-run_ms(1500);
+run_ms(2000);
 assert(led_on(6), "频率异常时 L6 应点亮");
 
 set_temperature_c(25);

@@ -1,6 +1,8 @@
 use anyhow::{Result, bail};
 
-use super::{CPU_TICKS_PER_US, registers::*};
+use super::registers::*;
+
+const PCA_SYSCLK_DIVISOR_CYCLES: u64 = 12;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TimerSnapshot {
@@ -352,11 +354,11 @@ impl Pca {
         }
 
         self.divider = self.divider.saturating_add(u64::from(ticks));
-        if self.divider < CPU_TICKS_PER_US {
+        if self.divider < PCA_SYSCLK_DIVISOR_CYCLES {
             return Ok(());
         }
-        let increments = self.divider / CPU_TICKS_PER_US;
-        self.divider %= CPU_TICKS_PER_US;
+        let increments = self.divider / PCA_SYSCLK_DIVISOR_CYCLES;
+        self.divider %= PCA_SYSCLK_DIVISOR_CYCLES;
 
         for _ in 0..increments {
             let counter =
@@ -397,7 +399,7 @@ mod tests {
     use anyhow::Result;
 
     use super::super::registers::*;
-    use super::{TimerBlock, read_sfr, write_sfr};
+    use super::{PCA_SYSCLK_DIVISOR_CYCLES, TimerBlock, read_sfr, write_sfr};
 
     fn generic() -> [u8; 128] {
         [0; 128]
@@ -490,7 +492,7 @@ mod tests {
         let mut generic = generic();
         write_sfr(&mut generic, SFR_CCON, CCON_CR);
 
-        timers.tick_pca(super::super::CPU_TICKS_PER_US as u32, &mut generic)?;
+        timers.tick_pca(PCA_SYSCLK_DIVISOR_CYCLES as u32, &mut generic)?;
         assert_eq!(read_sfr(&generic, SFR_CL), 1);
 
         write_sfr(&mut generic, SFR_CMOD, 0x01);

@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use crate::chip::CPU_TICKS_PER_US;
+use crate::chip::NS_PER_MICROSECOND;
 
 #[derive(Debug, Default)]
 pub(crate) struct Ds18b20 {
@@ -16,25 +16,25 @@ pub(crate) struct Ds18b20 {
 }
 
 impl Ds18b20 {
-    pub(crate) fn sample(&mut self, ticks: u64, line_high: bool) {
+    pub(crate) fn sample(&mut self, time_ns: u64, line_high: bool) {
         if !line_high && self.line_prev {
-            self.low_since = Some(ticks);
+            self.low_since = Some(time_ns);
         }
 
         if line_high
             && !self.line_prev
             && let Some(start) = self.low_since.take()
         {
-            let width = ticks.saturating_sub(start);
-            if width >= 400 * CPU_TICKS_PER_US {
+            let width = time_ns.saturating_sub(start);
+            if width >= 400 * NS_PER_MICROSECOND {
                 self.drive_low = false;
                 self.awaiting_command = true;
                 self.command_bits = 0;
                 self.command_value = 0;
-                self.read_slot_until = Some(ticks + 120 * CPU_TICKS_PER_US);
+                self.read_slot_until = Some(time_ns + 120 * NS_PER_MICROSECOND);
                 self.drive_low = true;
             } else if self.awaiting_command {
-                let bit = width < 15 * CPU_TICKS_PER_US;
+                let bit = width < 15 * NS_PER_MICROSECOND;
                 if bit {
                     self.command_value |= 1 << self.command_bits;
                 }
@@ -46,12 +46,12 @@ impl Ds18b20 {
                 }
             } else if let Some(bit) = self.output_bits.pop_front() {
                 self.drive_low = !bit;
-                self.read_slot_until = Some(ticks + 45 * CPU_TICKS_PER_US);
+                self.read_slot_until = Some(time_ns + 45 * NS_PER_MICROSECOND);
             }
         }
 
         if let Some(until) = self.read_slot_until
-            && ticks >= until
+            && time_ns >= until
         {
             self.drive_low = false;
             self.read_slot_until = None;

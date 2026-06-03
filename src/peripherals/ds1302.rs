@@ -1,6 +1,6 @@
 use anyhow::{Result, bail};
 
-use crate::chip::TICKS_PER_SECOND;
+use crate::chip::NS_PER_SECOND;
 
 #[derive(Debug, Clone)]
 pub(crate) struct Ds1302 {
@@ -27,7 +27,7 @@ pub(crate) struct Ds1302 {
     pub(crate) month: u8,
     pub(crate) year: u8,
     pub(crate) halted: bool,
-    pub(crate) sub_us: u64,
+    pub(crate) sub_ns: u64,
     pub(crate) last_write_reg: u8,
     pub(crate) last_write_value: u8,
     pub(crate) last_clock_write_reg: u8,
@@ -62,7 +62,7 @@ impl Default for Ds1302 {
             month: 1,
             year: 0,
             halted: false,
-            sub_us: 0,
+            sub_ns: 0,
             last_write_reg: 0,
             last_write_value: 0,
             last_clock_write_reg: 0,
@@ -81,21 +81,21 @@ impl Ds1302 {
         self.hour = hour;
         self.minute = minute;
         self.second = second;
-        self.sub_us = 0;
+        self.sub_ns = 0;
         Ok(())
     }
 
-    pub(crate) fn tick_ticks(&mut self, ticks: u64) {
+    pub(crate) fn tick_ns(&mut self, elapsed_ns: u64) {
         if self.halted {
             return;
         }
 
-        self.sub_us = self.sub_us.saturating_add(ticks);
-        if self.sub_us < TICKS_PER_SECOND {
+        self.sub_ns = self.sub_ns.saturating_add(elapsed_ns);
+        if self.sub_ns < NS_PER_SECOND {
             return;
         }
-        let elapsed_seconds = self.sub_us / TICKS_PER_SECOND;
-        self.sub_us %= TICKS_PER_SECOND;
+        let elapsed_seconds = self.sub_ns / NS_PER_SECOND;
+        self.sub_ns %= NS_PER_SECOND;
         for _ in 0..elapsed_seconds {
             self.advance_one_second();
         }
@@ -300,7 +300,7 @@ impl Ds1302 {
             0x80 => {
                 self.halted = value & 0x80 != 0;
                 self.second = decode_bcd(value & 0x7F).min(59);
-                self.sub_us = 0;
+                self.sub_ns = 0;
             }
             0x82 => {
                 self.minute = decode_bcd(value & 0x7F).min(59);
@@ -375,7 +375,7 @@ fn decode_hour(value: u8) -> (u8, bool) {
 #[cfg(test)]
 mod tests {
     use super::Ds1302;
-    use crate::chip::TICKS_PER_SECOND;
+    use crate::chip::NS_PER_SECOND;
 
     #[test]
     fn reads_and_writes_calendar_registers() {
@@ -446,7 +446,7 @@ mod tests {
         ds1302.write_register(0x80);
         assert!(ds1302.halted);
 
-        ds1302.tick_ticks(TICKS_PER_SECOND);
+        ds1302.tick_ns(NS_PER_SECOND);
 
         assert_eq!(ds1302.second, 0);
         assert_eq!(ds1302.read_register(), 0x80);
@@ -468,7 +468,7 @@ mod tests {
         assert_eq!(ds1302.second, 25);
         assert_eq!(ds1302.read_register(), 0x25);
 
-        ds1302.tick_ticks(TICKS_PER_SECOND);
+        ds1302.tick_ns(NS_PER_SECOND);
 
         assert_eq!(ds1302.second, 26);
         assert_eq!(ds1302.read_register(), 0x26);
@@ -515,11 +515,11 @@ mod tests {
             month: 12,
             year: 99,
             halted: false,
-            sub_us: TICKS_PER_SECOND - 1,
+            sub_ns: NS_PER_SECOND - 1,
             ..Ds1302::default()
         };
 
-        ds1302.tick_ticks(1);
+        ds1302.tick_ns(1);
 
         assert_eq!(ds1302.hour, 0);
         assert_eq!(ds1302.minute, 0);

@@ -4,8 +4,10 @@ use anyhow::{Context, Result, bail};
 use i8051::{Cpu, CpuContext, CpuView, MemoryMapper, PortMapper, ReadOnlyMemoryMapper, Register};
 use tracing::{trace, warn};
 
-pub(crate) const CPU_TICKS_PER_US: u64 = 12;
-pub(crate) const TICKS_PER_SECOND: u64 = 1_000_000 * CPU_TICKS_PER_US;
+pub(crate) const CPU_HZ: u64 = 12_000_000;
+pub(crate) const NS_PER_SECOND: u64 = 1_000_000_000;
+pub(crate) const NS_PER_MILLISECOND: u64 = 1_000_000;
+pub(crate) const NS_PER_MICROSECOND: u64 = 1_000;
 const BOARD_POWER_ON_LATCHES: [u8; 4] = [0x00, 0x70, 0x00, 0x00];
 
 use crate::{
@@ -33,32 +35,32 @@ pub struct Simulator {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct LedWatchStats {
-    pub(crate) on_ticks: u64,
-    pub(crate) observed_ticks: u64,
+    pub(crate) on_time_ns: u64,
+    pub(crate) observed_time_ns: u64,
     pub(crate) changes: u64,
     pub(crate) rising_edges: u64,
 }
 
 impl LedWatchStats {
     pub(crate) fn change_frequency_hz(self) -> Result<f64> {
-        if self.observed_ticks == 0 {
+        if self.observed_time_ns == 0 {
             bail!("统计时长必须 > 0");
         }
-        Ok(self.changes as f64 * TICKS_PER_SECOND as f64 / self.observed_ticks as f64)
+        Ok(self.changes as f64 * NS_PER_SECOND as f64 / self.observed_time_ns as f64)
     }
 
     pub(crate) fn pwm_frequency_hz(self) -> Result<f64> {
-        if self.observed_ticks == 0 {
+        if self.observed_time_ns == 0 {
             bail!("统计时长必须 > 0");
         }
-        Ok(self.rising_edges as f64 * TICKS_PER_SECOND as f64 / self.observed_ticks as f64)
+        Ok(self.rising_edges as f64 * NS_PER_SECOND as f64 / self.observed_time_ns as f64)
     }
 
     pub(crate) fn duty_percent(self) -> Result<f64> {
-        if self.observed_ticks == 0 {
+        if self.observed_time_ns == 0 {
             bail!("统计时长必须 > 0");
         }
-        Ok(self.on_ticks as f64 * 100.0 / self.observed_ticks as f64)
+        Ok(self.on_time_ns as f64 * 100.0 / self.observed_time_ns as f64)
     }
 }
 
@@ -83,9 +85,9 @@ impl Simulator {
         let target = self
             .ctx
             .board
-            .ticks
-            .saturating_add(us.saturating_mul(CPU_TICKS_PER_US));
-        while self.ctx.board.ticks < target {
+            .sim_time_ns
+            .saturating_add(us.saturating_mul(NS_PER_MICROSECOND));
+        while self.ctx.board.sim_time_ns < target {
             self.step_once()?;
         }
         Ok(())
@@ -203,26 +205,22 @@ impl Simulator {
         led: LedId,
         duration_ms: u64,
     ) -> Result<LedWatchStats> {
-        let start = self.ctx.board.ticks;
-        let target = start.saturating_add(
-            duration_ms
-                .saturating_mul(1_000)
-                .saturating_mul(CPU_TICKS_PER_US),
-        );
+        let start = self.ctx.board.sim_time_ns;
+        let target = start.saturating_add(duration_ms.saturating_mul(NS_PER_MILLISECOND));
         let mut stats = LedWatchStats::default();
 
-        while self.ctx.board.ticks < target {
-            let window_start = self.ctx.board.ticks;
+        while self.ctx.board.sim_time_ns < target {
+            let window_start = self.ctx.board.sim_time_ns;
             let was_on = self.led_on_id(led);
             self.step_once()?;
-            let window_end = self.ctx.board.ticks.min(target);
+            let window_end = self.ctx.board.sim_time_ns.min(target);
             let is_on = self.led_on_id(led);
             if was_on {
-                stats.on_ticks = stats
-                    .on_ticks
+                stats.on_time_ns = stats
+                    .on_time_ns
                     .saturating_add(window_end.saturating_sub(window_start));
             }
-            if self.ctx.board.ticks <= target && was_on != is_on {
+            if self.ctx.board.sim_time_ns <= target && was_on != is_on {
                 stats.changes = stats.changes.saturating_add(1);
                 if !was_on && is_on {
                     stats.rising_edges = stats.rising_edges.saturating_add(1);
@@ -230,7 +228,7 @@ impl Simulator {
             }
         }
 
-        stats.observed_ticks = target.saturating_sub(start);
+        stats.observed_time_ns = target.saturating_sub(start);
         Ok(stats)
     }
 
@@ -245,12 +243,12 @@ impl Simulator {
         }
         let initial_digits = self.ctx.board.outputs.digits;
 
-        let target = self.ctx.board.ticks.saturating_add(
-            duration_ms
-                .saturating_mul(1_000)
-                .saturating_mul(CPU_TICKS_PER_US),
-        );
-        while self.ctx.board.ticks < target {
+        let target = self
+            .ctx
+            .board
+            .sim_time_ns
+            .saturating_add(duration_ms.saturating_mul(NS_PER_MILLISECOND));
+        while self.ctx.board.sim_time_ns < target {
             self.step_once()?;
             if self.ctx.board.outputs.digits != initial_digits {
                 let current = self.display_text();
@@ -303,7 +301,8 @@ impl Simulator {
         let mut out = String::new();
         let board_latches = self.ctx.effective_board_latches();
         let timer = self.ctx.ports.timers.snapshot(&self.ctx.ports.generic);
-        let _ = writeln!(out, "ticks: {}", self.ctx.board.ticks);
+        let _ = writeln!(out, "cpu_cycles: {}", self.ctx.board.cpu_cycles);
+        let _ = writeln!(out, "sim_time_ns: {}", self.ctx.board.sim_time_ns);
         let _ = writeln!(out, "pc: 0x{:04X}", self.cpu.pc);
         let _ = writeln!(
             out,
@@ -439,24 +438,26 @@ impl Simulator {
         self.tick_devices(ticks)
     }
 
-    fn tick_devices(&mut self, ticks: u32) -> Result<()> {
-        if ticks == 0 {
+    fn tick_devices(&mut self, cycles: u32) -> Result<()> {
+        if cycles == 0 {
             return Ok(());
         }
 
-        let start_ticks = self.ctx.board.ticks;
-        self.ctx.board.advance_ticks(u64::from(ticks));
+        let start_time_ns = self.ctx.board.sim_time_ns;
+        let elapsed_ns = self.ctx.board.advance_cycles(u64::from(cycles));
         let t0_falling_edges = self
             .ctx
             .board
-            .t0_falling_edges(&self.ctx.ports.port_latch, start_ticks);
+            .t0_falling_edges(&self.ctx.ports.port_latch, start_time_ns);
         self.ctx
             .ports
-            .tick_timers01_t2(&self.ctx.board, ticks, t0_falling_edges)?;
-        self.ctx.ports.tick_ultrasonic(&mut self.ctx.board, ticks);
-        self.ctx.ports.tick_pca(ticks)?;
-        self.ctx.ports.uart1.tick_ticks(ticks);
-        let responses = self.ctx.ports.uart2.tick_ticks(ticks);
+            .tick_timers01_t2(&self.ctx.board, cycles, t0_falling_edges)?;
+        self.ctx
+            .ports
+            .tick_ultrasonic(&mut self.ctx.board, elapsed_ns);
+        self.ctx.ports.tick_pca(cycles)?;
+        self.ctx.ports.uart1.tick_ns(elapsed_ns);
+        let responses = self.ctx.ports.uart2.tick_ns(elapsed_ns);
         for response in responses {
             self.ctx.board.ultrasonic.push_response(response);
         }
@@ -496,10 +497,10 @@ fn approximate_instruction_ticks(op: u8) -> u32 {
     }
 }
 
-fn uart_frame_ticks(baud_rate: u32) -> u32 {
-    ((TICKS_PER_SECOND as f64 * 10.0) / f64::from(baud_rate))
+fn uart_frame_ns(baud_rate: u32) -> u64 {
+    ((NS_PER_SECOND as f64 * 10.0) / f64::from(baud_rate))
         .round()
-        .clamp(1.0, f64::from(u32::MAX)) as u32
+        .clamp(1.0, u64::MAX as f64) as u64
 }
 
 struct MachineContext {
@@ -715,8 +716,8 @@ impl MachinePorts {
             board_latch_versions: [0; 4],
             latch_used: false,
             timers: TimerBlock::default(),
-            uart1: Uart::new(UART1_SFR_SCON, UART1_SFR_SBUF, uart_frame_ticks(9_600)),
-            uart2: Uart::new(UART2_SFR_S2CON, UART2_SFR_S2BUF, uart_frame_ticks(9_600)),
+            uart1: Uart::new(UART1_SFR_SCON, UART1_SFR_SBUF, uart_frame_ns(9_600)),
+            uart2: Uart::new(UART2_SFR_S2CON, UART2_SFR_S2BUF, uart_frame_ns(9_600)),
         }
     }
 
@@ -751,10 +752,10 @@ impl MachinePorts {
         }
     }
 
-    fn tick_ultrasonic(&mut self, board: &mut BoardModel, ticks: u32) {
+    fn tick_ultrasonic(&mut self, board: &mut BoardModel, elapsed_ns: u64) {
         let tx_high = self.port_latch[1] & (1 << 0) != 0;
         board.ultrasonic.sample_trigger(tx_high);
-        board.ultrasonic.tick_ticks(ticks);
+        board.ultrasonic.tick_ns(elapsed_ns);
     }
 
     fn tick_timers01_t2(
@@ -854,13 +855,13 @@ struct Uart {
     rx_sbuf: u8,
     tx_queue: VecDeque<u8>,
     rx_queue: VecDeque<u8>,
-    tx_countdown: Option<(u32, u8)>,
-    rx_countdown: Option<(u32, u8)>,
-    frame_ticks: u32,
+    tx_countdown_ns: Option<(u64, u8)>,
+    rx_countdown_ns: Option<(u64, u8)>,
+    frame_ns: u64,
 }
 
 impl Uart {
-    fn new(scon_addr: u8, sbuf_addr: u8, frame_ticks: u32) -> Self {
+    fn new(scon_addr: u8, sbuf_addr: u8, frame_ns: u64) -> Self {
         Self {
             scon_addr,
             sbuf_addr,
@@ -868,9 +869,9 @@ impl Uart {
             rx_sbuf: 0,
             tx_queue: VecDeque::new(),
             rx_queue: VecDeque::new(),
-            tx_countdown: None,
-            rx_countdown: None,
-            frame_ticks,
+            tx_countdown_ns: None,
+            rx_countdown_ns: None,
+            frame_ns,
         }
     }
 
@@ -886,15 +887,15 @@ impl Uart {
         if addr == self.scon_addr {
             self.control = value;
         } else if addr == self.sbuf_addr {
-            self.tx_countdown = Some((self.frame_ticks, value));
+            self.tx_countdown_ns = Some((self.frame_ns, value));
         }
     }
 
-    fn tick_ticks(&mut self, elapsed_ticks: u32) -> Vec<u8> {
+    fn tick_ns(&mut self, elapsed_ns: u64) -> Vec<u8> {
         let mut sent = Vec::new();
 
-        if let Some((remaining, byte)) = self.tx_countdown.take() {
-            if elapsed_ticks >= remaining {
+        if let Some((remaining, byte)) = self.tx_countdown_ns.take() {
+            if elapsed_ns >= remaining {
                 self.control |= if self.scon_addr == UART2_SFR_S2CON {
                     S2CON_TI
                 } else {
@@ -903,18 +904,18 @@ impl Uart {
                 self.tx_queue.push_back(byte);
                 sent.push(byte);
             } else {
-                self.tx_countdown = Some((remaining - elapsed_ticks, byte));
+                self.tx_countdown_ns = Some((remaining - elapsed_ns, byte));
             }
         }
 
-        if self.rx_countdown.is_none()
+        if self.rx_countdown_ns.is_none()
             && let Some(byte) = self.rx_queue.pop_front()
         {
-            self.rx_countdown = Some((self.frame_ticks, byte));
+            self.rx_countdown_ns = Some((self.frame_ns, byte));
         }
 
-        if let Some((remaining, byte)) = self.rx_countdown.take() {
-            if elapsed_ticks >= remaining {
+        if let Some((remaining, byte)) = self.rx_countdown_ns.take() {
+            if elapsed_ns >= remaining {
                 let ren_flag = if self.scon_addr == UART2_SFR_S2CON {
                     S2CON_REN
                 } else {
@@ -930,7 +931,7 @@ impl Uart {
                     self.control |= ri_flag;
                 }
             } else {
-                self.rx_countdown = Some((remaining - elapsed_ticks, byte));
+                self.rx_countdown_ns = Some((remaining - elapsed_ns, byte));
             }
         }
 
@@ -953,7 +954,9 @@ impl Uart {
 
 #[derive(Debug, Default)]
 struct BoardModel {
-    ticks: u64,
+    cpu_cycles: u64,
+    sim_time_ns: u64,
+    sim_time_ns_remainder: u64,
     outputs: Outputs,
     ds18b20: Ds18b20,
     ds1302: Ds1302,
@@ -970,9 +973,15 @@ struct BoardModel {
 }
 
 impl BoardModel {
-    fn advance_ticks(&mut self, ticks: u64) {
-        self.ticks = self.ticks.saturating_add(ticks);
-        self.ds1302.tick_ticks(ticks);
+    fn advance_cycles(&mut self, cycles: u64) -> u64 {
+        self.cpu_cycles = self.cpu_cycles.saturating_add(cycles);
+        let total_ns = u128::from(self.sim_time_ns_remainder)
+            .saturating_add(u128::from(cycles).saturating_mul(u128::from(NS_PER_SECOND)));
+        let elapsed_ns = (total_ns / u128::from(CPU_HZ)).min(u128::from(u64::MAX)) as u64;
+        self.sim_time_ns_remainder = (total_ns % u128::from(CPU_HZ)) as u64;
+        self.sim_time_ns = self.sim_time_ns.saturating_add(elapsed_ns);
+        self.ds1302.tick_ns(elapsed_ns);
+        elapsed_ns
     }
 
     fn tick_protocols(
@@ -988,7 +997,7 @@ impl BoardModel {
             (p1 & (1 << 7)) != 0,
             (p2 & (1 << 3)) != 0,
         );
-        self.ds18b20.sample(self.ticks, (p1 & (1 << 4)) != 0);
+        self.ds18b20.sample(self.sim_time_ns, (p1 & (1 << 4)) != 0);
         self.i2c.sample(
             (p2 & (1 << 0)) != 0,
             (p2 & (1 << 1)) != 0,
@@ -1057,12 +1066,12 @@ impl BoardModel {
     }
 
     fn frequency_level(&self) -> bool {
-        self.ne555.level(self.ticks)
+        self.ne555.level(self.sim_time_ns)
     }
 
-    fn t0_falling_edges(&self, all_latches: &[u8; 6], start_ticks: u64) -> u32 {
-        let end_ticks = self.ticks;
-        if end_ticks <= start_ticks {
+    fn t0_falling_edges(&self, all_latches: &[u8; 6], start_time_ns: u64) -> u32 {
+        let end_time_ns = self.sim_time_ns;
+        if end_time_ns <= start_time_ns {
             return 0;
         }
         if !self.jumper_installed(SignalId::NetSig, SignalId::SigOut) {
@@ -1075,7 +1084,7 @@ impl BoardModel {
             return 0;
         }
 
-        self.ne555.falling_edges_between(start_ticks, end_ticks)
+        self.ne555.falling_edges_between(start_time_ns, end_time_ns)
     }
 
     fn read_hall_level(&self) -> bool {
@@ -1350,8 +1359,8 @@ mod tests {
         let latches = default_port_latches();
         board.ne555.set_frequency_hz(2_200.0);
 
-        let saw_low_without_bridge = (0..20_000_u64).any(|tick| {
-            board.ticks = tick;
+        let saw_low_without_bridge = (0..20_000_u64).any(|index| {
+            board.sim_time_ns = index * 100;
             !p34_level(&board, latches)
         });
         assert!(!saw_low_without_bridge);
@@ -1359,8 +1368,8 @@ mod tests {
         board
             .jumper_on(SignalId::NetSig, SignalId::SigOut)
             .expect("install NET_SIG to SIG_OUT jumper");
-        let saw_low_with_bridge = (0..20_000_u64).any(|tick| {
-            board.ticks = tick;
+        let saw_low_with_bridge = (0..20_000_u64).any(|index| {
+            board.sim_time_ns = index * 100;
             !p34_level(&board, latches)
         });
         assert!(saw_low_with_bridge);
@@ -1376,7 +1385,7 @@ mod tests {
             .expect("install NET_SIG to SIG_OUT jumper");
         board.keys.set_key_id(KeyId::S16, true);
         latches[3] &= !(1 << 3);
-        board.ticks = 0;
+        board.sim_time_ns = 0;
 
         assert!(!p34_level(&board, latches));
     }
@@ -1512,12 +1521,12 @@ mod tests {
     }
 
     #[test]
-    fn na16_shows_boot_time_at_50ms() {
+    fn na16_shows_boot_time_after_display_refresh() {
         let mut sim =
             Simulator::from_hex_path(&sample_path("sample/na16/prj/Objects/na16.hex"), false)
                 .expect("load na16");
 
-        sim.run_ms(50).expect("run na16 to 50ms");
+        sim.run_ms(200).expect("run na16 to stable boot display");
         assert_eq!(sim.display_text(), "23-59-50");
     }
 
