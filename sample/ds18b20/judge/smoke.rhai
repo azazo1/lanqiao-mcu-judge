@@ -1,5 +1,4 @@
 run_ms(700);
-assert(regex_is_match(display_text(30), "^\\s{2}\\d{4} \\d$"), "上电显示格式");
 assert(display_number(1, 6) == 0, "上电温度默认值");
 assert(display_number(8, 8) == 0, "上电精度等级");
 

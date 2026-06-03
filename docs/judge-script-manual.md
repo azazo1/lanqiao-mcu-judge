@@ -164,6 +164,7 @@ Rhai 也自带数值解析函数, 例如:
 - 数值部分优先用 `display_text(...)[start..end]` 再配合 `parse_int(...)` 或 `parse_float(...)`.
 - 固定字符, 空白位, 前导零, 分隔符等格式要求, 直接用 `display_text(...)[start..end]` 判断.
 - 需要描述整串格式时, 再配合 `regex_is_match(...)`.
+- 不要先看当前 `hex` 的输出再反推 `expect`, 应先根据题意, 源码, 手册推导出应有结果, 再写断言.
 
 ## 按键模式
 
@@ -240,8 +241,9 @@ assert(stats.duty_percent >= 8.0 && stats.duty_percent <= 12.0, "上电占空比
 
 ```rhai
 run_ms(220);
-assert(regex_is_match(display_text(30), "^\\s{7}0$"), "上电显示格式");
-assert_eq_str(display_text()[0..7], "       ", "前7位空白");
+let text = display_text(30);
+assert_eq_str(text[0..7], "       ", "前7位空白");
+assert(parse_int(text[7..8]) == 0, "上电末位数值");
 
 set_key(S4, true);
 run_ms(220);

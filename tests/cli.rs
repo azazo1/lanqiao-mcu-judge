@@ -255,7 +255,7 @@ fn rhai_ds18b20_resolution_levels_follow_float_temperature() {
     let script_path = temp_script_path();
     std::fs::write(
         &script_path,
-        "set_temperature_c(25.9375);\nrun_ms(700);\nassert(display_number(1, 6) == 25500, \"level0 temp\");\nassert(display_number(8, 8) == 0, \"level0\");\ntap_key(S5, 80);\nrun_ms(400);\nassert(display_number(1, 6) == 25750, \"level1 temp\");\nassert(display_number(8, 8) == 1, \"level1\");\ntap_key(S5, 80);\nrun_ms(400);\nassert(display_number(1, 6) == 25875, \"level2 temp\");\nassert(display_number(8, 8) == 2, \"level2\");\ntap_key(S5, 80);\nrun_ms(400);\nassert(display_number(1, 6) == 25937, \"level3 temp\");\nassert(display_number(8, 8) == 3, \"level3\");\n",
+        "run_ms(700);\nassert(display_number(1, 6) == 0, \"boot temp\");\nassert(display_number(8, 8) == 0, \"boot level\");\nset_temperature_c(25.9375);\nrun_ms(700);\nassert(display_number(1, 6) == 25500, \"level0 temp\");\nassert(display_number(8, 8) == 0, \"level0\");\ntap_key(S5, 80);\nrun_ms(400);\nassert(display_number(1, 6) == 25750, \"level1 temp\");\nassert(display_number(8, 8) == 1, \"level1\");\ntap_key(S5, 80);\nrun_ms(400);\nassert(display_number(1, 6) == 25875, \"level2 temp\");\nassert(display_number(8, 8) == 2, \"level2\");\ntap_key(S5, 80);\nrun_ms(400);\nassert(display_number(1, 6) == 25937, \"level3 temp\");\nassert(display_number(8, 8) == 3, \"level3\");\n",
     )
     .expect("write script");
 
