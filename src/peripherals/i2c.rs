@@ -4,14 +4,15 @@ use super::{AnalogInputs, At24c02, Pcf8591};
 
 #[derive(Debug, Default)]
 pub(crate) struct I2cBus {
-    scl_prev: bool,
-    sda_prev: bool,
+    master_scl_prev: bool,
+    master_sda_prev: bool,
     bit_count: u8,
     shift: u8,
     write_ack_pending: bool,
     write_ack_clock_high: bool,
     read_ack_pending: bool,
     read_ack_clock_high: bool,
+    read_ack_master_high: bool,
     pub(crate) sda_drive_low: bool,
     pub(crate) scl_drive_low: bool,
     active: Option<I2cDevice>,
@@ -36,38 +37,31 @@ enum I2cDevice {
 }
 
 impl I2cBus {
+    pub(crate) fn line_levels(&self, master_scl_high: bool, master_sda_high: bool) -> (bool, bool) {
+        (
+            master_scl_high && !self.scl_drive_low,
+            master_sda_high && !self.sda_drive_low,
+        )
+    }
+
     pub(crate) fn sample(
         &mut self,
-        scl_high: bool,
-        sda_high: bool,
+        master_scl_high: bool,
+        master_sda_high: bool,
         analog: &AnalogInputs,
         pcf8591: &mut Pcf8591,
         at24c02: &mut At24c02,
     ) {
-        if self.sda_prev && !sda_high && scl_high {
-            self.mode = I2cMode::Address;
-            self.bit_count = 0;
-            self.shift = 0;
-            self.write_ack_pending = false;
-            self.write_ack_clock_high = false;
-            self.read_ack_pending = false;
-            self.read_ack_clock_high = false;
-            self.enter_read_after_ack = false;
-            self.read_buffer.clear();
-            self.sda_drive_low = false;
+        let (_, sda_high) = self.line_levels(master_scl_high, master_sda_high);
+
+        if self.master_sda_prev && !master_sda_high && master_scl_high {
+            self.begin_start_condition();
         }
-        if !self.sda_prev && sda_high && scl_high {
-            self.mode = I2cMode::Idle;
-            self.active = None;
-            self.write_ack_pending = false;
-            self.write_ack_clock_high = false;
-            self.read_ack_pending = false;
-            self.read_ack_clock_high = false;
-            self.enter_read_after_ack = false;
-            self.sda_drive_low = false;
+        if !self.master_sda_prev && master_sda_high && master_scl_high {
+            self.finish_stop_condition();
         }
 
-        if !self.scl_prev && scl_high {
+        if !self.master_scl_prev && master_scl_high {
             match self.mode {
                 I2cMode::Address | I2cMode::Write => {
                     if self.write_ack_pending {
@@ -76,18 +70,21 @@ impl I2cBus {
                         self.shift = (self.shift << 1) | u8::from(sda_high);
                         self.bit_count += 1;
                         if self.bit_count == 8 {
-                            self.handle_received_byte(analog, pcf8591, at24c02);
+                            let ack = self.handle_received_byte(analog, pcf8591, at24c02);
                             self.bit_count = 0;
                             self.shift = 0;
-                            self.write_ack_pending = true;
-                            self.write_ack_clock_high = false;
-                            self.sda_drive_low = true;
+                            if ack {
+                                self.write_ack_pending = true;
+                                self.write_ack_clock_high = false;
+                                self.sda_drive_low = true;
+                            }
                         }
                     }
                 }
                 I2cMode::Read => {
                     if self.read_ack_pending {
                         self.read_ack_clock_high = true;
+                        self.read_ack_master_high = master_sda_high;
                     } else {
                         if self.bit_count == 0
                             && let Some(byte) = self.read_buffer.front().copied()
@@ -109,7 +106,7 @@ impl I2cBus {
             }
         }
 
-        if self.scl_prev && !scl_high {
+        if self.master_scl_prev && !master_scl_high {
             if self.write_ack_pending && self.write_ack_clock_high {
                 self.write_ack_pending = false;
                 self.write_ack_clock_high = false;
@@ -123,9 +120,15 @@ impl I2cBus {
                 if self.read_ack_clock_high {
                     self.read_ack_pending = false;
                     self.read_ack_clock_high = false;
-                    self.read_buffer.pop_front();
-                    if self.read_buffer.is_empty() {
-                        self.refill_read_buffer(analog, pcf8591, at24c02);
+                    if self.read_ack_master_high {
+                        self.mode = I2cMode::Idle;
+                        self.active = None;
+                        self.read_buffer.clear();
+                    } else {
+                        self.read_buffer.pop_front();
+                        if self.read_buffer.is_empty() {
+                            self.refill_read_buffer(analog, pcf8591, at24c02);
+                        }
                     }
                 } else {
                     self.sda_drive_low = false;
@@ -133,8 +136,38 @@ impl I2cBus {
             }
         }
 
-        self.scl_prev = scl_high;
-        self.sda_prev = sda_high;
+        self.master_scl_prev = master_scl_high;
+        self.master_sda_prev = master_sda_high;
+    }
+
+    fn begin_start_condition(&mut self) {
+        self.mode = I2cMode::Address;
+        self.active = None;
+        self.bit_count = 0;
+        self.shift = 0;
+        self.write_ack_pending = false;
+        self.write_ack_clock_high = false;
+        self.read_ack_pending = false;
+        self.read_ack_clock_high = false;
+        self.read_ack_master_high = true;
+        self.enter_read_after_ack = false;
+        self.read_buffer.clear();
+        self.sda_drive_low = false;
+    }
+
+    fn finish_stop_condition(&mut self) {
+        self.mode = I2cMode::Idle;
+        self.active = None;
+        self.bit_count = 0;
+        self.shift = 0;
+        self.write_ack_pending = false;
+        self.write_ack_clock_high = false;
+        self.read_ack_pending = false;
+        self.read_ack_clock_high = false;
+        self.read_ack_master_high = true;
+        self.enter_read_after_ack = false;
+        self.read_buffer.clear();
+        self.sda_drive_low = false;
     }
 
     fn handle_received_byte(
@@ -142,7 +175,7 @@ impl I2cBus {
         analog: &AnalogInputs,
         pcf8591: &mut Pcf8591,
         at24c02: &mut At24c02,
-    ) {
+    ) -> bool {
         match self.mode {
             I2cMode::Address => {
                 let address = self.shift >> 1;
@@ -157,35 +190,42 @@ impl I2cBus {
                     (Some(I2cDevice::Pcf8591), true) => {
                         self.enter_read_after_ack = true;
                         self.read_buffer.push_back(pcf8591.read_byte(analog));
+                        true
                     }
                     (Some(I2cDevice::Pcf8591), false) => {
                         pcf8591.begin_write();
                         self.mode = I2cMode::Write;
+                        true
                     }
                     (Some(I2cDevice::Eeprom), true) => {
                         self.enter_read_after_ack = true;
                         self.read_buffer.push_back(at24c02.read_byte());
+                        true
                     }
                     (Some(I2cDevice::Eeprom), false) => {
                         at24c02.begin_write();
                         self.mode = I2cMode::Write;
+                        true
                     }
                     (None, _) => {
                         self.enter_read_after_ack = false;
                         self.mode = I2cMode::Idle;
+                        false
                     }
                 }
             }
             I2cMode::Write => match self.active {
                 Some(I2cDevice::Pcf8591) => {
                     pcf8591.write_byte(self.shift);
+                    true
                 }
                 Some(I2cDevice::Eeprom) => {
                     at24c02.write_byte(self.shift);
+                    true
                 }
-                None => {}
+                None => false,
             },
-            I2cMode::Idle | I2cMode::Read => {}
+            I2cMode::Idle | I2cMode::Read => false,
         }
     }
 
@@ -254,7 +294,8 @@ mod tests {
         }
 
         fn line_sda_high(&self) -> bool {
-            self.sda && !self.bus.sda_drive_low
+            let (_, sda_high) = self.bus.line_levels(self.scl, self.sda);
+            sda_high
         }
 
         fn start(&mut self) {

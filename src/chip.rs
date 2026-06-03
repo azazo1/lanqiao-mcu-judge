@@ -1086,7 +1086,6 @@ impl BoardModel {
     ) {
         let p1 = ports.port_latch[1];
         let p2 = ports.port_latch[2];
-        let (i2c_scl_high, i2c_sda_high) = self.read_i2c_lines(p2);
         self.ds1302.sample(
             (p1 & (1 << 3)) != 0,
             (p1 & (1 << 7)) != 0,
@@ -1094,8 +1093,8 @@ impl BoardModel {
         );
         self.ds18b20.sample(self.sim_time_ns, (p1 & (1 << 4)) != 0);
         self.i2c.sample(
-            i2c_scl_high,
-            i2c_sda_high,
+            (p2 & (1 << 0)) != 0,
+            (p2 & (1 << 1)) != 0,
             &self.analog,
             &mut self.pcf8591,
             &mut self.at24c02,
@@ -1105,14 +1104,15 @@ impl BoardModel {
     }
 
     fn apply_i2c_lines(&self, mut value: u8) -> u8 {
-        value = apply_open_drain_bit(value, 0, self.i2c.scl_drive_low);
-        value = apply_open_drain_bit(value, 1, self.i2c.sda_drive_low);
+        let (scl_high, sda_high) = self.read_i2c_lines(value);
+        value = set_bit_level(value, 0, scl_high);
+        value = set_bit_level(value, 1, sda_high);
         value
     }
 
     fn read_i2c_lines(&self, latch: u8) -> (bool, bool) {
-        let value = self.apply_i2c_lines(latch);
-        ((value & (1 << 0)) != 0, (value & (1 << 1)) != 0)
+        self.i2c
+            .line_levels((latch & (1 << 0)) != 0, (latch & (1 << 1)) != 0)
     }
 
     fn read_port(&self, index: usize, latch: u8, all_latches: &[u8; 6]) -> u8 {
