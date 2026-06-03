@@ -1,7 +1,9 @@
 use std::{cell::Cell, collections::VecDeque, fmt::Write as _, fs, path::Path};
 
 use anyhow::{Context, Result, bail};
-use i8051::{Cpu, CpuContext, CpuView, MemoryMapper, PortMapper, ReadOnlyMemoryMapper, Register};
+use i8051::{
+    Cpu, CpuContext, CpuView, Flag, MemoryMapper, PortMapper, ReadOnlyMemoryMapper, Register,
+};
 use tracing::{trace, warn};
 
 pub(crate) const CPU_HZ: u64 = 12_000_000;
@@ -794,6 +796,40 @@ impl MachinePorts {
         self.generic[usize::from(addr.wrapping_sub(0x80))] = value;
     }
 
+    fn rewrite_port_rmw<C: CpuView>(&self, cpu: &C, addr: u8, fallback: u8) -> u8 {
+        let Some(index) = Self::port_index(addr) else {
+            return fallback;
+        };
+        let latch = self.port_latch[index];
+        let pc = cpu.pc_ext();
+        let opcode = cpu.read_code(pc);
+        let op_addr = cpu.read_code(pc + 1);
+        match opcode {
+            0x42 if op_addr == addr => latch | cpu.a(),
+            0x43 if op_addr == addr => latch | cpu.read_code(pc + 2),
+            0x52 if op_addr == addr => latch & cpu.a(),
+            0x53 if op_addr == addr => latch & cpu.read_code(pc + 2),
+            0x62 if op_addr == addr => latch ^ cpu.a(),
+            0x63 if op_addr == addr => latch ^ cpu.read_code(pc + 2),
+            0x05 if op_addr == addr => latch.wrapping_add(1),
+            0x15 if op_addr == addr => latch.wrapping_sub(1),
+            0xD5 if op_addr == addr => latch.wrapping_sub(1),
+            0x92 => {
+                let bit_addr = cpu.read_code(pc + 1);
+                if bit_addr & 0xF8 != addr {
+                    return fallback;
+                }
+                let mask = 1 << (bit_addr & 0x07);
+                if cpu.psw(Flag::C) {
+                    latch | mask
+                } else {
+                    latch & !mask
+                }
+            }
+            _ => fallback,
+        }
+    }
+
     fn sample_port_p3(&self, board: &BoardModel) -> u8 {
         board.read_port(3, self.port_latch[3], &self.port_latch)
     }
@@ -844,7 +880,7 @@ impl MachinePorts {
 }
 
 impl PortMapper for MachinePorts {
-    type WriteValue = (u8, u8);
+    type WriteValue = (u8, u8, bool);
 
     fn interest<C: CpuView>(&self, _cpu: &C, _addr: u8) -> bool {
         true
@@ -876,11 +912,18 @@ impl PortMapper for MachinePorts {
     }
 
     fn prepare_write<C: CpuView>(&self, _cpu: &C, addr: u8, value: u8) -> Self::WriteValue {
-        (addr, value)
+        let opcode = _cpu.read_code(_cpu.pc_ext());
+        let preserve_i2c_bits = addr == SFR_P2
+            && matches!(
+                opcode,
+                0x05 | 0x15 | 0x42 | 0x43 | 0x52 | 0x53 | 0x62 | 0x63 | 0x85 | 0xD5 | 0xF5
+            );
+        let value = self.rewrite_port_rmw(_cpu, addr, value);
+        (addr, value, preserve_i2c_bits)
     }
 
     fn write(&mut self, value: Self::WriteValue) {
-        let (addr, byte) = value;
+        let (addr, mut byte, preserve_i2c_bits) = value;
         match addr {
             addr if TimerBlock::handles(addr) => {
                 let _ = self.timers.write(&mut self.generic, addr, byte);
@@ -889,6 +932,9 @@ impl PortMapper for MachinePorts {
             UART2_SFR_S2CON | UART2_SFR_S2BUF => self.uart2.write(addr, byte),
             SFR_P0 | SFR_P1 | SFR_P2 | SFR_P3 | SFR_P4 | SFR_P5 => {
                 let index = Self::port_index(addr).expect("port index");
+                if preserve_i2c_bits {
+                    byte = (byte & !0x03) | (self.port_latch[2] & 0x03);
+                }
                 self.port_latch[index] = byte;
                 self.generic_set(addr, byte);
                 if addr == SFR_P2 {
@@ -1093,6 +1139,7 @@ impl BoardModel {
         );
         self.ds18b20.sample(self.sim_time_ns, (p1 & (1 << 4)) != 0);
         self.i2c.sample(
+            self.sim_time_ns,
             (p2 & (1 << 0)) != 0,
             (p2 & (1 << 1)) != 0,
             &self.analog,
