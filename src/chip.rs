@@ -18,6 +18,7 @@ use crate::{
         AnalogInputs, At24c02, Ds18b20, Ds1302, I2cBus, Key, Ne555, Outputs, Pcf8591,
         SegmentDecoder, UltrasonicDevice,
     },
+    persistent_state::PersistentState,
 };
 
 mod registers;
@@ -29,8 +30,22 @@ use timers::TimerBlock;
 pub struct Simulator {
     cpu: Cpu,
     ctx: MachineContext,
+    code_image: Vec<u8>,
     trace_cpu: bool,
     seg_decoder: SegmentDecoder,
+}
+
+#[derive(Debug, Clone)]
+struct BoardRetainedState {
+    persistent_state: PersistentState,
+    keys: Key,
+    key_mode: KeyMode,
+    analog: AnalogInputs,
+    jumpers: BoardJumpers,
+    ds18b20_temperature_c: f32,
+    ds18b20_parasite_power: bool,
+    ultrasonic_distance_cm: f32,
+    ne555_frequency_hz: f32,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -69,12 +84,34 @@ impl Simulator {
         let hex = fs::read_to_string(path)
             .with_context(|| format!("读取 HEX 文件失败: {}", path.display()))?;
         let code = load_ihex(&hex)?;
+        let ctx = MachineContext::new(code.clone());
         Ok(Self {
             cpu: Cpu::new(),
-            ctx: MachineContext::new(code),
+            ctx,
+            code_image: code,
             trace_cpu,
             seg_decoder: SegmentDecoder::default(),
         })
+    }
+
+    pub fn export_persistent_state(&self) -> String {
+        self.ctx.board.persistent_state().encode()
+    }
+
+    pub fn load_persistent_state(&mut self, text: &str) -> Result<()> {
+        let state = PersistentState::decode(text)?;
+        self.ctx.board.load_persistent_state(&state);
+        self.ctx.ports.refresh_inputs(&self.ctx.board);
+        Ok(())
+    }
+
+    pub fn reset(&mut self) -> Result<()> {
+        let retained = self.ctx.board.retained_state();
+        self.cpu = Cpu::new();
+        self.ctx = MachineContext::new(self.code_image.clone());
+        self.ctx.board.load_retained_state(&retained);
+        self.ctx.ports.refresh_inputs(&self.ctx.board);
+        Ok(())
     }
 
     pub fn run_ms(&mut self, ms: u64) -> Result<()> {
@@ -985,6 +1022,47 @@ struct BoardModel {
 }
 
 impl BoardModel {
+    fn persistent_state(&self) -> PersistentState {
+        PersistentState {
+            ds18b20: self.ds18b20.persistent_state(),
+            ds1302: self.ds1302.persistent_state(),
+            at24c02: self.at24c02.persistent_state(),
+        }
+    }
+
+    fn load_persistent_state(&mut self, state: &PersistentState) {
+        self.ds18b20.load_persistent_state(&state.ds18b20);
+        self.ds1302.load_persistent_state(&state.ds1302);
+        self.at24c02.load_persistent_state(&state.at24c02);
+    }
+
+    fn retained_state(&self) -> BoardRetainedState {
+        BoardRetainedState {
+            persistent_state: self.persistent_state(),
+            keys: self.keys.clone(),
+            key_mode: self.key_mode,
+            analog: self.analog.clone(),
+            jumpers: self.jumpers.clone(),
+            ds18b20_temperature_c: self.ds18b20.temperature_c,
+            ds18b20_parasite_power: self.ds18b20.parasite_power(),
+            ultrasonic_distance_cm: self.ultrasonic.distance_cm,
+            ne555_frequency_hz: self.ne555.frequency_hz(),
+        }
+    }
+
+    fn load_retained_state(&mut self, state: &BoardRetainedState) {
+        self.load_persistent_state(&state.persistent_state);
+        self.keys = state.keys.clone();
+        self.key_mode = state.key_mode;
+        self.analog = state.analog.clone();
+        self.jumpers = state.jumpers.clone();
+        self.ds18b20.temperature_c = state.ds18b20_temperature_c;
+        self.ds18b20
+            .set_parasite_power(state.ds18b20_parasite_power);
+        self.ultrasonic.distance_cm = state.ultrasonic_distance_cm.max(0.0);
+        self.ne555.set_frequency_hz(state.ne555_frequency_hz);
+    }
+
     fn advance_cycles(&mut self, cycles: u64) -> u64 {
         self.cpu_cycles = self.cpu_cycles.saturating_add(cycles);
         let total_ns = u128::from(self.sim_time_ns_remainder)

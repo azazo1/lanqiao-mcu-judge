@@ -1,3 +1,5 @@
+use crate::persistent_state::At24c02PersistentState;
+
 #[derive(Debug, Clone)]
 pub(crate) struct At24c02 {
     memory: [u8; 256],
@@ -22,6 +24,16 @@ impl Default for At24c02 {
 impl At24c02 {
     const PAGE_SIZE: u8 = 8;
     const PAGE_MASK: u8 = Self::PAGE_SIZE - 1;
+
+    pub(crate) fn persistent_state(&self) -> At24c02PersistentState {
+        At24c02PersistentState {
+            memory: self.memory,
+        }
+    }
+
+    pub(crate) fn load_persistent_state(&mut self, state: &At24c02PersistentState) {
+        self.memory = state.memory;
+    }
 
     pub(crate) fn begin_write(&mut self) {
         self.expecting_word_address = true;

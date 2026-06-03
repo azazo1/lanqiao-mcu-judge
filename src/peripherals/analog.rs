@@ -4,7 +4,7 @@ use anyhow::Result;
 
 use crate::ids::VoltageChannel;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct AnalogInputs {
     voltages: BTreeMap<String, f32>,
 }

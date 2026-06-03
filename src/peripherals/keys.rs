@@ -2,7 +2,7 @@ use anyhow::Result;
 
 use crate::ids::KeyId;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct Key {
     pressed: [[bool; 4]; 4],
 }

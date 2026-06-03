@@ -87,6 +87,29 @@ LED:
 
 `run_ms(...)` 和 `run_us(...)` 按精确仿真时基推进. 如果固件内部有显示刷新周期, 1s 测频窗口, 传感器采样节拍等逻辑, 在修改输入后要显式留出足够稳定时间, 不要假设几十毫秒内一定已经更新到最终结果.
 
+## 状态导入导出
+
+- `export_persistent_state()`
+- `load_persistent_state(text)`
+- `reset()`
+
+`export_persistent_state()` 返回当前非易失外设状态的序列化字符串. 当前覆盖:
+
+- `DS18B20` 的 ROM 和 EEPROM 配置.
+- `DS1302` 的时钟寄存器, 写保护, trickle charge 和 31 字节 RAM.
+- `AT24C02` 的全部 256 字节存储内容.
+
+`load_persistent_state(text)` 用同版本评测器导出的字符串覆盖当前非易失状态. 它不会自动恢复 MCU 寄存器, 内部 RAM, 数码管采样缓存, LED 当前态, UART 队列等易失运行态. 如果固件把外设内容缓存到了 RAM, 脚本里通常还需要额外调用 `reset()` 或触发固件自己的重新读取流程.
+
+`reset()` 会重建 MCU 和板级运行环境, 语义上等价于重新上电. 它会清空易失运行态, 但会保留非易失外设状态, 并保留当前脚本注入条件, 包括:
+
+- 当前按键模式和按下状态.
+- 当前跳帽连接关系.
+- 当前模拟电压输入.
+- `set_temperature_c(...)`, `set_distance_cm(...)`, `set_frequency_hz(...)`, `set_ds18b20_parasite_power(...)` 注入的环境条件.
+
+持久状态字符串只保证在同版本评测器内部自洽, 不建议跨版本长期保存或手工构造.
+
 ## 输入注入
 
 - `set_key(S4, true)`

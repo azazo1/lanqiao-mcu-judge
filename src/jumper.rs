@@ -38,7 +38,7 @@ impl JumperCap {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct BoardJumpers {
     installed: BTreeSet<JumperCap>,
 }

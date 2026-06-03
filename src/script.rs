@@ -342,6 +342,39 @@ fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
             .map_err(|err| runtime_error(err.to_string()))
     });
 
+    let sim_export_persistent = Arc::clone(sim);
+    engine.register_fn(
+        "export_persistent_state",
+        move || -> Result<ImmutableString, Box<EvalAltResult>> {
+            let text = sim_export_persistent
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .export_persistent_state();
+            Ok(text.into())
+        },
+    );
+
+    let sim_load_persistent = Arc::clone(sim);
+    engine.register_fn(
+        "load_persistent_state",
+        move |text: ImmutableString| -> Result<(), Box<EvalAltResult>> {
+            sim_load_persistent
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .load_persistent_state(text.as_str())
+                .map_err(|err| runtime_error(err.to_string()))
+        },
+    );
+
+    let sim_reset = Arc::clone(sim);
+    engine.register_fn("reset", move || -> Result<(), Box<EvalAltResult>> {
+        sim_reset
+            .lock()
+            .map_err(|_| runtime_error("仿真器锁已损坏"))?
+            .reset()
+            .map_err(|err| runtime_error(err.to_string()))
+    });
+
     let sim_key = Arc::clone(sim);
     engine.register_fn(
         "set_key",

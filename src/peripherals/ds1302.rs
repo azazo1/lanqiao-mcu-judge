@@ -1,6 +1,7 @@
 use anyhow::{Result, bail};
 
 use crate::chip::NS_PER_SECOND;
+use crate::persistent_state::Ds1302PersistentState;
 
 #[derive(Debug, Clone)]
 pub(crate) struct Ds1302 {
@@ -162,6 +163,40 @@ impl Ds1302 {
 
         self.ce_prev = ce;
         self.clk_prev = clk;
+    }
+
+    pub(crate) fn persistent_state(&self) -> Ds1302PersistentState {
+        Ds1302PersistentState {
+            write_protect: self.write_protect,
+            trickle_charge: self.trickle_charge,
+            ram: self.ram,
+            hour_mode_12: self.hour_mode_12,
+            hour: self.hour,
+            minute: self.minute,
+            second: self.second,
+            day_of_week: self.day_of_week,
+            date: self.date,
+            month: self.month,
+            year: self.year,
+            halted: self.halted,
+            sub_ns: self.sub_ns,
+        }
+    }
+
+    pub(crate) fn load_persistent_state(&mut self, state: &Ds1302PersistentState) {
+        self.write_protect = state.write_protect;
+        self.trickle_charge = state.trickle_charge;
+        self.ram = state.ram;
+        self.hour_mode_12 = state.hour_mode_12;
+        self.hour = state.hour.min(23);
+        self.minute = state.minute.min(59);
+        self.second = state.second.min(59);
+        self.day_of_week = state.day_of_week.clamp(1, 7);
+        self.date = state.date.clamp(1, 31);
+        self.month = state.month.clamp(1, 12);
+        self.year = state.year;
+        self.halted = state.halted;
+        self.sub_ns = state.sub_ns.min(NS_PER_SECOND.saturating_sub(1));
     }
 
     fn increment_date(&mut self) {

@@ -10,6 +10,10 @@ impl Ne555 {
         self.frequency_hz = value.max(0.0);
     }
 
+    pub(crate) fn frequency_hz(&self) -> f32 {
+        self.frequency_hz
+    }
+
     pub(crate) fn level(&self, time_ns: u64) -> bool {
         let Some(half_period_ns) = self.half_period_ns() else {
             return true;

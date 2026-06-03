@@ -3,6 +3,7 @@ use std::collections::VecDeque;
 use anyhow::{Result, bail};
 
 use crate::chip::NS_PER_MICROSECOND;
+use crate::persistent_state::Ds18b20PersistentState;
 
 const RESET_PULSE_MIN_NS: u64 = 400 * NS_PER_MICROSECOND;
 const PRESENCE_PULSE_NS: u64 = 120 * NS_PER_MICROSECOND;
@@ -176,6 +177,30 @@ impl Ds18b20 {
 
     pub(crate) fn set_parasite_power(&mut self, enabled: bool) {
         self.parasite_power = enabled;
+    }
+
+    pub(crate) fn parasite_power(&self) -> bool {
+        self.parasite_power
+    }
+
+    pub(crate) fn persistent_state(&self) -> Ds18b20PersistentState {
+        Ds18b20PersistentState {
+            rom: self.rom,
+            eeprom_th: self.eeprom_th,
+            eeprom_tl: self.eeprom_tl,
+            eeprom_config: self.eeprom_config,
+        }
+    }
+
+    pub(crate) fn load_persistent_state(&mut self, state: &Ds18b20PersistentState) {
+        self.rom = state.rom;
+        self.eeprom_th = state.eeprom_th;
+        self.eeprom_tl = state.eeprom_tl;
+        self.eeprom_config = state.eeprom_config;
+        self.scratchpad_th = state.eeprom_th;
+        self.scratchpad_tl = state.eeprom_tl;
+        self.scratchpad_config = state.eeprom_config;
+        self.update_alarm_flag();
     }
 
     fn handle_reset(&mut self, time_ns: u64) {
