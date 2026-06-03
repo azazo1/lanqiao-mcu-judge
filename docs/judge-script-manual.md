@@ -115,6 +115,7 @@ LED:
 - `display_number(start, end, window_ms)`
 - `snapshot_text()`
 - `uart_take()`
+- `da_value()`
 - `relay_on()`
 - `buzzer_on()`
 - `motor_on()`
@@ -137,6 +138,8 @@ LED:
 `display_number(...)` 接受前导零, 但返回值只保留数值本身. 如果题目要求精确判断位宽, 前导零, 空白位, 固定符号位, 请直接对 `display_text(...)` 的结果做字符串切片和正则判断.
 
 这更适合超声波, 温度, 电压这类量测题, 可以直接写布尔表达式判断范围, 避免按整串字符串做数值断言.
+
+`da_value()` 返回当前 DA 输出的原始数值, 范围是 `0..=255`. 对 `PCF8591` 这类 AD/DA 题, 可以直接用它验证按键调节后的 DA 输出是否正确.
 
 ## Rhai 字符串切片和正则
 

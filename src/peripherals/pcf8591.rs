@@ -12,6 +12,10 @@ impl Pcf8591 {
         self.expecting_control = true;
     }
 
+    pub(crate) fn dac_value(&self) -> u8 {
+        self.dac_value
+    }
+
     pub(crate) fn write_byte(&mut self, value: u8) {
         if self.expecting_control {
             self.control = value;

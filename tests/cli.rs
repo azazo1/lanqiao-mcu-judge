@@ -187,3 +187,34 @@ fn rhai_led_pwm_watchers_work() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn rhai_da_value_reports_pcf8591_output() {
+    let script_path = temp_script_path();
+    std::fs::write(
+        &script_path,
+        "key_mode(BUTTON);\nrun_ms(400);\nassert(da_value() == 127, \"boot da\");\n",
+    )
+    .expect("write script");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_stcjudge"))
+        .args([
+            "run",
+            "--hex",
+            sample_path("sample/ad_da/prj/Objects/ad_da.hex")
+                .to_str()
+                .expect("hex path"),
+            "--script",
+            script_path.to_str().expect("script path"),
+        ])
+        .output()
+        .expect("run cli");
+
+    let _ = std::fs::remove_file(&script_path);
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

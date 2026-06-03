@@ -580,6 +580,15 @@ fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
         },
     );
 
+    let sim_da_value = Arc::clone(sim);
+    engine.register_fn("da_value", move || -> Result<i64, Box<EvalAltResult>> {
+        let value = sim_da_value
+            .lock()
+            .map_err(|_| runtime_error("仿真器锁已损坏"))?
+            .da_value();
+        Ok(i64::from(value))
+    });
+
     let sim_uart_take = Arc::clone(sim);
     engine.register_fn(
         "uart_take",

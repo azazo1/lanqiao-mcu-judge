@@ -8,6 +8,10 @@ pub(crate) struct I2cBus {
     sda_prev: bool,
     bit_count: u8,
     shift: u8,
+    write_ack_pending: bool,
+    write_ack_clock_high: bool,
+    read_ack_pending: bool,
+    read_ack_clock_high: bool,
     pub(crate) sda_drive_low: bool,
     pub(crate) scl_drive_low: bool,
     active: Option<I2cDevice>,
@@ -43,53 +47,83 @@ impl I2cBus {
             self.mode = I2cMode::Address;
             self.bit_count = 0;
             self.shift = 0;
+            self.write_ack_pending = false;
+            self.write_ack_clock_high = false;
+            self.read_ack_pending = false;
+            self.read_ack_clock_high = false;
             self.read_buffer.clear();
             self.sda_drive_low = false;
         }
         if !self.sda_prev && sda_high && scl_high {
             self.mode = I2cMode::Idle;
             self.active = None;
+            self.write_ack_pending = false;
+            self.write_ack_clock_high = false;
+            self.read_ack_pending = false;
+            self.read_ack_clock_high = false;
             self.sda_drive_low = false;
         }
 
         if !self.scl_prev && scl_high {
             match self.mode {
                 I2cMode::Address | I2cMode::Write => {
-                    self.shift = (self.shift << 1) | u8::from(sda_high);
-                    self.bit_count += 1;
-                    if self.bit_count == 8 {
-                        self.handle_received_byte(analog, pcf8591, at24c02);
-                        self.bit_count = 0;
-                        self.shift = 0;
-                        self.sda_drive_low = true;
+                    if self.write_ack_pending {
+                        self.write_ack_clock_high = true;
+                    } else {
+                        self.shift = (self.shift << 1) | u8::from(sda_high);
+                        self.bit_count += 1;
+                        if self.bit_count == 8 {
+                            self.handle_received_byte(analog, pcf8591, at24c02);
+                            self.bit_count = 0;
+                            self.shift = 0;
+                            self.write_ack_pending = true;
+                            self.write_ack_clock_high = false;
+                            self.sda_drive_low = true;
+                        }
                     }
                 }
                 I2cMode::Read => {
-                    if self.bit_count == 0
-                        && let Some(byte) = self.read_buffer.front().copied()
-                    {
-                        self.shift = byte;
-                    }
-                    self.bit_count += 1;
-                    if self.bit_count > 8 {
-                        self.bit_count = 0;
-                        self.sda_drive_low = false;
-                        self.read_buffer.pop_front();
-                        if self.read_buffer.is_empty() {
-                            self.refill_read_buffer(analog, pcf8591, at24c02);
-                        }
+                    if self.read_ack_pending {
+                        self.read_ack_clock_high = true;
                     } else {
+                        if self.bit_count == 0
+                            && let Some(byte) = self.read_buffer.front().copied()
+                        {
+                            self.shift = byte;
+                        }
+                        self.bit_count += 1;
                         let bit = self.shift & 0x80 != 0;
                         self.sda_drive_low = !bit;
                         self.shift <<= 1;
+                        if self.bit_count == 8 {
+                            self.bit_count = 0;
+                            self.read_ack_pending = true;
+                            self.read_ack_clock_high = false;
+                        }
                     }
                 }
                 I2cMode::Idle => {}
             }
         }
 
-        if self.scl_prev && !scl_high && self.sda_drive_low {
-            self.sda_drive_low = false;
+        if self.scl_prev && !scl_high {
+            if self.write_ack_pending && self.write_ack_clock_high {
+                self.write_ack_pending = false;
+                self.write_ack_clock_high = false;
+                self.sda_drive_low = false;
+            }
+            if self.read_ack_pending {
+                if self.read_ack_clock_high {
+                    self.read_ack_pending = false;
+                    self.read_ack_clock_high = false;
+                    self.read_buffer.pop_front();
+                    if self.read_buffer.is_empty() {
+                        self.refill_read_buffer(analog, pcf8591, at24c02);
+                    }
+                } else {
+                    self.sda_drive_low = false;
+                }
+            }
         }
 
         self.scl_prev = scl_high;

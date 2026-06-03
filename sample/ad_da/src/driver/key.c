@@ -1,7 +1,7 @@
 #include "key.h"
 
 u8 key_read() {
-  u8 t;
+  u8 t = 0;
   // BTN mode
   if (P33 == 0)
     t = 4;
