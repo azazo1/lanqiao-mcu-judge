@@ -56,6 +56,7 @@ void key_proc() {
 
 void sg_proc() {
 	u8 i;
+	long tempe_1000x_abs = tempe_1000x >= 0 ? tempe_1000x : -tempe_1000x;
 	if (sg_sd < 100) return;
 	sg_sd = 0;
 	
@@ -63,12 +64,21 @@ void sg_proc() {
 	
 	for (i = 0; i < 8; ++i) sg_buf[i] = 10;
 	
-	sg_buf[0] = tempe_1000x >= 100000 ? tempe_1000x / 100000 % 10 : 10;
-	sg_buf[1] = tempe_1000x >= 10000 ? tempe_1000x / 10000 % 10 : 10;
-	sg_buf[2] = ',' + (tempe_1000x / 1000 % 10);
-	sg_buf[3] = tempe_1000x / 100 % 10;
-	sg_buf[4] = tempe_1000x / 10 % 10;
-	sg_buf[5] = tempe_1000x % 10;
+	if (tempe_1000x >= 0) {
+		sg_buf[0] = tempe_1000x_abs >= 100000 ? tempe_1000x_abs / 100000 % 10 : 10;
+		sg_buf[1] = tempe_1000x_abs >= 10000 ? tempe_1000x_abs / 10000 % 10 : 10;
+		sg_buf[2] = ',' + (tempe_1000x_abs / 1000 % 10);
+		sg_buf[3] = tempe_1000x_abs / 100 % 10;
+		sg_buf[4] = tempe_1000x_abs / 10 % 10;
+		sg_buf[5] = tempe_1000x_abs % 10;
+	} else {
+		sg_buf[0] = 11; // -
+		sg_buf[1] = tempe_1000x_abs >= 10000 ? tempe_1000x_abs / 10000 % 10 : 10;
+		sg_buf[2] = ',' + (tempe_1000x_abs / 1000 % 10);
+		sg_buf[3] = tempe_1000x_abs / 100 % 10;
+		sg_buf[4] = tempe_1000x_abs / 10 % 10;
+		sg_buf[5] = tempe_1000x_abs % 10;
+	}
 	
 	sg_buf[7] = tempe_resolution_level;
 }
