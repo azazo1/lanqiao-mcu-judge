@@ -988,16 +988,23 @@ impl Simulator {
 fn approximate_instruction_ticks(op: u8) -> u32 {
     match op {
         0x00 => 1,
-        0x01 | 0x11 | 0x21 | 0x31 | 0x41 | 0x51 | 0x61 | 0x71 | 0x81 | 0x91 | 0xA1 | 0xB1
-        | 0xC1 | 0xD1 | 0xE1 | 0xF1 => 2,
-        0x02 | 0x12 | 0x22 | 0x32 => 2,
-        0x10 | 0x20 | 0x30 | 0x40 | 0x50 | 0x60 | 0x70 | 0x80 => 2,
+        0x01 | 0x21 | 0x41 | 0x61 | 0x81 | 0xA1 | 0xC1 | 0xE1 => 3,
+        0x11 | 0x31 | 0x51 | 0x71 | 0x91 | 0xB1 | 0xD1 | 0xF1 => 4,
+        0x02 | 0x12 | 0x22 | 0x32 => 4,
+        0x10 | 0x20 | 0x30 => 5,
+        0x40 | 0x50 | 0x80 => 3,
+        0x60 | 0x70 => 4,
         0x76 | 0x77 | 0x86 | 0x87 | 0x88..=0x8F | 0x90 | 0xA6..=0xAF => 2,
         0x05 | 0x15 | 0x42 | 0x45 | 0x52 | 0x55 | 0x62 | 0x65 | 0xA2 | 0xA3 | 0xB2 | 0xC2
         | 0xD2 | 0xE5 | 0xF5 => 1,
-        0x43 | 0x53 | 0x63 | 0x75 | 0x85 | 0x92 | 0xB4..=0xBF => 2,
-        0xC0 | 0xD0 | 0xD5 | 0xD8..=0xDF => 2,
-        0x73 | 0x83 | 0x93 => 2,
+        0x43 | 0x53 | 0x63 | 0x75 | 0x85 | 0x92 => 2,
+        0xB4 | 0xB8..=0xBF => 4,
+        0xB5..=0xB7 => 5,
+        0xC0 | 0xD0 => 2,
+        0xD5 => 5,
+        0xD8..=0xDF => 4,
+        0x73 => 5,
+        0x83 | 0x93 => 2,
         0xA4 | 0x84 => 4,
         0xE0 | 0xE2 | 0xE3 | 0xF0 | 0xF2 | 0xF3 => 2,
         _ => 1,
@@ -2268,11 +2275,62 @@ mod tests {
         assert_eq!(super::approximate_instruction_ticks(0x35), 1);
         assert_eq!(super::approximate_instruction_ticks(0x95), 1);
         assert_eq!(super::approximate_instruction_ticks(0x92), 2);
-        assert_eq!(super::approximate_instruction_ticks(0x30), 2);
+        assert_eq!(super::approximate_instruction_ticks(0x12), 4);
+        assert_eq!(super::approximate_instruction_ticks(0x22), 4);
+        assert_eq!(super::approximate_instruction_ticks(0x30), 5);
+        assert_eq!(super::approximate_instruction_ticks(0x40), 3);
+        assert_eq!(super::approximate_instruction_ticks(0x50), 3);
+        assert_eq!(super::approximate_instruction_ticks(0x60), 4);
+        assert_eq!(super::approximate_instruction_ticks(0x70), 4);
+        assert_eq!(super::approximate_instruction_ticks(0x80), 3);
         assert_eq!(super::approximate_instruction_ticks(0x53), 2);
         assert_eq!(super::approximate_instruction_ticks(0x88), 2);
         assert_eq!(super::approximate_instruction_ticks(0xA8), 2);
         assert_eq!(super::approximate_instruction_ticks(0x90), 2);
+        assert_eq!(super::approximate_instruction_ticks(0xD5), 5);
+        assert_eq!(super::approximate_instruction_ticks(0xD8), 4);
+        assert_eq!(super::approximate_instruction_ticks(0x73), 5);
+    }
+
+    #[test]
+    fn delay_sample_delay5ms_matches_run_to_timing() {
+        let mut sim = Simulator::from_hex_path(
+            &sample_path("sample/delay/prj/Objects/delay.hex"),
+            false,
+        )
+        .expect("load delay");
+
+        let mut startup_off_ns = None;
+        while sim.sim_time_ns() <= 2 * super::NS_PER_MILLISECOND {
+            let all_off = (1..=8).all(|led| !sim.led_on(led).expect("read led"));
+            if all_off {
+                startup_off_ns = Some(sim.sim_time_ns());
+                break;
+            }
+            sim.step_once().expect("advance delay sample");
+        }
+
+        let startup_off_ns = startup_off_ns.expect("delay sample should clear boot leds");
+        assert!(
+            startup_off_ns <= 200_000,
+            "expected boot leds to clear within 200us, got {startup_off_ns}ns"
+        );
+
+        let dt0 = sim
+            .run_to_target(super::RunToTarget::Led(LedId::L1), super::RunToEdge::Up)
+            .expect("wait L1 rise");
+        assert!(
+            (4_500_000..=5_500_000).contains(&dt0),
+            "expected L1 step near 5ms, got {dt0}ns"
+        );
+
+        let dt1 = sim
+            .run_to_target(super::RunToTarget::Led(LedId::L2), super::RunToEdge::Up)
+            .expect("wait L2 rise");
+        assert!(
+            (4_500_000..=5_500_000).contains(&dt1),
+            "expected L2 step near 5ms, got {dt1}ns"
+        );
     }
 
     #[test]
