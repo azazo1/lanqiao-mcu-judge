@@ -1710,6 +1710,16 @@ label {
   min-height: 0;
   padding: 0 16px;
   box-sizing: border-box;
+  position: relative;
+}
+.viewer-ruler {
+  position: sticky;
+  top: 0;
+  z-index: 8;
+  margin: 0 -16px;
+  padding: 0 16px;
+  background: #0d1324;
+  border-bottom: 1px solid #1f2744;
 }
 canvas {
   display: block;
@@ -1771,6 +1781,9 @@ canvas {
       </div>
     </div>
     <div class="viewer" id="viewer">
+      <div class="viewer-ruler" id="viewer-ruler">
+        <canvas id="ruler-canvas"></canvas>
+      </div>
       <canvas id="canvas"></canvas>
     </div>
   </section>
@@ -1791,6 +1804,9 @@ const sidebarToggle = document.getElementById("sidebar-toggle");
 const sidebarClose = document.getElementById("sidebar-close");
 const header = document.querySelector(".header");
 const viewer = document.getElementById("viewer");
+const viewerRuler = document.getElementById("viewer-ruler");
+const rulerCanvas = document.getElementById("ruler-canvas");
+const rulerCtx = rulerCanvas.getContext("2d");
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 const coverageInfo = document.getElementById("coverage-info");
@@ -1809,6 +1825,12 @@ const markerAddButton = document.getElementById("marker-add");
 const markerAddCursorButton = document.getElementById("marker-add-cursor");
 const markerStrip = document.getElementById("marker-strip");
 const markerStatus = document.getElementById("marker-status");
+
+const SIGNAL_LABEL_WIDTH = 220;
+const VIEWER_SIDE_PADDING_X = 32;
+const VIEWER_ROW_HEIGHT = 54;
+const VIEWER_TOP_PADDING = 8;
+const VIEWER_RULER_HEIGHT = 36;
 
 const signals = data.signals.map(signal => ({
   ...signal,
@@ -2187,7 +2209,7 @@ function zoomViewAroundCenter(event) {
 
 function viewerWaveMetrics() {
   const rect = canvas.getBoundingClientRect();
-  const waveLeft = 220;
+  const waveLeft = SIGNAL_LABEL_WIDTH;
   const waveWidth = Math.max(1, rect.width - waveLeft);
   return { rect, waveLeft, waveWidth };
 }
@@ -2760,8 +2782,64 @@ function renderWaveMarkers(leftLabel, waveWidth, top, height) {
   }
 }
 
+function renderTimeRuler(width, leftLabel, waveWidth, grid, timeUnit) {
+  rulerCanvas.width = width * window.devicePixelRatio;
+  rulerCanvas.height = VIEWER_RULER_HEIGHT * window.devicePixelRatio;
+  rulerCanvas.style.width = `${width}px`;
+  rulerCanvas.style.height = `${VIEWER_RULER_HEIGHT}px`;
+  rulerCtx.setTransform(window.devicePixelRatio, 0, 0, window.devicePixelRatio, 0, 0);
+  rulerCtx.clearRect(0, 0, width, VIEWER_RULER_HEIGHT);
+  rulerCtx.fillStyle = "#0d1324";
+  rulerCtx.fillRect(0, 0, width, VIEWER_RULER_HEIGHT);
+  rulerCtx.fillStyle = "#11182c";
+  rulerCtx.fillRect(0, 0, leftLabel, VIEWER_RULER_HEIGHT);
+  rulerCtx.strokeStyle = "#273153";
+  rulerCtx.beginPath();
+  rulerCtx.moveTo(leftLabel + 0.5, 0);
+  rulerCtx.lineTo(leftLabel + 0.5, VIEWER_RULER_HEIGHT);
+  rulerCtx.moveTo(0, VIEWER_RULER_HEIGHT - 0.5);
+  rulerCtx.lineTo(width, VIEWER_RULER_HEIGHT - 0.5);
+  rulerCtx.stroke();
+  rulerCtx.font = "12px ui-monospace, monospace";
+  rulerCtx.textAlign = "center";
+  rulerCtx.textBaseline = "middle";
+  for (const time of grid.marks) {
+    const x = xOf(time, leftLabel, waveWidth);
+    rulerCtx.strokeStyle = "#39456b";
+    rulerCtx.beginPath();
+    rulerCtx.moveTo(x + 0.5, VIEWER_RULER_HEIGHT - 13);
+    rulerCtx.lineTo(x + 0.5, VIEWER_RULER_HEIGHT - 1);
+    rulerCtx.stroke();
+    rulerCtx.fillStyle = "#9aa4d6";
+    rulerCtx.fillText(formatTimeNs(time, grid.stepNs, timeUnit), x, 12);
+  }
+  if (!hoverState) {
+    return;
+  }
+  const timeNs = clampTimeNs(hoverState.timeNs);
+  const x = xOf(timeNs, leftLabel, waveWidth);
+  const text = formatTimeNs(timeNs, grid.stepNs, timeUnit);
+  const textWidth = rulerCtx.measureText(text).width;
+  const boxWidth = Math.max(52, textWidth + 10);
+  const boxLeft = Math.max(
+    leftLabel + 4,
+    Math.min(x - boxWidth / 2, leftLabel + waveWidth - boxWidth - 4)
+  );
+  rulerCtx.strokeStyle = "#ffd166";
+  rulerCtx.beginPath();
+  rulerCtx.moveTo(x + 0.5, 0);
+  rulerCtx.lineTo(x + 0.5, VIEWER_RULER_HEIGHT);
+  rulerCtx.stroke();
+  rulerCtx.fillStyle = "#182234";
+  rulerCtx.fillRect(boxLeft, VIEWER_RULER_HEIGHT - 22, boxWidth, 16);
+  rulerCtx.strokeStyle = "#ffd166";
+  rulerCtx.strokeRect(boxLeft + 0.5, VIEWER_RULER_HEIGHT - 21.5, boxWidth - 1, 15);
+  rulerCtx.fillStyle = "#fff1be";
+  rulerCtx.fillText(text, boxLeft + boxWidth / 2, VIEWER_RULER_HEIGHT - 14);
+}
+
 function timeAtViewerLogicalX(logicalX, logicalWidth) {
-  const waveLeft = 220;
+  const waveLeft = SIGNAL_LABEL_WIDTH;
   const waveWidth = Math.max(1, logicalWidth - waveLeft);
   const ratio = clampUnit((logicalX - waveLeft) / waveWidth);
   return clampTimeNs(viewStart + viewSpanNs() * ratio);
@@ -2771,7 +2849,7 @@ function markerAtViewerLogicalPoint(logicalX, logicalY, logicalWidth, logicalHei
   if (logicalY < 0 || logicalY > logicalHeight) {
     return null;
   }
-  const waveLeft = 220;
+  const waveLeft = SIGNAL_LABEL_WIDTH;
   const waveWidth = Math.max(1, logicalWidth - waveLeft);
   let best = null;
   let bestDistance = 7;
@@ -3031,15 +3109,16 @@ function render() {
   const visibleIds = visible.map(signal => signal.id);
   const visibleKey = visibleIds.join("\n");
   const query = searchQuery();
-  const rowHeight = 54;
-  const top = 24;
-  const leftLabel = 220;
-  const viewerPaddingX = 32;
+  const rowHeight = VIEWER_ROW_HEIGHT;
+  const top = VIEWER_TOP_PADDING;
+  const leftLabel = SIGNAL_LABEL_WIDTH;
+  const viewerPaddingX = VIEWER_SIDE_PADDING_X;
   const width = Math.max(leftLabel + 1, viewer.clientWidth - viewerPaddingX);
   const waveWidth = Math.max(1, width - leftLabel);
   const height = top + visible.length * rowHeight + 30;
   const grid = buildGridMarks(waveWidth);
   const timeUnit = chooseTimeUnit(grid.stepNs);
+  renderTimeRuler(width, leftLabel, waveWidth, grid, timeUnit);
   canvas.width = width * window.devicePixelRatio;
   canvas.height = height * window.devicePixelRatio;
   canvas.style.width = `${width}px`;
@@ -3073,11 +3152,9 @@ function render() {
     const x = xOf(time, leftLabel, waveWidth);
     ctx.strokeStyle = "#202847";
     ctx.beginPath();
-    ctx.moveTo(x, top - 8);
+    ctx.moveTo(x, 0);
     ctx.lineTo(x, height);
     ctx.stroke();
-    ctx.fillStyle = "#7b86b9";
-    ctx.fillText(formatTimeNs(time, grid.stepNs, timeUnit), x - 18, top - 14);
   }
 
   visible.forEach((signal, index) => {
@@ -3502,7 +3579,7 @@ viewer.addEventListener("mousemove", event => {
   hoverHandleSignalId = handleRow ? handleRow.signal.id : null;
   hoverActionSignalId = actionRow ? actionRow.signal.id : null;
   viewer.style.cursor = marker ? "ew-resize" : (handleRow ? "grab" : (actionRow ? "pointer" : "default"));
-  const waveLeft = 220;
+  const waveLeft = SIGNAL_LABEL_WIDTH;
   const waveWidth = Math.max(1, rect.width - waveLeft);
   const ratio = Math.max(0, Math.min(1, (logicalX - waveLeft) / waveWidth));
   hoverState = {

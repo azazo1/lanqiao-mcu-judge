@@ -6,8 +6,8 @@
 
 - `--wave-html <path>`: 导出单文件 HTML 查看器.
 - `--wave-json <path>`: 导出原始 JSON 数据.
-- `--wave-start-ns <ns>`: 仅保留从该纳秒时刻开始的波形.
-- `--wave-end-ns <ns>`: 仅保留到该纳秒时刻结束的波形.
+- `--wave-start <time>`: 仅保留从该时刻开始的波形. 支持 `ns/us/ms/s` 后缀, 例如 `1ns`, `250us`, `12ms`, `1s`. 不带后缀时仍按 `ns` 解释.
+- `--wave-end <time>`: 仅保留到该时刻结束的波形. 支持 `ns/us/ms/s` 后缀, 不带后缀时仍按 `ns` 解释.
 
 可以同时导出 HTML 和 JSON. 例如:
 
@@ -15,6 +15,8 @@
 stcjudge run \
   --hex sample/led_pwm/prj/Objects/led_pwm.hex \
   --stdin \
+  --wave-start 20ms \
+  --wave-end 180ms \
   --wave-html /tmp/led_pwm_wave.html \
   --wave-json /tmp/led_pwm_wave.json <<'EOF'
 run_ms(100);
