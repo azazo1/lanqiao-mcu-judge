@@ -1060,6 +1060,14 @@ fn uart_frame_ns(baud_rate: u32) -> u64 {
         .clamp(1.0, u64::MAX as f64) as u64
 }
 
+fn uart_event_char(byte: u8) -> String {
+    std::ascii::escape_default(byte).map(char::from).collect()
+}
+
+fn uart_event_label(direction: &str, byte: u8) -> String {
+    format!("{direction} 0x{byte:02X} '{}'", uart_event_char(byte))
+}
+
 struct MachineContext {
     ports: MachinePorts,
     xdata: BoardXdata,
@@ -1612,7 +1620,12 @@ impl Uart {
                 crate::wave::TRACK_EVENT_UART1
             };
             self.push_wave_event(start_time_ns, || {
-                WaveEventNote::new(start_time_ns, track_id, format!("TX 0x{byte:02X}"))
+                WaveEventNote::with_detail(
+                    start_time_ns,
+                    track_id,
+                    uart_event_label("TX", byte),
+                    format!("char='{}'", uart_event_char(byte)),
+                )
             });
         }
 
@@ -1644,7 +1657,12 @@ impl Uart {
                 crate::wave::TRACK_EVENT_UART1
             };
             self.push_wave_event(start_time_ns, || {
-                WaveEventNote::new(start_time_ns, track_id, format!("RX 0x{byte:02X}"))
+                WaveEventNote::with_detail(
+                    start_time_ns,
+                    track_id,
+                    uart_event_label("RX", byte),
+                    format!("char='{}'", uart_event_char(byte)),
+                )
             });
         }
 
@@ -2497,6 +2515,16 @@ mod tests {
         let _ = uart.tick_ns(0, 1);
 
         assert!(uart.take_wave_events().is_empty());
+    }
+
+    #[test]
+    fn uart_event_label_includes_printable_ascii_hint() {
+        assert_eq!(super::uart_event_label("RX", b'4'), "RX 0x34 '4'");
+    }
+
+    #[test]
+    fn uart_event_label_escapes_control_ascii_hint() {
+        assert_eq!(super::uart_event_label("TX", b'\n'), r"TX 0x0A '\n'");
     }
 
     #[test]
