@@ -1385,6 +1385,7 @@ body {
   background: #182234;
   color: #eef2ff;
   cursor: pointer;
+  user-select: none;
 }
 .marker-chip.active {
   background: #22314e;
@@ -1947,7 +1948,9 @@ function renderMarkerStrip() {
     chip.className = marker.id === activeMarkerId ? "marker-chip active" : "marker-chip";
     chip.style.setProperty("--marker-color", markerColor(marker));
     chip.title = markerTitle(marker);
-    chip.addEventListener("click", () => {
+    chip.addEventListener("mousedown", event => {
+      event.preventDefault();
+      event.stopPropagation();
       focusMarker(marker.id, { ensureVisible: true });
     });
 
@@ -1965,7 +1968,8 @@ function renderMarkerStrip() {
     removeButton.type = "button";
     removeButton.className = "marker-remove";
     removeButton.textContent = "x";
-    removeButton.addEventListener("click", event => {
+    removeButton.addEventListener("mousedown", event => {
+      event.preventDefault();
       event.stopPropagation();
       removeMarker(marker.id);
     });
@@ -2699,15 +2703,15 @@ function viewerMarkerAtClientPoint(clientX, clientY) {
   return markerAtViewerLogicalPoint(logicalX, logicalY, logicalWidth, logicalHeight);
 }
 
+function eventPathContainsSelector(event, selector) {
+  return event.composedPath().some(node => node instanceof Element && node.closest(selector));
+}
+
 function shouldKeepMarkerFocusOnMouseDown(event) {
-  const target = event.target;
-  if (!(target instanceof Element)) {
-    return false;
-  }
-  if (target.closest(".marker-chip") || target.closest(".coverage-marker")) {
+  if (eventPathContainsSelector(event, ".marker-chip") || eventPathContainsSelector(event, ".coverage-marker")) {
     return true;
   }
-  if (target === canvas) {
+  if (event.composedPath().includes(canvas)) {
     return Boolean(viewerMarkerAtClientPoint(event.clientX, event.clientY));
   }
   return false;
