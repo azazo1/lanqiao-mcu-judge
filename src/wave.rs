@@ -1433,6 +1433,15 @@ button {
 button:hover {
   background: #30406d;
 }
+button:disabled {
+  background: #182234;
+  color: #7b86b9;
+  border-color: #2b3857;
+  cursor: default;
+}
+button:disabled:hover {
+  background: #182234;
+}
 input[type="search"] {
   width: 100%;
   box-sizing: border-box;
@@ -1512,7 +1521,6 @@ input[type="search"] {
 }
 .coverage-marker.active::before {
   width: 4px;
-  left: 4px;
   opacity: 1;
 }
 .coverage-marker.active::after {
@@ -1523,8 +1531,9 @@ input[type="search"] {
   position: absolute;
   top: 0;
   bottom: 0;
-  left: 5px;
+  left: 50%;
   width: 2px;
+  transform: translateX(-50%);
   background: var(--marker-color, #facc15);
   opacity: 0.95;
 }
@@ -1532,9 +1541,10 @@ input[type="search"] {
   content: "";
   position: absolute;
   top: 0;
-  left: 6px;
+  left: 50%;
   width: 0;
   height: 0;
+  transform: translateX(-50%);
   border-left: 5px solid transparent;
   border-right: 5px solid transparent;
   border-top: 8px solid var(--marker-color, #facc15);
@@ -1840,16 +1850,68 @@ function setMarkerStatus(text) {
   markerStatus.textContent = text || "";
 }
 
+function markerInView(marker) {
+  return marker.t >= viewStart && marker.t <= viewEnd;
+}
+
+function panViewToMarker(marker) {
+  if (marker.t < viewStart) {
+    const delta = marker.t - viewStart;
+    viewStart += delta;
+    viewEnd += delta;
+  } else if (marker.t > viewEnd) {
+    const delta = marker.t - viewEnd;
+    viewStart += delta;
+    viewEnd += delta;
+  }
+  clampView();
+}
+
+function focusMarker(markerId, options = {}) {
+  const { ensureVisible = false, shouldRender = true } = options;
+  const marker = markerById(markerId);
+  if (!marker) {
+    if (activeMarkerId !== null) {
+      activeMarkerId = null;
+      if (shouldRender) {
+        render();
+      }
+    }
+    return false;
+  }
+  activeMarkerId = marker.id;
+  if (ensureVisible && !markerInView(marker)) {
+    panViewToMarker(marker);
+  }
+  setMarkerStatus("");
+  if (shouldRender) {
+    render();
+  }
+  return true;
+}
+
+function clearActiveMarker(options = {}) {
+  const { shouldRender = true } = options;
+  if (activeMarkerId === null) {
+    return;
+  }
+  activeMarkerId = null;
+  if (shouldRender) {
+    render();
+  }
+}
+
 function addMarker(timeNs, label) {
+  const markerId = nextMarkerId;
   markers.push({
-    id: nextMarkerId,
+    id: markerId,
     t: clampTimeNs(timeNs),
     label: label ? label.trim() || null : null,
   });
   nextMarkerId += 1;
   sortMarkers();
   setMarkerStatus("");
-  render();
+  focusMarker(markerId, { ensureVisible: true });
 }
 
 function updateMarkerTime(markerId, timeNs) {
@@ -1886,13 +1948,7 @@ function renderMarkerStrip() {
     chip.style.setProperty("--marker-color", markerColor(marker));
     chip.title = markerTitle(marker);
     chip.addEventListener("click", () => {
-      activeMarkerId = marker.id;
-      const span = viewSpanNs();
-      const half = span / 2;
-      viewStart = marker.t - half;
-      viewEnd = marker.t + half;
-      clampView();
-      render();
+      focusMarker(marker.id, { ensureVisible: true });
     });
 
     const swatch = document.createElement("span");
@@ -2080,8 +2136,7 @@ function visibleSignals() {
 function reorderSignal(sourceId, sourceIndex, targetIndex, visibleIds) {
   const filteredOrder = signalOrder.filter(id => id !== sourceId);
   const remainingVisible = visibleIds.filter(id => id !== sourceId);
-  const normalizedIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
-  const safeIndex = Math.max(0, Math.min(normalizedIndex, remainingVisible.length));
+  const safeIndex = normalizeReorderIndex(sourceIndex, targetIndex, visibleIds.length);
   const beforeId = remainingVisible[safeIndex] || null;
   if (beforeId) {
     const insertIndex = filteredOrder.indexOf(beforeId);
@@ -2098,6 +2153,16 @@ function reorderSignal(sourceId, sourceIndex, targetIndex, visibleIds) {
   }
   filteredOrder.unshift(sourceId);
   signalOrder = filteredOrder;
+}
+
+function normalizeReorderIndex(sourceIndex, targetIndex, visibleCount) {
+  const normalizedIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
+  const remainingVisibleCount = Math.max(0, visibleCount - 1);
+  return Math.max(0, Math.min(normalizedIndex, remainingVisibleCount));
+}
+
+function reorderWouldChange(sourceIndex, targetIndex, visibleCount) {
+  return normalizeReorderIndex(sourceIndex, targetIndex, visibleCount) !== sourceIndex;
 }
 
 function reorderTargetIndexAt(logicalY) {
@@ -2495,11 +2560,10 @@ function renderCoverageMarkers() {
       event.preventDefault();
       event.stopPropagation();
       if (activeMarkerId !== marker.id) {
-        activeMarkerId = marker.id;
-        render();
+        focusMarker(marker.id, { ensureVisible: true });
         return;
       }
-      activeMarkerId = marker.id;
+      focusMarker(marker.id, { shouldRender: false });
       dragState = {
         kind: "marker-move",
         markerId: marker.id,
@@ -2624,6 +2688,29 @@ function markerAtViewerLogicalPoint(logicalX, logicalY, logicalWidth, logicalHei
     }
   }
   return best;
+}
+
+function viewerMarkerAtClientPoint(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  const logicalWidth = canvas.width / window.devicePixelRatio;
+  const logicalHeight = canvas.height / window.devicePixelRatio;
+  const logicalX = (clientX - rect.left) * canvas.width / Math.max(1, rect.width) / window.devicePixelRatio;
+  const logicalY = (clientY - rect.top) * canvas.height / Math.max(1, rect.height) / window.devicePixelRatio;
+  return markerAtViewerLogicalPoint(logicalX, logicalY, logicalWidth, logicalHeight);
+}
+
+function shouldKeepMarkerFocusOnMouseDown(event) {
+  const target = event.target;
+  if (!(target instanceof Element)) {
+    return false;
+  }
+  if (target.closest(".marker-chip") || target.closest(".coverage-marker")) {
+    return true;
+  }
+  if (target === canvas) {
+    return Boolean(viewerMarkerAtClientPoint(event.clientX, event.clientY));
+  }
+  return false;
 }
 
 function renderDigital(signal, rowTop, rowHeight, waveLeft, waveWidth) {
@@ -2912,6 +2999,16 @@ function render() {
     if (preview) {
       ctx.globalAlpha = 0.55;
     }
+    const draggingRow = dragState
+      && dragState.kind === "reorder"
+      && dragState.visibleKey === visibleKey
+      && dragState.sourceId === signal.id;
+    if (draggingRow) {
+      ctx.fillStyle = "rgba(110, 168, 255, 0.14)";
+      ctx.fillRect(0, rowTop, width, rowHeight);
+      ctx.strokeStyle = "rgba(110, 168, 255, 0.45)";
+      ctx.strokeRect(0.5, rowTop + 0.5, width - 1, rowHeight - 1);
+    }
     ctx.strokeStyle = "#1f2744";
     ctx.beginPath();
     ctx.moveTo(0, rowTop + rowHeight);
@@ -2969,7 +3066,12 @@ function render() {
 
   renderWaveMarkers(leftLabel, waveWidth, top, height);
 
-  if (dragState && dragState.kind === "reorder" && dragState.visibleKey === visibleKey) {
+  if (
+    dragState
+    && dragState.kind === "reorder"
+    && dragState.visibleKey === visibleKey
+    && reorderWouldChange(dragState.sourceIndex, dragState.targetIndex, dragState.visibleIds.length)
+  ) {
     const y = insertionLineY(dragState.targetIndex);
     ctx.strokeStyle = "#6ea8ff";
     ctx.lineWidth = 2;
@@ -3077,6 +3179,16 @@ sidebarClose.addEventListener("click", () => {
 search.addEventListener("input", () => {
   buildSidebar();
   render();
+});
+
+window.addEventListener("mousedown", event => {
+  if (activeMarkerId === null) {
+    return;
+  }
+  if (shouldKeepMarkerFocusOnMouseDown(event)) {
+    return;
+  }
+  clearActiveMarker();
 });
 
 window.addEventListener("keydown", event => {
@@ -3201,14 +3313,14 @@ viewer.addEventListener("mousedown", event => {
     if (marker) {
       event.preventDefault();
       if (activeMarkerId !== marker.id) {
-        activeMarkerId = marker.id;
+        focusMarker(marker.id, { shouldRender: false });
         hoverActionSignalId = null;
         hoverHandleSignalId = null;
         hoverState = null;
         render();
         return;
       }
-      activeMarkerId = marker.id;
+      focusMarker(marker.id, { shouldRender: false });
       hoverActionSignalId = null;
       hoverHandleSignalId = null;
       hoverState = null;
