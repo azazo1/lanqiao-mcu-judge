@@ -24,6 +24,24 @@ void Uart2_Init(void)	//9600bps@12.000MHz
 	IE2 |= 0x01;		//使能串口2中断
 }
 
+void Uart2_Init_115200_9Bit(void)	//115200bps@12.000MHz
+{
+	S2CON = 0xD0;		//9位数据,可变波特率
+	AUXR |= 0x04;		//定时器时钟1T模式
+	T2L = 0xE6;			//设置定时初始值
+	T2H = 0xFF;			//设置定时初始值
+	AUXR |= 0x10;		//定时器2开始计时
+	IE2 |= 0x01;		//使能串口2中断
+}
+
+void Uart2_Send9Bit(u8 dat, bit b9) {
+    if (b9) S2CON |= S2TB8;  // 设置第9位为1
+    else    S2CON &= ~S2TB8; // 设置第9位为0
+    
+    S2BUF = dat;
+    while (!(S2CON & S2TI)); // 等待发送完成
+    S2CON &= ~S2TI;          // 清除标志
+}
 
 extern char putchar(char ch) {
 	SBUF = ch;

@@ -26,6 +26,7 @@ pdata u8 uart2_buf[UART2_BUF_SIZE] = {
 	0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 	0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 };
+pdata u8 uart2_buf_9th[UART2_BUF_SIZE];
 
 idata uint val = 0;
 idata uint cnt = 0;
@@ -62,33 +63,34 @@ void uart1_proc() {
 }
 
 void uart2_proc() {
-	uint i;
+	int i;
 	if (uart2_idx == 0) return;
 	if (uart2_tick < 10) return;
-	
-	for (i = 0; i < uart2_idx; ++i) {
-		u8 t = uart2_buf[i];
-		uart2_buf[i] = uart2_buf[uart2_idx - 1 - i];
-		uart2_buf[uart2_idx - i] = t;
+
+	for (i = (int)uart2_idx - 1; i >= 0; i--) {
+		Uart2_Send9Bit(uart2_buf[i], uart2_buf_9th[i]);
 	}
-	
-	printf("%s", uart2_buf);
-	
+
 	memset(uart2_buf, 0, UART2_BUF_SIZE);
+	memset(uart2_buf_9th, 0, UART2_BUF_SIZE);
 	uart2_idx = 0;
 }
 
 void Uart2_Isr(void) interrupt 8
 {
-	/*if (S2CON & 0x02)	//检测串口2发送中断
+	if (S2CON & S2RI)
 	{
-		S2CON &= ~0x02;	//清除串口2发送中断请求位
-	}*/
-	if (S2CON & 0x01)	//检测串口2接收中断
-	{
-		S2CON &= ~0x01;	//清除串口2接收中断请求位
+		S2CON &= ~S2RI;
+		// store 9th bit (S2RB8)
+		uart2_buf_9th[uart2_idx] = (S2CON & S2RB8) ? 1 : 0;
+
+		uart2_buf[uart2_idx++] = S2BUF;
+
+		if (uart2_idx >= UART2_BUF_SIZE) uart2_idx = 0;
+		uart2_tick = 0;
 	}
 }
+
 
 void Uart1_Isr(void) interrupt 4
 {
@@ -103,7 +105,7 @@ void Uart1_Isr(void) interrupt 4
 	}
 }
 
-void Timer1_Isr(void) interrupt 3
+void Timer0_Isr(void) interrupt 1
 {
 	++sg_sd;
 	++uart1_tick;
@@ -116,23 +118,23 @@ void Timer1_Isr(void) interrupt 3
 	}
 }
 
-void Timer1_Init(void)		//1毫秒@12.000MHz
+void Timer0_Init(void)		//1毫秒@12.000MHz
 {
-	AUXR &= 0xBF;			//定时器时钟12T模式
-	TMOD &= 0x0F;			//设置定时器模式
-	TL1 = 0x18;				//设置定时初始值
-	TH1 = 0xFC;				//设置定时初始值
-	TF1 = 0;				//清除TF1标志
-	TR1 = 1;				//定时器1开始计时
-	ET1 = 1;				//使能定时器1中断
+	AUXR &= 0x7F;			//定时器时钟12T模式
+	TMOD &= 0xF0;			//设置定时器模式
+	TL0 = 0x18;				//设置定时初始值
+	TH0 = 0xFC;				//设置定时初始值
+	TF0 = 0;				//清除TF0标志
+	TR0 = 1;				//定时器0开始计时
+	ET0 = 1;				//使能定时器0中断
 	EA = 1;
 }
 
 void main() {
 	sys_init();
-	Timer1_Init();
+	Timer0_Init();
 	Uart1_Init();
-	Uart2_Init();
+	Uart2_Init_115200_9Bit();
 	while (1) {
 		sg_proc();
 		uart1_proc();
