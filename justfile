@@ -18,3 +18,33 @@ run-stdin hex:
 
 repl hex:
     cargo run --release -- repl --hex {{ hex }}
+
+judge-sample sample script="smoke.rhai":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    bin="target/release/stcjudge"
+    judge="sample/{{ sample }}/judge/{{ script }}"
+    hex="sample/{{ sample }}/prj/Objects/{{ sample }}.hex"
+    cargo build --release --bin stcjudge
+    if [ -f "$hex" ]; then
+        "$bin" run --hex "$hex" --script "$judge"
+    else
+        "$bin" run --script "$judge"
+    fi
+
+judge-samples:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    bin="target/release/stcjudge"
+    cargo build --release --bin stcjudge
+    while IFS= read -r judge; do
+        sample_dir=$(dirname "$(dirname "$judge")")
+        sample_name=$(basename "$sample_dir")
+        hex="$sample_dir/prj/Objects/$sample_name.hex"
+        echo "==> $judge"
+        if [ -f "$hex" ]; then
+            "$bin" run --hex "$hex" --script "$judge"
+        else
+            "$bin" run --script "$judge"
+        fi
+    done < <(find sample -type f -path '*/judge/*.rhai' | sort)
