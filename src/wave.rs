@@ -1515,7 +1515,8 @@ body {
   height: 40px;
 }
 button,
-input {
+input,
+select {
   font: inherit;
 }
 button {
@@ -1537,6 +1538,15 @@ button:disabled {
 }
 button:disabled:hover {
   background: #182234;
+}
+.toolbar-select {
+  min-width: 130px;
+  box-sizing: border-box;
+  background: #101628;
+  color: #eef2ff;
+  border: 1px solid #354675;
+  border-radius: 6px;
+  padding: 6px 28px 6px 10px;
 }
 input[type="search"] {
   width: 100%;
@@ -1749,7 +1759,7 @@ canvas {
           <button id="zoom-in">Zoom in</button>
           <button id="zoom-out">Zoom out</button>
           <button id="reset">Reset</button>
-          <button id="show-default">Default</button>
+          <select id="preset-select" class="toolbar-select" aria-label="Quick signal preset"></select>
           <button id="hide-all">Hide all</button>
         </div>
         <div class="toolbar-info">
@@ -1819,6 +1829,7 @@ const coverageHandleRight = document.getElementById("coverage-handle-right");
 const stats = document.getElementById("stats");
 const cursorInfo = document.getElementById("cursor-info");
 const search = document.getElementById("search");
+const presetSelect = document.getElementById("preset-select");
 const markerTimeInput = document.getElementById("marker-time");
 const markerLabelInput = document.getElementById("marker-label");
 const markerAddButton = document.getElementById("marker-add");
@@ -1860,9 +1871,30 @@ for (const signal of signals) {
   groups.get(key).signals.push(signal);
 }
 
-const selected = new Set(
-  signals.filter(signal => signal.default_visible).map(signal => signal.id)
-);
+const DEFAULT_SELECTED_IDS = signals
+  .filter(signal => signal.default_visible)
+  .map(signal => signal.id);
+const selected = new Set(DEFAULT_SELECTED_IDS);
+const QUICK_PRESET_DEFS = [
+  { id: "default", label: "Default", mode: "default" },
+  { id: "all", label: "All signals", mode: "all" },
+  { id: "i2c", label: "IIC / I2C", queries: ["iic", "i2c"], includeQueries: ["cpu", "seg", "display", "p2"] },
+  { id: "uart", label: "UART", queries: ["uart", "serial"], includeQueries: ["cpu", "seg", "display", "p1", "p3"] },
+  { id: "led", label: "LED", queries: ["led"] },
+  { id: "key", label: "Keys", queries: ["key", "button", "kbd", "keyboard"] },
+  { id: "seg", label: "SEG", queries: ["seg", "display"] },
+  { id: "adc_dac", label: "ADC / DAC", queries: ["adc", "dac"], includeQueries: ["iic", "i2c", "cpu", "seg", "display", "p2"] },
+  { id: "onewire", label: "1-Wire", queries: ["onewire", "1-wire"], includeQueries: ["cpu", "seg", "display"] },
+  { id: "cpu", label: "CPU / IRQ", queries: ["cpu", "interrupt"] },
+  { id: "pins", label: "Pins", queries: ["pins", "pin"] },
+  { id: "none", label: "None", mode: "none" },
+];
+const QUICK_PRESETS = QUICK_PRESET_DEFS
+  .map(def => ({
+    ...def,
+    ids: resolvePresetIds(def),
+  }))
+  .filter(preset => preset.mode === "default" || preset.mode === "all" || preset.mode === "none" || preset.ids.size > 0);
 let signalOrder = signals.map(signal => signal.id);
 
 let viewStart = data.start_ns;
@@ -1916,6 +1948,104 @@ function toggleSidebarCollapsed() {
 
 function searchQuery() {
   return search.value.trim().toLowerCase();
+}
+
+function searchTermsOf(signal) {
+  return [
+    signal.label.toLowerCase(),
+    signal.id.toLowerCase(),
+    signal.category.toLowerCase(),
+    signal.group.toLowerCase(),
+    ...signal.aliases,
+  ];
+}
+
+function signalMatchesAnyQuery(signal, queries) {
+  const terms = searchTermsOf(signal);
+  return queries.some(query => terms.some(term => termMatchesQuery(term, query)));
+}
+
+function resolvePresetIds(definition) {
+  if (definition.mode === "default") {
+    return new Set(DEFAULT_SELECTED_IDS);
+  }
+  if (definition.mode === "all") {
+    return new Set(signals.map(signal => signal.id));
+  }
+  if (definition.mode === "none") {
+    return new Set();
+  }
+  const queries = [
+    ...(definition.queries || []),
+    ...(definition.includeQueries || []),
+  ];
+  return new Set(
+    signals
+      .filter(signal => signalMatchesAnyQuery(signal, queries))
+      .map(signal => signal.id)
+  );
+}
+
+function selectedMatchesIds(ids) {
+  if (selected.size !== ids.size) {
+    return false;
+  }
+  for (const id of ids) {
+    if (!selected.has(id)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function currentPresetId() {
+  const matched = QUICK_PRESETS.find(preset => selectedMatchesIds(preset.ids));
+  return matched ? matched.id : "custom";
+}
+
+function buildPresetSelect() {
+  presetSelect.innerHTML = "";
+  for (const preset of QUICK_PRESETS) {
+    const option = document.createElement("option");
+    option.value = preset.id;
+    option.textContent = preset.label;
+    presetSelect.appendChild(option);
+  }
+  const customOption = document.createElement("option");
+  customOption.value = "custom";
+  customOption.textContent = "Custom";
+  presetSelect.appendChild(customOption);
+}
+
+function syncPresetSelect() {
+  presetSelect.value = currentPresetId();
+}
+
+function applySelectedIds(ids, options = {}) {
+  const { clearSearch = false } = options;
+  selected.clear();
+  for (const id of ids) {
+    selected.add(id);
+  }
+  if (clearSearch) {
+    search.value = "";
+  }
+  buildSidebar();
+  syncPresetSelect();
+  render();
+}
+
+function applyQuickPreset(presetId, options = {}) {
+  const preset = QUICK_PRESETS.find(candidate => candidate.id === presetId);
+  if (!preset) {
+    return false;
+  }
+  applySelectedIds(preset.ids, options);
+  return true;
+}
+
+function freezeDisplayedOrder() {
+  signalOrder = orderedSignalIds();
 }
 
 function clampView() {
@@ -2243,7 +2373,7 @@ function handleViewerWheelGesture(event) {
 
 function visibleSignals() {
   const query = searchQuery();
-  return signalOrder
+  return orderedSignalIds()
     .map(id => signalById.get(id))
     .filter(signal => {
       const matches = matchesQuery(signal, query);
@@ -2252,6 +2382,363 @@ function visibleSignals() {
       }
       return matches;
     });
+}
+
+function orderedSignalIds() {
+  const preset = activePresetForOrdering();
+  if (!preset) {
+    return signalOrder;
+  }
+  const orderIndex = new Map(signalOrder.map((id, index) => [id, index]));
+  return [...signalOrder].sort((leftId, rightId) => {
+    const leftSignal = signalById.get(leftId);
+    const rightSignal = signalById.get(rightId);
+    const leftKey = presetSortKey(preset.id, leftSignal, orderIndex.get(leftId) ?? 0);
+    const rightKey = presetSortKey(preset.id, rightSignal, orderIndex.get(rightId) ?? 0);
+    return compareSortKeys(leftKey, rightKey);
+  });
+}
+
+function activePresetForOrdering() {
+  const presetId = currentPresetId();
+  if (presetId === "custom" || presetId === "default" || presetId === "all" || presetId === "none") {
+    return null;
+  }
+  return QUICK_PRESETS.find(preset => preset.id === presetId) || null;
+}
+
+function compareSortKeys(left, right) {
+  const size = Math.max(left.length, right.length);
+  for (let index = 0; index < size; index += 1) {
+    const leftValue = left[index] ?? 0;
+    const rightValue = right[index] ?? 0;
+    if (leftValue !== rightValue) {
+      return leftValue - rightValue;
+    }
+  }
+  return 0;
+}
+
+function presetSortKey(presetId, signal, fallbackIndex) {
+  switch (presetId) {
+    case "uart":
+      return uartPresetSortKey(signal, fallbackIndex);
+    case "i2c":
+      return i2cPresetSortKey(signal, fallbackIndex);
+    case "adc_dac":
+      return adcDacPresetSortKey(signal, fallbackIndex);
+    case "onewire":
+      return oneWirePresetSortKey(signal, fallbackIndex);
+    case "seg":
+      return segPresetSortKey(signal, fallbackIndex);
+    case "led":
+      return ledPresetSortKey(signal, fallbackIndex);
+    case "key":
+      return keyPresetSortKey(signal, fallbackIndex);
+    case "cpu":
+      return cpuPresetSortKey(signal, fallbackIndex);
+    case "pins":
+      return pinsPresetSortKey(signal, fallbackIndex);
+    default:
+      return genericPresetSortKey(signal, fallbackIndex);
+  }
+}
+
+function genericPresetSortKey(signal, fallbackIndex) {
+  if (signal.kind === "event") {
+    return [0, fallbackIndex];
+  }
+  if (isDisplayTextSignal(signal)) {
+    return [1, displayDetailRank(signal), fallbackIndex];
+  }
+  if (signal.kind === "analog") {
+    return [2, fallbackIndex];
+  }
+  if (isPortByteSignal(signal)) {
+    return [3, portCategoryRank(signal), portOrderRank(signal), fallbackIndex];
+  }
+  if (isRawPortSignal(signal)) {
+    return [4, portCategoryRank(signal), portOrderRank(signal), portBitRank(signal), fallbackIndex];
+  }
+  return [10, fallbackIndex];
+}
+
+function uartPresetSortKey(signal, fallbackIndex) {
+  const uartGroupRank = protocolGroupRank(signal, ["uart1", "uart2"]);
+  if (isProtocolEventSignal(signal, ["uart", "serial"])) {
+    return [0, uartGroupRank, fallbackIndex];
+  }
+  if (isProtocolWaveSignal(signal, ["uart", "serial"])) {
+    return [1, uartGroupRank, uartSignalLineRank(signal), fallbackIndex];
+  }
+  if (isCpuEventSignal(signal)) {
+    return [2, fallbackIndex];
+  }
+  if (isDisplayTextSignal(signal)) {
+    return [3, displayDetailRank(signal), fallbackIndex];
+  }
+  if (isDisplaySignal(signal)) {
+    return [4, displayDetailRank(signal), fallbackIndex];
+  }
+  if (isPortByteSignal(signal) && signalMatchesAnyQuery(signal, ["p1", "p3"])) {
+    return [5, portOrderRank(signal), portCategoryRank(signal), fallbackIndex];
+  }
+  if (isRawPortSignal(signal) && signalMatchesAnyQuery(signal, ["p1", "p3"])) {
+    return [6, portOrderRank(signal), portCategoryRank(signal), portBitRank(signal), fallbackIndex];
+  }
+  return [10, fallbackIndex];
+}
+
+function i2cPresetSortKey(signal, fallbackIndex) {
+  if (isProtocolEventSignal(signal, ["iic", "i2c"])) {
+    return [0, fallbackIndex];
+  }
+  if (isProtocolWaveSignal(signal, ["iic", "i2c"])) {
+    return [1, i2cLineRank(signal), fallbackIndex];
+  }
+  if (isCpuEventSignal(signal)) {
+    return [2, fallbackIndex];
+  }
+  if (isDisplayTextSignal(signal)) {
+    return [3, displayDetailRank(signal), fallbackIndex];
+  }
+  if (isDisplaySignal(signal)) {
+    return [4, displayDetailRank(signal), fallbackIndex];
+  }
+  if (isPortByteSignal(signal) && signalMatchesAnyQuery(signal, ["p2"])) {
+    return [5, portCategoryRank(signal), fallbackIndex];
+  }
+  if (isRawPortSignal(signal) && signalMatchesAnyQuery(signal, ["p2"])) {
+    return [6, portCategoryRank(signal), portBitRank(signal), fallbackIndex];
+  }
+  return [10, fallbackIndex];
+}
+
+function adcDacPresetSortKey(signal, fallbackIndex) {
+  if (isProtocolEventSignal(signal, ["adc", "dac"])) {
+    return [0, fallbackIndex];
+  }
+  if (signal.kind === "analog" || signal.kind === "integer") {
+    if (signalMatchesAnyQuery(signal, ["adc", "dac", "ain"])) {
+      return [1, analogSignalRank(signal), fallbackIndex];
+    }
+  }
+  if (isCpuEventSignal(signal)) {
+    return [2, fallbackIndex];
+  }
+  if (isProtocolEventSignal(signal, ["iic", "i2c"])) {
+    return [3, fallbackIndex];
+  }
+  if (isProtocolWaveSignal(signal, ["iic", "i2c"])) {
+    return [4, i2cLineRank(signal), fallbackIndex];
+  }
+  if (isDisplayTextSignal(signal)) {
+    return [5, displayDetailRank(signal), fallbackIndex];
+  }
+  if (isDisplaySignal(signal)) {
+    return [6, displayDetailRank(signal), fallbackIndex];
+  }
+  if (isPortByteSignal(signal) && signalMatchesAnyQuery(signal, ["p2"])) {
+    return [7, portCategoryRank(signal), fallbackIndex];
+  }
+  if (isRawPortSignal(signal) && signalMatchesAnyQuery(signal, ["p2"])) {
+    return [8, portCategoryRank(signal), portBitRank(signal), fallbackIndex];
+  }
+  return [10, fallbackIndex];
+}
+
+function oneWirePresetSortKey(signal, fallbackIndex) {
+  if (isProtocolEventSignal(signal, ["onewire", "1-wire"])) {
+    return [0, fallbackIndex];
+  }
+  if (isProtocolWaveSignal(signal, ["onewire", "1-wire"])) {
+    return [1, fallbackIndex];
+  }
+  if (isCpuEventSignal(signal)) {
+    return [2, fallbackIndex];
+  }
+  if (isDisplayTextSignal(signal)) {
+    return [3, displayDetailRank(signal), fallbackIndex];
+  }
+  if (isDisplaySignal(signal)) {
+    return [4, displayDetailRank(signal), fallbackIndex];
+  }
+  return [10, fallbackIndex];
+}
+
+function segPresetSortKey(signal, fallbackIndex) {
+  if (isDisplayTextSignal(signal)) {
+    return [0, displayDetailRank(signal), fallbackIndex];
+  }
+  if (isDisplaySignal(signal)) {
+    return [1, displayDetailRank(signal), fallbackIndex];
+  }
+  return [10, fallbackIndex];
+}
+
+function ledPresetSortKey(signal, fallbackIndex) {
+  if (signalMatchesAnyQuery(signal, ["led"])) {
+    return [0, signal.kind === "event" ? 0 : 1, fallbackIndex];
+  }
+  return [10, fallbackIndex];
+}
+
+function keyPresetSortKey(signal, fallbackIndex) {
+  if (signalMatchesAnyQuery(signal, ["key", "button", "kbd", "keyboard"])) {
+    return [0, fallbackIndex];
+  }
+  return [10, fallbackIndex];
+}
+
+function cpuPresetSortKey(signal, fallbackIndex) {
+  if (isCpuEventSignal(signal)) {
+    return [0, fallbackIndex];
+  }
+  return [10, fallbackIndex];
+}
+
+function pinsPresetSortKey(signal, fallbackIndex) {
+  if (isPortByteSignal(signal)) {
+    return [0, portCategoryRank(signal), portOrderRank(signal), fallbackIndex];
+  }
+  if (isRawPortSignal(signal)) {
+    return [1, portCategoryRank(signal), portOrderRank(signal), portBitRank(signal), fallbackIndex];
+  }
+  return [10, fallbackIndex];
+}
+
+function isProtocolEventSignal(signal, queries) {
+  return signal.kind === "event" && signalMatchesAnyQuery(signal, queries);
+}
+
+function isProtocolWaveSignal(signal, queries) {
+  return signal.kind !== "event" && signalMatchesAnyQuery(signal, queries);
+}
+
+function isCpuEventSignal(signal) {
+  return signal.kind === "event" && signalMatchesAnyQuery(signal, ["cpu", "interrupt"]);
+}
+
+function isDisplaySignal(signal) {
+  return signal.category === "display";
+}
+
+function isDisplayTextSignal(signal) {
+  return signal.category === "display" && signal.kind === "text";
+}
+
+function isPortByteSignal(signal) {
+  return Boolean(portInfoOfSignal(signal)) && signal.format === "hex8";
+}
+
+function isRawPortSignal(signal) {
+  const info = portInfoOfSignal(signal);
+  return Boolean(info) && info.bit !== null;
+}
+
+function protocolGroupRank(signal, groupsInOrder) {
+  const group = signal.group.toLowerCase();
+  const index = groupsInOrder.indexOf(group);
+  return index >= 0 ? index : 99;
+}
+
+function uartSignalLineRank(signal) {
+  const label = signal.label.toLowerCase();
+  if (label === "tx") {
+    return 0;
+  }
+  if (label === "rx") {
+    return 1;
+  }
+  return 9;
+}
+
+function i2cLineRank(signal) {
+  const label = signal.label.toLowerCase();
+  const ranks = [
+    "master scl",
+    "master sda",
+    "bus scl",
+    "bus sda",
+    "slave scl low",
+    "slave sda low",
+  ];
+  const index = ranks.indexOf(label);
+  return index >= 0 ? index : 99;
+}
+
+function displayDetailRank(signal) {
+  const id = signal.id.toLowerCase();
+  if (id === "seg.text") {
+    return 0;
+  }
+  if (id.includes(".text")) {
+    return 1;
+  }
+  if (id.includes(".raw")) {
+    return 2;
+  }
+  return 3;
+}
+
+function analogSignalRank(signal) {
+  const label = signal.label.toLowerCase();
+  if (label === "adc/dac events") {
+    return 0;
+  }
+  if (label === "adc code") {
+    return 1;
+  }
+  if (label === "adc channel") {
+    return 2;
+  }
+  if (label === "adc source v") {
+    return 3;
+  }
+  if (label === "dac code") {
+    return 4;
+  }
+  if (label === "dac v") {
+    return 5;
+  }
+  return 9;
+}
+
+function portInfoOfSignal(signal) {
+  const match = String(signal.id).match(/\b(p[0-7])(?:\.(\d))?$/i);
+  if (!match) {
+    return null;
+  }
+  return {
+    port: match[1].toLowerCase(),
+    bit: match[2] === undefined ? null : Number(match[2]),
+  };
+}
+
+function portOrderRank(signal) {
+  const info = portInfoOfSignal(signal);
+  if (!info) {
+    return 99;
+  }
+  return Number(info.port.slice(1));
+}
+
+function portBitRank(signal) {
+  const info = portInfoOfSignal(signal);
+  if (!info || info.bit === null) {
+    return -1;
+  }
+  return info.bit;
+}
+
+function portCategoryRank(signal) {
+  if (signal.category === "pins") {
+    return 0;
+  }
+  if (signal.category === "port_latches") {
+    return 1;
+  }
+  return 9;
 }
 
 function reorderSignal(sourceId, sourceIndex, targetIndex, visibleIds) {
@@ -2384,14 +2871,7 @@ function matchesQuery(signal, query) {
   if (!query) {
     return true;
   }
-  const searchTerms = [
-    signal.label.toLowerCase(),
-    signal.id.toLowerCase(),
-    signal.category.toLowerCase(),
-    signal.group.toLowerCase(),
-    ...signal.aliases,
-  ];
-  return searchTerms.some(term => termMatchesQuery(term, query));
+  return searchTermsOf(signal).some(term => termMatchesQuery(term, query));
 }
 
 function buildSidebar() {
@@ -2418,6 +2898,7 @@ function buildSidebar() {
     toggle.type = "button";
     toggle.textContent = "toggle";
     toggle.addEventListener("click", () => {
+      freezeDisplayedOrder();
       const anyOff = signals.some(signal => !selected.has(signal.id));
       for (const signal of signals) {
         if (anyOff) {
@@ -2427,6 +2908,7 @@ function buildSidebar() {
         }
       }
       buildSidebar();
+      syncPresetSelect();
       render();
     });
     header.appendChild(toggle);
@@ -2440,11 +2922,13 @@ function buildSidebar() {
       checkbox.type = "checkbox";
       checkbox.checked = selected.has(signal.id);
       checkbox.addEventListener("change", () => {
+        freezeDisplayedOrder();
         if (checkbox.checked) {
           selected.add(signal.id);
         } else {
           selected.delete(signal.id);
         }
+        syncPresetSelect();
         render();
       });
       label.appendChild(checkbox);
@@ -3294,21 +3778,14 @@ document.getElementById("reset").addEventListener("click", () => {
   render();
 });
 
-document.getElementById("show-default").addEventListener("click", () => {
-  selected.clear();
-  for (const signal of signals) {
-    if (signal.default_visible) {
-      selected.add(signal.id);
-    }
+presetSelect.addEventListener("change", () => {
+  if (!applyQuickPreset(presetSelect.value, { clearSearch: true })) {
+    syncPresetSelect();
   }
-  buildSidebar();
-  render();
 });
 
 document.getElementById("hide-all").addEventListener("click", () => {
-  selected.clear();
-  buildSidebar();
-  render();
+  applyQuickPreset("none");
 });
 
 markerAddButton.addEventListener("click", () => {
@@ -3597,8 +4074,10 @@ viewer.addEventListener("click", event => {
   if (!actionRow) {
     return;
   }
+  freezeDisplayedOrder();
   selected.delete(actionRow.signal.id);
   buildSidebar();
+  syncPresetSelect();
   render();
 });
 
@@ -3679,7 +4158,9 @@ window.addEventListener("resize", () => {
 });
 
 applySidebarCollapsed(loadSidebarCollapsed(), { persist: false, shouldRender: false });
+buildPresetSelect();
 buildSidebar();
+syncPresetSelect();
 render();
 </script>
 </body>
