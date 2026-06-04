@@ -214,15 +214,15 @@ fn register_script_progress_debugger(
                 DebuggerEvent::Start | DebuggerEvent::Step | DebuggerEvent::BreakPoint(_) => {
                     debug!(
                         target: "script_progress",
-                        label,
-                        event = script_event_name(event),
-                        step,
+                        snippet,
                         sim_time_ns,
                         line = pos.line().unwrap_or(0),
+                        event = script_event_name(event),
+                        step,
                         column = pos.position().unwrap_or(0),
                         call_level = context.call_level(),
-                        snippet,
                         is_stmt = node.is_stmt(),
+                        label,
                         "执行评测脚本语句"
                     );
                     Ok(DebuggerCommand::Next)
