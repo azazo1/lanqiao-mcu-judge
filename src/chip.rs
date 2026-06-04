@@ -962,8 +962,12 @@ impl Simulator {
             ds1302_io: self.ctx.ports.port_input[2] & (1 << 3) != 0,
             uart1_tx_high: self.ctx.ports.uart1.tx_line_high(),
             uart1_rx_high: self.ctx.ports.uart1.rx_line_high(),
+            uart1_ti: self.ctx.ports.uart1.ti_pending(),
+            uart1_ri: self.ctx.ports.uart1.ri_pending(),
             uart2_tx_high: self.ctx.ports.uart2.tx_line_high(),
             uart2_rx_high: self.ctx.ports.uart2.rx_line_high(),
+            uart2_ti: self.ctx.ports.uart2.ti_pending(),
+            uart2_ri: self.ctx.ports.uart2.ri_pending(),
             key_states,
             led_states: self.ctx.board.outputs.leds,
             relay_on: self.ctx.board.outputs.relay_on,
@@ -1710,6 +1714,26 @@ impl Uart {
 
     fn rx_line_high(&self) -> bool {
         self.rx_line_high
+    }
+
+    fn ti_pending(&self) -> bool {
+        self.control
+            & if self.scon_addr == UART2_SFR_S2CON {
+                S2CON_TI
+            } else {
+                SCON_TI
+            }
+            != 0
+    }
+
+    fn ri_pending(&self) -> bool {
+        self.control
+            & if self.scon_addr == UART2_SFR_S2CON {
+                S2CON_RI
+            } else {
+                SCON_RI
+            }
+            != 0
     }
 
     fn take_tx_string(&mut self) -> String {

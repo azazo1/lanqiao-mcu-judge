@@ -167,8 +167,12 @@ pub(crate) struct WaveSnapshot {
     pub(crate) ds1302_io: bool,
     pub(crate) uart1_tx_high: bool,
     pub(crate) uart1_rx_high: bool,
+    pub(crate) uart1_ti: bool,
+    pub(crate) uart1_ri: bool,
     pub(crate) uart2_tx_high: bool,
     pub(crate) uart2_rx_high: bool,
+    pub(crate) uart2_ti: bool,
+    pub(crate) uart2_ri: bool,
     pub(crate) key_states: [bool; 16],
     pub(crate) led_states: [bool; 8],
     pub(crate) relay_on: bool,
@@ -334,8 +338,12 @@ struct WaveSignalSlots {
     ds1302_io: usize,
     uart1_tx: usize,
     uart1_rx: usize,
+    uart1_ti: usize,
+    uart1_ri: usize,
     uart2_tx: usize,
     uart2_rx: usize,
+    uart2_ti: usize,
+    uart2_ri: usize,
     key_states: [usize; 16],
     led_states: [usize; 8],
     relay_on: usize,
@@ -808,11 +816,23 @@ impl WaveRecorder {
         if prev.is_none_or(|last| last.uart1_rx_high != snapshot.uart1_rx_high) {
             self.record_bool_index(slots.uart1_rx, snapshot.time_ns, snapshot.uart1_rx_high);
         }
+        if prev.is_none_or(|last| last.uart1_ti != snapshot.uart1_ti) {
+            self.record_bool_index(slots.uart1_ti, snapshot.time_ns, snapshot.uart1_ti);
+        }
+        if prev.is_none_or(|last| last.uart1_ri != snapshot.uart1_ri) {
+            self.record_bool_index(slots.uart1_ri, snapshot.time_ns, snapshot.uart1_ri);
+        }
         if prev.is_none_or(|last| last.uart2_tx_high != snapshot.uart2_tx_high) {
             self.record_bool_index(slots.uart2_tx, snapshot.time_ns, snapshot.uart2_tx_high);
         }
         if prev.is_none_or(|last| last.uart2_rx_high != snapshot.uart2_rx_high) {
             self.record_bool_index(slots.uart2_rx, snapshot.time_ns, snapshot.uart2_rx_high);
+        }
+        if prev.is_none_or(|last| last.uart2_ti != snapshot.uart2_ti) {
+            self.record_bool_index(slots.uart2_ti, snapshot.time_ns, snapshot.uart2_ti);
+        }
+        if prev.is_none_or(|last| last.uart2_ri != snapshot.uart2_ri) {
+            self.record_bool_index(slots.uart2_ri, snapshot.time_ns, snapshot.uart2_ri);
         }
 
         for index in 0..KEY_NAMES.len() {
@@ -1180,8 +1200,12 @@ impl WaveRecorder {
         for (id, label, group, visible) in [
             ("uart1.tx", "TX", "uart1", true),
             ("uart1.rx", "RX", "uart1", true),
+            ("uart1.ti", "TI", "uart1", true),
+            ("uart1.ri", "RI", "uart1", true),
             ("uart2.tx", "TX", "uart2", false),
             ("uart2.rx", "RX", "uart2", false),
+            ("uart2.ti", "TI", "uart2", false),
+            ("uart2.ri", "RI", "uart2", false),
         ] {
             let index = self.register_signal(
                 id,
@@ -1196,8 +1220,12 @@ impl WaveRecorder {
             match id {
                 "uart1.tx" => slots.uart1_tx = index,
                 "uart1.rx" => slots.uart1_rx = index,
+                "uart1.ti" => slots.uart1_ti = index,
+                "uart1.ri" => slots.uart1_ri = index,
                 "uart2.tx" => slots.uart2_tx = index,
                 "uart2.rx" => slots.uart2_rx = index,
+                "uart2.ti" => slots.uart2_ti = index,
+                "uart2.ri" => slots.uart2_ri = index,
                 _ => {}
             }
         }
@@ -1951,6 +1979,20 @@ mod tests {
         let aliases = signal_aliases("uart1.tx", "TX", "protocol", "uart1");
         assert!(aliases.iter().any(|alias| alias == "serial1 tx"));
         assert!(aliases.iter().any(|alias| alias == "serial 1"));
+    }
+
+    #[test]
+    fn recorder_registers_uart_interrupt_flag_signals() {
+        let recorder = WaveRecorder::new_with_window(WaveCaptureWindow::bounded(0, Some(100)));
+        let ids = recorder
+            .signals
+            .iter()
+            .map(|signal| signal.def.id.as_str())
+            .collect::<Vec<_>>();
+        assert!(ids.contains(&"uart1.ti"));
+        assert!(ids.contains(&"uart1.ri"));
+        assert!(ids.contains(&"uart2.ti"));
+        assert!(ids.contains(&"uart2.ri"));
     }
 
     #[test]
