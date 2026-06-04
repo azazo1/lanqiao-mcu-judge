@@ -1731,6 +1731,21 @@ label {
   background: #0d1324;
   border-bottom: 1px solid #1f2744;
 }
+.sidebar,
+.toolbar-actions,
+.toolbar-slot,
+.viewer {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.sidebar::-webkit-scrollbar,
+.toolbar-actions::-webkit-scrollbar,
+.toolbar-slot::-webkit-scrollbar,
+.viewer::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
 canvas {
   display: block;
 }
@@ -1908,6 +1923,7 @@ let markers = [];
 let nextMarkerId = 1;
 let activeMarkerId = null;
 let sidebarCollapsed = false;
+let renderScheduled = false;
 
 function loadSidebarCollapsed() {
   try {
@@ -1944,6 +1960,17 @@ function applySidebarCollapsed(collapsed, options = {}) {
 
 function toggleSidebarCollapsed() {
   applySidebarCollapsed(!sidebarCollapsed);
+}
+
+function scheduleRender() {
+  if (renderScheduled) {
+    return;
+  }
+  renderScheduled = true;
+  window.requestAnimationFrame(() => {
+    renderScheduled = false;
+    render();
+  });
 }
 
 function searchQuery() {
@@ -3039,23 +3066,133 @@ function sampleArray(signal) {
   return samples[signal.id] || [];
 }
 
+function firstTimedIndexGreaterThan(items, timeNs) {
+  let low = 0;
+  let high = items.length;
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    if (items[mid].t <= timeNs) {
+      low = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+  return low;
+}
+
+function pointRangeForView(points) {
+  if (!points.length) {
+    return null;
+  }
+  const startIndex = Math.max(0, firstTimedIndexGreaterThan(points, viewStart) - 1);
+  const endExclusive = Math.max(startIndex + 1, firstTimedIndexGreaterThan(points, viewEnd));
+  return {
+    startIndex,
+    endExclusive: Math.min(points.length, endExclusive),
+  };
+}
+
+function eventRangeForView(trackEvents) {
+  if (!trackEvents.length) {
+    return null;
+  }
+  const startIndex = firstTimedIndexGreaterThan(trackEvents, viewStart - 1);
+  const endExclusive = Math.max(startIndex, firstTimedIndexGreaterThan(trackEvents, viewEnd));
+  return {
+    startIndex,
+    endExclusive: Math.min(trackEvents.length, endExclusive),
+  };
+}
+
 function segmentAt(points, timeNs) {
   if (!points.length) {
     return null;
   }
-  let current = points[0];
-  for (const point of points) {
-    if (point.t > timeNs) {
-      break;
-    }
-    current = point;
-  }
-  return current;
+  const index = Math.max(0, firstTimedIndexGreaterThan(points, timeNs) - 1);
+  return points[index];
 }
 
 function xOf(timeNs, waveLeft, waveWidth) {
   const span = Math.max(1, viewEnd - viewStart);
   return waveLeft + (timeNs - viewStart) * waveWidth / span;
+}
+
+function columnRangeForTimeSpan(startNs, endNs, pixelCount) {
+  if (endNs <= startNs || pixelCount <= 0) {
+    return null;
+  }
+  const spanNs = Math.max(1, viewEnd - viewStart);
+  const left = Math.max(
+    0,
+    Math.min(
+      pixelCount - 1,
+      Math.floor((Math.max(startNs, viewStart) - viewStart) * pixelCount / spanNs)
+    )
+  );
+  const right = Math.max(
+    left,
+    Math.min(
+      pixelCount - 1,
+      Math.ceil((Math.min(endNs, viewEnd) - viewStart) * pixelCount / spanNs) - 1
+    )
+  );
+  return { left, right };
+}
+
+function viewerCanvasViewport() {
+  const rulerHeight = viewerRuler.offsetHeight || VIEWER_RULER_HEIGHT;
+  const top = Math.max(0, viewer.scrollTop - rulerHeight);
+  const height = Math.max(0, viewer.clientHeight - rulerHeight);
+  return {
+    top,
+    bottom: top + height,
+  };
+}
+
+function visibleRowViewport(rowCount, rowHeight, topPadding) {
+  if (rowCount <= 0) {
+    return { first: 0, last: -1, strictFirst: 0, strictLast: -1 };
+  }
+  const canvasViewport = viewerCanvasViewport();
+  const visibleTop = Math.max(0, canvasViewport.top - topPadding);
+  const visibleBottom = Math.max(visibleTop, canvasViewport.bottom - topPadding);
+  const strictFirst = Math.max(0, Math.floor(visibleTop / rowHeight));
+  const strictLast = Math.min(
+    rowCount - 1,
+    Math.floor(Math.max(0, visibleBottom - 1) / rowHeight)
+  );
+  const overscan = 4;
+  return {
+    first: Math.max(0, strictFirst - overscan),
+    last: Math.min(rowCount - 1, strictLast + overscan),
+    strictFirst,
+    strictLast,
+  };
+}
+
+function rowVisibilityState(index, viewport) {
+  if (index < viewport.first || index > viewport.last) {
+    return "far";
+  }
+  if (index < viewport.strictFirst || index > viewport.strictLast) {
+    return "near";
+  }
+  return "visible";
+}
+
+function buildRenderDetail(waveWidth) {
+  const pixelCount = Math.max(1, Math.ceil(waveWidth));
+  const spanNs = viewSpanNs();
+  const nsPerPixel = spanNs / Math.max(1, waveWidth);
+  return {
+    pixelCount,
+    nsPerPixel,
+    denseDigitalThreshold: pixelCount * 6,
+    denseBusThreshold: pixelCount,
+    denseAnalogThreshold: pixelCount * 2,
+    eventLineGapPx: nsPerPixel >= 1_000_000 ? 4 : (nsPerPixel >= 100_000 ? 2 : 0),
+    eventLabelGapPx: nsPerPixel >= 1_000_000 ? 72 : (nsPerPixel >= 100_000 ? 40 : (nsPerPixel >= 10_000 ? 24 : 12)),
+  };
 }
 
 function hashText(text) {
@@ -3374,77 +3511,193 @@ function shouldKeepMarkerFocusOnMouseDown(event) {
   return false;
 }
 
-function renderDigital(signal, rowTop, rowHeight, waveLeft, waveWidth) {
+function renderDigitalDense(points, range, rowTop, rowHeight, waveLeft, waveWidth, detail) {
+  const highY = rowTop + 16;
+  const lowY = rowTop + rowHeight - 12;
+  const highDiff = new Int32Array(detail.pixelCount + 1);
+  const lowDiff = new Int32Array(detail.pixelCount + 1);
+  let segmentStart = viewStart;
+  let currentValue = Boolean(points[range.startIndex].v);
+  for (let index = range.startIndex + 1; index <= range.endExclusive; index += 1) {
+    const nextTime = index < points.length ? points[index].t : viewEnd;
+    const bounds = columnRangeForTimeSpan(segmentStart, nextTime, detail.pixelCount);
+    if (bounds) {
+      const diff = currentValue ? highDiff : lowDiff;
+      diff[bounds.left] += 1;
+      diff[bounds.right + 1] -= 1;
+    }
+    if (index >= range.endExclusive) {
+      break;
+    }
+    segmentStart = points[index].t;
+    currentValue = Boolean(points[index].v);
+  }
+  ctx.strokeStyle = "#83a8ff";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  let highCount = 0;
+  let lowCount = 0;
+  for (let pixel = 0; pixel < detail.pixelCount; pixel += 1) {
+    highCount += highDiff[pixel];
+    lowCount += lowDiff[pixel];
+    if (!highCount && !lowCount) {
+      continue;
+    }
+    const x = waveLeft + pixel + 0.5;
+    if (highCount && lowCount) {
+      ctx.moveTo(x, highY);
+      ctx.lineTo(x, lowY);
+      continue;
+    }
+    const y = highCount ? highY : lowY;
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + 1, y);
+  }
+  ctx.stroke();
+}
+
+function renderDigital(signal, rowTop, rowHeight, waveLeft, waveWidth, detail) {
   const points = sampleArray(signal);
   if (!points.length) {
     return;
   }
+  const range = pointRangeForView(points);
+  if (!range) {
+    return;
+  }
+  const visibleCount = range.endExclusive - range.startIndex;
+  if (visibleCount > detail.denseDigitalThreshold) {
+    renderDigitalDense(points, range, rowTop, rowHeight, waveLeft, waveWidth, detail);
+    return;
+  }
   const highY = rowTop + 16;
   const lowY = rowTop + rowHeight - 12;
-  const startPoint = segmentAt(points, viewStart) || points[0];
   ctx.strokeStyle = "#83a8ff";
   ctx.lineWidth = 2;
   ctx.beginPath();
-  let currentValue = Boolean(startPoint.v);
-  let currentX = waveLeft;
-  ctx.moveTo(currentX, currentValue ? highY : lowY);
-  for (const point of points) {
-    if (point.t < viewStart || point.t > viewEnd) {
-      continue;
-    }
+  let currentValue = Boolean(points[range.startIndex].v);
+  ctx.moveTo(waveLeft, currentValue ? highY : lowY);
+  for (let index = range.startIndex + 1; index < range.endExclusive; index += 1) {
+    const point = points[index];
     const x = xOf(point.t, waveLeft, waveWidth);
     ctx.lineTo(x, currentValue ? highY : lowY);
     currentValue = Boolean(point.v);
     ctx.lineTo(x, currentValue ? highY : lowY);
-    currentX = x;
   }
   ctx.lineTo(waveLeft + waveWidth, currentValue ? highY : lowY);
   ctx.stroke();
 }
 
-function renderBusLike(signal, rowTop, rowHeight, waveLeft, waveWidth) {
+function renderBusLike(signal, rowTop, rowHeight, waveLeft, waveWidth, detail) {
   const points = sampleArray(signal);
   if (!points.length) {
     return;
   }
-  const visible = [];
-  const startPoint = segmentAt(points, viewStart) || points[0];
-  visible.push({ t: viewStart, v: startPoint.v });
-  for (const point of points) {
-    if (point.t >= viewStart && point.t <= viewEnd) {
-      visible.push(point);
-    }
+  const range = pointRangeForView(points);
+  if (!range) {
+    return;
   }
-  for (let index = 0; index < visible.length; index += 1) {
-    const point = visible[index];
-    const nextTime = index + 1 < visible.length ? visible[index + 1].t : viewEnd;
-    const left = xOf(point.t, waveLeft, waveWidth);
-    const right = xOf(nextTime, waveLeft, waveWidth);
+  const denseMode = (range.endExclusive - range.startIndex) > detail.denseBusThreshold;
+  let segmentStart = viewStart;
+  let segmentValue = points[range.startIndex].v;
+  let lastLabelRight = Number.NEGATIVE_INFINITY;
+  for (let index = range.startIndex + 1; index <= range.endExclusive; index += 1) {
+    const nextTime = index < points.length ? points[index].t : viewEnd;
+    const left = xOf(segmentStart, waveLeft, waveWidth);
+    const right = xOf(Math.min(viewEnd, nextTime), waveLeft, waveWidth);
     const width = Math.max(1, right - left);
+    if (denseMode && width < 1.25) {
+      if (index < range.endExclusive) {
+        segmentStart = points[index].t;
+        segmentValue = points[index].v;
+      }
+      continue;
+    }
     ctx.fillStyle = signal.kind === "text" ? "#27405f" : "#1d3557";
     ctx.fillRect(left, rowTop + 8, width, rowHeight - 16);
     ctx.strokeStyle = "#7fb8ff";
     ctx.strokeRect(left, rowTop + 8, width, rowHeight - 16);
-    const text = pointValueText(signal, point.v);
-    if (width > 30) {
+    const text = pointValueText(signal, segmentValue);
+    const minTextWidth = denseMode ? 54 : 30;
+    if (width > minTextWidth && left >= lastLabelRight + 10) {
       ctx.fillStyle = "#eef3ff";
       ctx.fillText(text, left + 6, rowTop + rowHeight / 2 + 4);
+      lastLabelRight = left + 6 + ctx.measureText(text).width;
+    }
+    if (index < range.endExclusive) {
+      segmentStart = points[index].t;
+      segmentValue = points[index].v;
     }
   }
 }
 
-function renderAnalog(signal, rowTop, rowHeight, waveLeft, waveWidth) {
+function renderAnalogDense(points, range, signal, rowTop, rowHeight, waveLeft, detail) {
+  const visible = [];
+  visible.push({ t: viewStart, v: Number(points[range.startIndex].v) });
+  for (let index = range.startIndex + 1; index < range.endExclusive; index += 1) {
+    visible.push({ t: points[index].t, v: Number(points[index].v) });
+  }
+  let min = visible[0].v;
+  let max = visible[0].v;
+  for (const point of visible) {
+    min = Math.min(min, point.v);
+    max = Math.max(max, point.v);
+  }
+  if (min === max) {
+    min -= 1;
+    max += 1;
+  }
+  const mins = new Float64Array(detail.pixelCount);
+  const maxs = new Float64Array(detail.pixelCount);
+  mins.fill(Number.POSITIVE_INFINITY);
+  maxs.fill(Number.NEGATIVE_INFINITY);
+  for (const point of visible) {
+    const bounds = columnRangeForTimeSpan(point.t, point.t + 1, detail.pixelCount);
+    if (!bounds) {
+      continue;
+    }
+    mins[bounds.left] = Math.min(mins[bounds.left], point.v);
+    maxs[bounds.left] = Math.max(maxs[bounds.left], point.v);
+  }
+  ctx.strokeStyle = "#8affc1";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let pixel = 0; pixel < detail.pixelCount; pixel += 1) {
+    if (!Number.isFinite(mins[pixel]) || !Number.isFinite(maxs[pixel])) {
+      continue;
+    }
+    const x = waveLeft + pixel + 0.5;
+    const highRatio = (maxs[pixel] - min) / (max - min);
+    const lowRatio = (mins[pixel] - min) / (max - min);
+    const yHigh = rowTop + rowHeight - 12 - highRatio * (rowHeight - 24);
+    const yLow = rowTop + rowHeight - 12 - lowRatio * (rowHeight - 24);
+    ctx.moveTo(x, yHigh);
+    ctx.lineTo(x, yLow);
+  }
+  ctx.stroke();
+  ctx.fillStyle = "#9aa4d6";
+  ctx.fillText(`${min.toFixed(3)} .. ${max.toFixed(3)}${signal.unit ? ` ${signal.unit}` : ""}`, waveLeft + 8, rowTop + 14);
+}
+
+function renderAnalog(signal, rowTop, rowHeight, waveLeft, waveWidth, detail) {
   const points = sampleArray(signal);
   if (!points.length) {
     return;
   }
+  const range = pointRangeForView(points);
+  if (!range) {
+    return;
+  }
+  const visibleCount = range.endExclusive - range.startIndex;
+  if (visibleCount > detail.denseAnalogThreshold) {
+    renderAnalogDense(points, range, signal, rowTop, rowHeight, waveLeft, detail);
+    return;
+  }
   const visible = [];
-  const startPoint = segmentAt(points, viewStart) || points[0];
-  visible.push({ t: viewStart, v: Number(startPoint.v) });
-  for (const point of points) {
-    if (point.t >= viewStart && point.t <= viewEnd) {
-      visible.push({ t: point.t, v: Number(point.v) });
-    }
+  visible.push({ t: viewStart, v: Number(points[range.startIndex].v) });
+  for (let index = range.startIndex + 1; index < range.endExclusive; index += 1) {
+    const point = points[index];
+    visible.push({ t: point.t, v: Number(point.v) });
   }
   let min = visible[0].v;
   let max = visible[0].v;
@@ -3475,20 +3728,26 @@ function renderAnalog(signal, rowTop, rowHeight, waveLeft, waveWidth) {
   ctx.fillText(`${min.toFixed(3)} .. ${max.toFixed(3)}${signal.unit ? ` ${signal.unit}` : ""}`, waveLeft + 8, rowTop + 14);
 }
 
-function renderEvent(signal, rowTop, rowHeight, waveLeft, waveWidth) {
+function renderEvent(signal, rowTop, rowHeight, waveLeft, waveWidth, detail) {
   const trackEvents = eventsByTrack.get(signal.id) || [];
+  const range = eventRangeForView(trackEvents);
+  if (!range) {
+    return;
+  }
   const laneBaselines = [
     rowTop + 16,
     rowTop + rowHeight - 10,
     rowTop + Math.round(rowHeight / 2) + 4,
   ];
   const laneRightEdges = laneBaselines.map(() => Number.NEGATIVE_INFINITY);
-  const labelGap = 12;
-  for (const event of trackEvents) {
-    if (event.t < viewStart || event.t > viewEnd) {
+  let lastLineX = Number.NEGATIVE_INFINITY;
+  for (let index = range.startIndex; index < range.endExclusive; index += 1) {
+    const event = trackEvents[index];
+    const x = xOf(event.t, waveLeft, waveWidth);
+    if (detail.eventLineGapPx > 0 && x - lastLineX < detail.eventLineGapPx) {
       continue;
     }
-    const x = xOf(event.t, waveLeft, waveWidth);
+    lastLineX = x;
     const colors = eventColors(event);
     ctx.strokeStyle = colors.line;
     ctx.beginPath();
@@ -3497,15 +3756,21 @@ function renderEvent(signal, rowTop, rowHeight, waveLeft, waveWidth) {
     ctx.stroke();
     ctx.fillStyle = colors.text;
     const labelX = x + 4;
+    let laneIndex = laneRightEdges.findIndex(rightEdge => labelX >= rightEdge + detail.eventLabelGapPx);
+    if (laneIndex === -1 && detail.eventLabelGapPx >= 24) {
+      continue;
+    }
     const labelWidth = ctx.measureText(event.label).width;
-    let laneIndex = laneRightEdges.findIndex(rightEdge => labelX >= rightEdge + labelGap);
     if (laneIndex === -1) {
       laneIndex = 0;
-      for (let index = 1; index < laneRightEdges.length; index += 1) {
-        if (laneRightEdges[index] < laneRightEdges[laneIndex]) {
-          laneIndex = index;
+      for (let candidateIndex = 1; candidateIndex < laneRightEdges.length; candidateIndex += 1) {
+        if (laneRightEdges[candidateIndex] < laneRightEdges[laneIndex]) {
+          laneIndex = candidateIndex;
         }
       }
+    }
+    if (labelX < laneRightEdges[laneIndex] + detail.eventLabelGapPx) {
+      continue;
     }
     laneRightEdges[laneIndex] = labelX + labelWidth;
     ctx.fillText(event.label, labelX, laneBaselines[laneIndex]);
@@ -3599,7 +3864,9 @@ function render() {
   const viewerPaddingX = VIEWER_SIDE_PADDING_X;
   const width = Math.max(leftLabel + 1, viewer.clientWidth - viewerPaddingX);
   const waveWidth = Math.max(1, width - leftLabel);
+  const detail = buildRenderDetail(waveWidth);
   const height = top + visible.length * rowHeight + 30;
+  const viewport = visibleRowViewport(visible.length, rowHeight, top);
   const grid = buildGridMarks(waveWidth);
   const timeUnit = chooseTimeUnit(grid.stepNs);
   renderTimeRuler(width, leftLabel, waveWidth, grid, timeUnit);
@@ -3643,6 +3910,7 @@ function render() {
 
   visible.forEach((signal, index) => {
     const rowTop = top + index * rowHeight;
+    const visibility = rowVisibilityState(index, viewport);
     const preview = Boolean(query) && !selected.has(signal.id);
     const handle = rowHandleRect(rowTop, rowHeight);
     const action = preview ? null : rowActionRect(rowTop, rowHeight, leftLabel);
@@ -3674,6 +3942,13 @@ function render() {
     ctx.moveTo(0, rowTop + rowHeight);
     ctx.lineTo(width, rowTop + rowHeight);
     ctx.stroke();
+    if (visibility === "far") {
+      ctx.restore();
+      return;
+    }
+    if (visibility === "near") {
+      ctx.globalAlpha *= 0.78;
+    }
     const handleActive = hoverHandleSignalId === signal.id
       || (dragState && dragState.kind === "reorder" && dragState.sourceId === signal.id);
     const handleCenterX = (handle.left + handle.right) / 2;
@@ -3713,13 +3988,13 @@ function render() {
       ctx.stroke();
     }
     if (signal.kind === "digital") {
-      renderDigital(signal, rowTop, rowHeight, leftLabel, waveWidth);
+      renderDigital(signal, rowTop, rowHeight, leftLabel, waveWidth, detail);
     } else if (signal.kind === "analog") {
-      renderAnalog(signal, rowTop, rowHeight, leftLabel, waveWidth);
+      renderAnalog(signal, rowTop, rowHeight, leftLabel, waveWidth, detail);
     } else if (signal.kind === "integer" || signal.kind === "text") {
-      renderBusLike(signal, rowTop, rowHeight, leftLabel, waveWidth);
+      renderBusLike(signal, rowTop, rowHeight, leftLabel, waveWidth, detail);
     } else if (signal.kind === "event") {
-      renderEvent(signal, rowTop, rowHeight, leftLabel, waveWidth);
+      renderEvent(signal, rowTop, rowHeight, leftLabel, waveWidth, detail);
     }
     ctx.restore();
   });
@@ -3955,6 +4230,13 @@ viewer.addEventListener("wheel", event => {
   event.preventDefault();
 }, { passive: false });
 
+viewer.addEventListener("scroll", () => {
+  hoverState = null;
+  hoverActionSignalId = null;
+  hoverHandleSignalId = null;
+  scheduleRender();
+}, { passive: true });
+
 viewer.addEventListener("mousedown", event => {
   const rect = canvas.getBoundingClientRect();
   const logicalWidth = canvas.width / window.devicePixelRatio;
@@ -4038,7 +4320,7 @@ viewer.addEventListener("mouseleave", () => {
   if (!dragState || (dragState.kind !== "viewer-pan" && dragState.kind !== "reorder" && dragState.kind !== "marker-move")) {
     viewer.style.cursor = "default";
   }
-  render();
+  scheduleRender();
 });
 
 viewer.addEventListener("mousemove", event => {
@@ -4063,7 +4345,7 @@ viewer.addEventListener("mousemove", event => {
     timeNs: viewStart + (viewEnd - viewStart) * ratio,
     y: logicalY,
   };
-  render();
+  scheduleRender();
 });
 
 viewer.addEventListener("click", event => {
@@ -4099,7 +4381,7 @@ window.addEventListener("mousemove", event => {
     const rect = canvas.getBoundingClientRect();
     const logicalY = (event.clientY - rect.top) * canvas.height / Math.max(1, rect.height) / window.devicePixelRatio;
     dragState.targetIndex = reorderTargetIndexAt(logicalY);
-    render();
+    scheduleRender();
     return;
   }
   if (dragState.kind === "pan") {
@@ -4108,7 +4390,7 @@ window.addEventListener("mousemove", event => {
     viewStart = dragState.startViewStart + deltaNs;
     viewEnd = dragState.startViewEnd + deltaNs;
     clampView();
-    render();
+    scheduleRender();
     return;
   }
   if (dragState.kind === "left") {
@@ -4140,7 +4422,7 @@ window.addEventListener("mousemove", event => {
     viewStart = dragState.startViewStart + deltaNs;
     viewEnd = dragState.startViewEnd + deltaNs;
     clampView();
-    render();
+    scheduleRender();
     return;
   }
   const nextEndRatio = Math.max(
@@ -4154,7 +4436,7 @@ window.addEventListener("mousemove", event => {
 });
 
 window.addEventListener("resize", () => {
-  render();
+  scheduleRender();
 });
 
 applySidebarCollapsed(loadSidebarCollapsed(), { persist: false, shouldRender: false });
