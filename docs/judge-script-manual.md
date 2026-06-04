@@ -33,6 +33,18 @@ stcjudge repl --hex sample/key_seg/prj/Objects/key_seg.hex
 RUST_LOG=debug stcjudge run --hex sample/key_seg/prj/Objects/key_seg.hex --script sample/key_seg/judge/smoke.rhai
 ```
 
+省略 `--hex` 时, 评测器会加载一个只会持续执行 `NOP` 的空程序. 这适合单独调试 Rhai 脚本, 输入注入, 波形捕获, 或仅依赖板级外设模型的脚本.
+
+例如:
+
+```bash
+stcjudge run --script sample/ne555/judge/smoke.rhai
+```
+
+```bash
+stcjudge repl
+```
+
 REPL 内置命令:
 
 - `:help`
@@ -86,16 +98,72 @@ LED:
 - `SIG_OUT`
 - `NET_SIG`
 
+`run_to(...)` 相关常量:
+
+- 边沿: `UP` `DOWN` `FLIP`
+- 数码管位: `D1` `D2` `D3` `D4` `D5` `D6` `D7` `D8`
+- 数码管位别名: `SEG1` `SEG2` `SEG3` `SEG4` `SEG5` `SEG6` `SEG7` `SEG8`
+- MCU 引脚: `P00` 到 `P57`, 也支持字符串形式 `P3.4`
+- 协议线: `IIC_SCL` `IIC_SDA` `IIC_BUS_SCL` `IIC_BUS_SDA` `IIC_MASTER_SCL` `IIC_MASTER_SDA`
+- 协议线: `IIC_SLAVE_SCL_LOW` `IIC_SLAVE_SDA_LOW` `ONEWIRE_MASTER` `ONEWIRE_BUS` `ONEWIRE_DEVICE_LOW`
+- 协议线: `UART1_TX` `UART1_RX` `UART2_TX` `UART2_RX` `DS1302_CE` `DS1302_CLK` `DS1302_IO`
+- 频率信号: `NET_SIG` 表示 NE555 原始输出线, `SIG_OUT` 表示板上的 `P3.4/SIG_OUT` 端, `NE555_SIG_OUT` 等价于 `NET_SIG`
+
 这些常量可以直接传给脚本函数, 不需要再写成字符串.
 
 ## 执行控制
 
 - `run_ms(ms)`
 - `run_us(us)`
+- `run_to(target, edge)`
+- `run_to_ns(target_ns)`
+- `run_to_us(target_us)`
+- `run_to_ms(target_ms)`
+- `run_to_s(target_s)`
 
 它们只推进仿真时间, 不等待真实时间.
 
 `run_ms(...)` 和 `run_us(...)` 按精确仿真时基推进. 如果固件内部有显示刷新周期, 1s 测频窗口, 传感器采样节拍等逻辑, 在修改输入后要显式留出足够稳定时间, 不要假设几十毫秒内一定已经更新到最终结果.
+
+`run_to(target, edge)` 会持续推进仿真, 直到目标信号命中指定边沿, 返回这次一共推进了多少 `ns`.
+
+- `UP` 表示 `false -> true`
+- `DOWN` 表示 `true -> false`
+- `FLIP` 表示任意翻转
+
+常见示例:
+
+```rhai
+let dt0 = run_to(L1, FLIP);
+let dt1 = run_to(P34, UP);
+let dt2 = run_to("P3.4", "DOWN");
+let dt3 = run_to(IIC_SCL, FLIP);
+let dt4 = run_to(UART1_TX, DOWN);
+let dt5 = run_to(ONEWIRE_BUS, UP);
+let dt6 = run_to(NET_SIG, FLIP);
+let dt7 = run_to(SIG_OUT, FLIP);
+```
+
+`run_to_ns/us/ms/s(...)` 的参数是绝对仿真时间戳, 不是相对等待时长. 它们同样返回本次推进的时间:
+
+- `run_to_ns(...)` 返回 `ns`, 类型为整数
+- `run_to_us(...)` 返回 `us`, 类型为浮点
+- `run_to_ms(...)` 返回 `ms`, 类型为浮点
+- `run_to_s(...)` 返回 `s`, 类型为浮点
+
+例如:
+
+```rhai
+let dt_ns = run_to_ns(1_000);
+let dt_us = run_to_us(250);
+let dt_ms = run_to_ms(1.5);
+let dt_s = run_to_s(2);
+```
+
+注意:
+
+- `run_to(...)` 当前没有超时参数. 如果目标边沿永远不会出现, 脚本会一直运行下去.
+- `run_to(...)` 的命中精度取决于仿真步进. 返回值是首次观测到目标边沿时, 相对于调用点累计推进的时间.
 
 ## 状态导入导出
 

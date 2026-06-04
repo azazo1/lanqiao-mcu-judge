@@ -42,6 +42,7 @@ use crate::{
         SegmentDecoder, UltrasonicDevice,
     },
     persistent_state::PersistentState,
+    script_target::{RunToEdge, RunToTarget},
     wave::{
         TRACK_EVENT_CPU, WaveCaptureOptions, WaveCaptureWindow, WaveEventNote, WaveRecorder,
         WaveSnapshot,
@@ -146,14 +147,11 @@ impl Simulator {
         Self::from_hex_path_with_options(path, trace_cpu, WaveCaptureOptions::default())
     }
 
-    pub fn from_hex_path_with_options(
-        path: &Path,
+    pub fn from_code_with_options(
+        code: Vec<u8>,
         trace_cpu: bool,
         wave_options: WaveCaptureOptions,
-    ) -> Result<Self> {
-        let hex = fs::read_to_string(path)
-            .with_context(|| format!("读取 HEX 文件失败: {}", path.display()))?;
-        let code = load_ihex(&hex)?;
+    ) -> Self {
         let wave_window = wave_options.window();
         let ctx = MachineContext::new_with_wave_window(code.clone(), wave_window);
         let mut sim = Self {
@@ -166,7 +164,27 @@ impl Simulator {
         };
         sim.ctx.ports.refresh_inputs(&sim.ctx.board);
         sim.capture_wave_snapshot();
-        Ok(sim)
+        sim
+    }
+
+    pub fn nop_with_options(trace_cpu: bool, wave_options: WaveCaptureOptions) -> Self {
+        Self::from_code_with_options(vec![0x00], trace_cpu, wave_options)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn nop(trace_cpu: bool) -> Self {
+        Self::nop_with_options(trace_cpu, WaveCaptureOptions::default())
+    }
+
+    pub fn from_hex_path_with_options(
+        path: &Path,
+        trace_cpu: bool,
+        wave_options: WaveCaptureOptions,
+    ) -> Result<Self> {
+        let hex = fs::read_to_string(path)
+            .with_context(|| format!("读取 HEX 文件失败: {}", path.display()))?;
+        let code = load_ihex(&hex)?;
+        Ok(Self::from_code_with_options(code, trace_cpu, wave_options))
     }
 
     pub fn export_persistent_state(&self) -> String {
@@ -206,6 +224,37 @@ impl Simulator {
             self.step_once()?;
         }
         Ok(())
+    }
+
+    pub fn run_to_ns(&mut self, target_ns: u64) -> Result<u64> {
+        let start = self.ctx.board.sim_time_ns;
+        if target_ns < start {
+            bail!(
+                "run_to_ns 目标时间戳早于当前时间: target_ns={target_ns}, current_ns={start}"
+            );
+        }
+        while self.ctx.board.sim_time_ns < target_ns {
+            self.step_once()?;
+        }
+        Ok(self.ctx.board.sim_time_ns.saturating_sub(start))
+    }
+
+    pub fn run_to_target(&mut self, target: RunToTarget, edge: RunToEdge) -> Result<u64> {
+        let start = self.ctx.board.sim_time_ns;
+        let mut previous = self.read_run_to_target(target);
+        loop {
+            self.step_once()?;
+            let current = self.read_run_to_target(target);
+            let matched = match edge {
+                RunToEdge::Up => !previous && current,
+                RunToEdge::Down => previous && !current,
+                RunToEdge::Flip => previous != current,
+            };
+            if matched {
+                return Ok(self.ctx.board.sim_time_ns.saturating_sub(start));
+            }
+            previous = current;
+        }
     }
 
     pub fn sim_time_ns(&self) -> u64 {
@@ -353,6 +402,56 @@ impl Simulator {
 
     pub fn led_on_id(&self, led: LedId) -> bool {
         self.ctx.board.outputs.leds[led.index() - 1]
+    }
+
+    pub fn read_run_to_target(&mut self, target: RunToTarget) -> bool {
+        self.ctx.ports.refresh_inputs(&self.ctx.board);
+        match target {
+            RunToTarget::Led(led) => self.led_on_id(led),
+            RunToTarget::Key(key) => self.ctx.board.keys.pressed(key),
+            RunToTarget::SegDigit(index) => {
+                let latches = self.ctx.effective_board_latches();
+                latches[2] & (1 << (index - 1)) != 0
+            }
+            RunToTarget::Pin { port, bit } => self.ctx.ports.port_input[port] & (1 << bit) != 0,
+            RunToTarget::I2cMasterScl => self.ctx.ports.port_latch[2] & (1 << 0) != 0,
+            RunToTarget::I2cMasterSda => self.ctx.ports.port_latch[2] & (1 << 1) != 0,
+            RunToTarget::I2cBusScl => {
+                let (scl_high, _) = self.ctx.board.read_i2c_lines(self.ctx.ports.port_latch[2]);
+                scl_high
+            }
+            RunToTarget::I2cBusSda => {
+                let (_, sda_high) = self.ctx.board.read_i2c_lines(self.ctx.ports.port_latch[2]);
+                sda_high
+            }
+            RunToTarget::I2cSlaveSclLow => {
+                let (scl_low, _) = self
+                    .ctx
+                    .board
+                    .i2c
+                    .slave_drives_low(&self.ctx.board.pcf8591, &self.ctx.board.at24c02);
+                scl_low
+            }
+            RunToTarget::I2cSlaveSdaLow => {
+                let (_, sda_low) = self
+                    .ctx
+                    .board
+                    .i2c
+                    .slave_drives_low(&self.ctx.board.pcf8591, &self.ctx.board.at24c02);
+                sda_low
+            }
+            RunToTarget::OnewireMasterHigh => self.ctx.ports.port_latch[1] & (1 << 4) != 0,
+            RunToTarget::OnewireBusHigh => self.ctx.ports.port_input[1] & (1 << 4) != 0,
+            RunToTarget::OnewireDeviceLow => self.ctx.board.ds18b20.drive_low,
+            RunToTarget::Uart1Tx => self.ctx.ports.uart1.tx_line_high(),
+            RunToTarget::Uart1Rx => self.ctx.ports.uart1.rx_line_high(),
+            RunToTarget::Uart2Tx => self.ctx.ports.uart2.tx_line_high(),
+            RunToTarget::Uart2Rx => self.ctx.ports.uart2.rx_line_high(),
+            RunToTarget::Ds1302Ce => self.ctx.ports.port_latch[1] & (1 << 3) != 0,
+            RunToTarget::Ds1302Clk => self.ctx.ports.port_latch[1] & (1 << 7) != 0,
+            RunToTarget::Ds1302Io => self.ctx.ports.port_input[2] & (1 << 3) != 0,
+            RunToTarget::Ne555SigOut => self.ctx.board.frequency_level(),
+        }
     }
 
     pub(crate) fn watch_led_stats(
@@ -1986,6 +2085,35 @@ mod tests {
             (18.0..=22.0).contains(&increased_duty),
             "expected about 20% duty after S9, got {increased_duty}"
         );
+    }
+
+    #[test]
+    fn run_to_ns_advances_to_absolute_timestamp() {
+        let mut sim = Simulator::from_hex_path(
+            &sample_path("sample/key_seg/prj/Objects/key_seg.hex"),
+            false,
+        )
+        .expect("load key_seg");
+
+        let elapsed_ns = sim.run_to_ns(1_000_000).expect("run to 1ms");
+        assert!(elapsed_ns >= 1_000_000);
+        assert_eq!(sim.sim_time_ns(), elapsed_ns);
+    }
+
+    #[test]
+    fn run_to_target_detects_ne555_flip() {
+        let mut sim = Simulator::from_hex_path(
+            &sample_path("sample/key_seg/prj/Objects/key_seg.hex"),
+            false,
+        )
+        .expect("load key_seg");
+
+        sim.set_frequency_hz(2_000.0);
+        let elapsed_ns = sim
+            .run_to_target(super::RunToTarget::Ne555SigOut, super::RunToEdge::Flip)
+            .expect("wait ne555 flip");
+        assert!(elapsed_ns > 0);
+        assert!(sim.sim_time_ns() >= elapsed_ns);
     }
 
     #[test]

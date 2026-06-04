@@ -17,7 +17,7 @@ pub struct Cli {
 enum Command {
     Run {
         #[arg(long)]
-        hex: PathBuf,
+        hex: Option<PathBuf>,
         #[arg(long, conflicts_with = "stdin")]
         script: Option<PathBuf>,
         #[arg(long, default_value_t = false, conflicts_with = "script")]
@@ -29,7 +29,7 @@ enum Command {
     },
     Repl {
         #[arg(long)]
-        hex: PathBuf,
+        hex: Option<PathBuf>,
         #[arg(long, default_value_t = false)]
         trace_cpu: bool,
         #[command(flatten)]
@@ -37,7 +37,7 @@ enum Command {
     },
     Dump {
         #[arg(long)]
-        hex: PathBuf,
+        hex: Option<PathBuf>,
         #[arg(long, default_value_t = 0)]
         ms: u64,
         #[command(flatten)]
@@ -189,8 +189,7 @@ pub async fn run() -> Result<()> {
             trace_cpu,
             wave,
         } => {
-            let sim = Simulator::from_hex_path_with_options(&hex, trace_cpu, wave.into())
-                .with_context(|| format!("加载 HEX 失败: {}", hex.display()))?;
+            let sim = load_simulator(hex.as_ref(), trace_cpu, wave.into())?;
             match (script, stdin) {
                 (Some(path), false) if path.as_os_str() == "-" => {
                     crate::script::run_script_stdin(sim).context("执行标准输入脚本失败")?;
@@ -213,18 +212,28 @@ pub async fn run() -> Result<()> {
             trace_cpu,
             wave,
         } => {
-            let sim = Simulator::from_hex_path_with_options(&hex, trace_cpu, wave.into())
-                .with_context(|| format!("加载 HEX 失败: {}", hex.display()))?;
+            let sim = load_simulator(hex.as_ref(), trace_cpu, wave.into())?;
             crate::script::run_repl(sim).context("进入交互式 Rhai 失败")?;
         }
         Command::Dump { hex, ms, wave } => {
-            let mut sim = Simulator::from_hex_path_with_options(&hex, false, wave.into())
-                .with_context(|| format!("加载 HEX 失败: {}", hex.display()))?;
+            let mut sim = load_simulator(hex.as_ref(), false, wave.into())?;
             sim.run_ms(ms)?;
             println!("{}", sim.snapshot_text());
         }
     }
     Ok(())
+}
+
+fn load_simulator(
+    hex: Option<&PathBuf>,
+    trace_cpu: bool,
+    wave_options: WaveCaptureOptions,
+) -> Result<Simulator> {
+    match hex {
+        Some(path) => Simulator::from_hex_path_with_options(path, trace_cpu, wave_options)
+            .with_context(|| format!("加载 HEX 失败: {}", path.display())),
+        None => Ok(Simulator::nop_with_options(trace_cpu, wave_options)),
+    }
 }
 
 fn init_tracing() {
@@ -297,5 +306,17 @@ mod tests {
             options.msgpack_path.as_deref(),
             Some(std::path::Path::new("/tmp/out.msgpack"))
         );
+    }
+
+    #[test]
+    fn cli_allows_dump_without_hex() {
+        let cli = Cli::try_parse_from(["stcjudge", "dump", "--ms", "5"]).expect("parse cli");
+        match cli.command {
+            Command::Dump { hex, ms, .. } => {
+                assert_eq!(hex, None);
+                assert_eq!(ms, 5);
+            }
+            _ => panic!("expected dump command"),
+        }
     }
 }
