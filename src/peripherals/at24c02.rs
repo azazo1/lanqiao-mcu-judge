@@ -35,7 +35,7 @@ impl Default for At24c02 {
 }
 
 impl At24c02 {
-    const ADDRESS7: u8 = 0x50;
+    const ADDRESS_BYTE: u8 = 0xA0;
     const PAGE_SIZE: u8 = 8;
     const PAGE_MASK: u8 = Self::PAGE_SIZE - 1;
     const WRITE_CYCLE_NS: u64 = 5_000_000;
@@ -141,8 +141,8 @@ impl At24c02 {
 impl I2cSlaveDevice for At24c02 {
     type Context = ();
 
-    fn address7(&self) -> u8 {
-        Self::ADDRESS7
+    fn address_byte(&self) -> u8 {
+        Self::ADDRESS_BYTE
     }
 
     fn timing(&self) -> I2cSlaveTiming {

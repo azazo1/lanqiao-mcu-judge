@@ -373,7 +373,7 @@ impl I2cEventDecoder {
                             TRACK_EVENT_I2C,
                             format!(
                                 "ADDR 0x{:02X} {}",
-                                byte >> 1,
+                                byte,
                                 if byte & 0x01 != 0 { "R" } else { "W" }
                             ),
                             format!("raw=0x{byte:02X}"),
@@ -1248,23 +1248,39 @@ body {
 }
 .shell {
   display: grid;
-  grid-template-columns: 320px 1fr;
+  grid-template-columns: minmax(0, 320px) minmax(0, 1fr);
   height: 100vh;
   min-height: 0;
 }
+.shell.sidebar-collapsed {
+  grid-template-columns: 0 minmax(0, 1fr);
+}
 .sidebar {
+  grid-column: 1;
   border-right: 1px solid #2a3152;
   background: #151a2d;
   padding: 16px;
   overflow: auto;
   min-height: 0;
+  min-width: 0;
+  transition:
+    padding 0.16s ease,
+    opacity 0.16s ease,
+    border-right-color 0.16s ease;
+}
+.shell.sidebar-collapsed .sidebar {
+  display: none;
 }
 .main {
+  grid-column: 2;
   display: grid;
   grid-template-rows: auto 1fr;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+}
+.shell.sidebar-collapsed .main {
+  grid-column: 1 / -1;
 }
 .header {
   position: sticky;
@@ -1274,40 +1290,58 @@ body {
   border-bottom: 1px solid #2a3152;
 }
 .toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  column-gap: 12px;
+  row-gap: 6px;
   align-items: center;
   padding: 12px 16px;
   background: #12172a;
+  overflow: hidden;
 }
 .toolbar-actions {
+  grid-row: 1 / span 2;
+  grid-column: 1;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 8px;
   align-items: center;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  align-self: center;
+}
+.toolbar-toggle.active {
+  background: #30406d;
+  border-color: #7ea1dc;
 }
 .toolbar-info {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
+  grid-row: 1 / span 2;
+  grid-column: 2;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(calc(1.4em + 2px), auto) minmax(calc(1.4em + 2px), auto);
+  row-gap: 4px;
   align-items: center;
-  margin-left: auto;
-  justify-content: flex-end;
+  width: 100%;
   min-width: 0;
 }
 .toolbar-slot {
   display: block;
+  text-align: left;
+  white-space: nowrap;
+  line-height: 1.4;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  text-align: right;
+  min-height: calc(1.4em + 2px);
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 .toolbar-slot-stats {
-  flex: 0 0 260px;
+  grid-row: 1;
 }
 .toolbar-slot-cursor {
-  flex: 0 0 460px;
+  grid-row: 2;
 }
 .marker-panel {
   display: flex;
@@ -1408,6 +1442,21 @@ input[type="search"] {
   border-radius: 6px;
   padding: 8px 10px;
   margin-bottom: 12px;
+}
+.sidebar-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.sidebar-title {
+  color: #eef2ff;
+  font-size: 13px;
+  font-weight: 700;
+}
+.sidebar-close {
+  padding: 5px 8px;
 }
 .stats {
   color: #9aa4d6;
@@ -1566,8 +1615,12 @@ canvas {
 </style>
 </head>
 <body>
-<div class="shell">
-  <aside class="sidebar">
+<div class="shell" id="shell">
+  <aside class="sidebar" id="sidebar-pane">
+    <div class="sidebar-top">
+      <span class="sidebar-title">Signals</span>
+      <button id="sidebar-close" class="sidebar-close" type="button">Hide</button>
+    </div>
     <input id="search" type="search" placeholder="Filter signals">
     <div class="legend">Categories and signals can be combined freely.</div>
     <div id="sidebar"></div>
@@ -1576,6 +1629,7 @@ canvas {
     <div class="header">
       <div class="toolbar">
         <div class="toolbar-actions">
+          <button id="sidebar-toggle" class="toolbar-toggle" type="button">Filters</button>
           <button id="zoom-in">Zoom in</button>
           <button id="zoom-out">Zoom out</button>
           <button id="reset">Reset</button>
@@ -1624,7 +1678,11 @@ fn html_template_suffix() -> &'static str {
 </script>
 <script>
 const data = JSON.parse(document.getElementById("wave-data").textContent);
+const shell = document.getElementById("shell");
+const sidebarPane = document.getElementById("sidebar-pane");
 const sidebar = document.getElementById("sidebar");
+const sidebarToggle = document.getElementById("sidebar-toggle");
+const sidebarClose = document.getElementById("sidebar-close");
 const header = document.querySelector(".header");
 const viewer = document.getElementById("viewer");
 const canvas = document.getElementById("canvas");
@@ -1689,6 +1747,44 @@ let rowLayout = [];
 let markers = [];
 let nextMarkerId = 1;
 let activeMarkerId = null;
+let sidebarCollapsed = false;
+
+function loadSidebarCollapsed() {
+  try {
+    return window.localStorage.getItem("stcjudge.wave.sidebarCollapsed") === "1";
+  } catch (_error) {
+    return false;
+  }
+}
+
+function storeSidebarCollapsed(collapsed) {
+  try {
+    window.localStorage.setItem("stcjudge.wave.sidebarCollapsed", collapsed ? "1" : "0");
+  } catch (_error) {}
+}
+
+function applySidebarCollapsed(collapsed, options = {}) {
+  const { persist = true, shouldRender = true } = options;
+  sidebarCollapsed = Boolean(collapsed);
+  shell.classList.toggle("sidebar-collapsed", sidebarCollapsed);
+  sidebarPane.setAttribute("aria-hidden", sidebarCollapsed ? "true" : "false");
+  sidebarToggle.classList.toggle("active", !sidebarCollapsed);
+  sidebarToggle.setAttribute("aria-expanded", sidebarCollapsed ? "false" : "true");
+  sidebarToggle.title = sidebarCollapsed ? "Show filters" : "Hide filters";
+  if (persist) {
+    storeSidebarCollapsed(sidebarCollapsed);
+  }
+  if (sidebarCollapsed && sidebarPane.contains(document.activeElement)) {
+    sidebarToggle.focus();
+  }
+  if (shouldRender) {
+    render();
+  }
+}
+
+function toggleSidebarCollapsed() {
+  applySidebarCollapsed(!sidebarCollapsed);
+}
 
 function searchQuery() {
   return search.value.trim().toLowerCase();
@@ -2633,6 +2729,13 @@ function renderAnalog(signal, rowTop, rowHeight, waveLeft, waveWidth) {
 
 function renderEvent(signal, rowTop, rowHeight, waveLeft, waveWidth) {
   const trackEvents = eventsByTrack.get(signal.id) || [];
+  const laneBaselines = [
+    rowTop + 16,
+    rowTop + rowHeight - 10,
+    rowTop + Math.round(rowHeight / 2) + 4,
+  ];
+  const laneRightEdges = laneBaselines.map(() => Number.NEGATIVE_INFINITY);
+  const labelGap = 12;
   for (const event of trackEvents) {
     if (event.t < viewStart || event.t > viewEnd) {
       continue;
@@ -2645,7 +2748,19 @@ function renderEvent(signal, rowTop, rowHeight, waveLeft, waveWidth) {
     ctx.lineTo(x, rowTop + rowHeight - 6);
     ctx.stroke();
     ctx.fillStyle = colors.text;
-    ctx.fillText(event.label, x + 4, rowTop + 18);
+    const labelX = x + 4;
+    const labelWidth = ctx.measureText(event.label).width;
+    let laneIndex = laneRightEdges.findIndex(rightEdge => labelX >= rightEdge + labelGap);
+    if (laneIndex === -1) {
+      laneIndex = 0;
+      for (let index = 1; index < laneRightEdges.length; index += 1) {
+        if (laneRightEdges[index] < laneRightEdges[laneIndex]) {
+          laneIndex = index;
+        }
+      }
+    }
+    laneRightEdges[laneIndex] = labelX + labelWidth;
+    ctx.fillText(event.label, labelX, laneBaselines[laneIndex]);
   }
 }
 
@@ -2949,6 +3064,14 @@ markerLabelInput.addEventListener("keydown", event => {
 
 markerLabelInput.addEventListener("input", () => {
   setMarkerStatus("");
+});
+
+sidebarToggle.addEventListener("click", () => {
+  toggleSidebarCollapsed();
+});
+
+sidebarClose.addEventListener("click", () => {
+  applySidebarCollapsed(true);
 });
 
 search.addEventListener("input", () => {
@@ -3263,6 +3386,11 @@ window.addEventListener("mousemove", event => {
   );
 });
 
+window.addEventListener("resize", () => {
+  render();
+});
+
+applySidebarCollapsed(loadSidebarCollapsed(), { persist: false, shouldRender: false });
 buildSidebar();
 render();
 </script>
@@ -3349,7 +3477,7 @@ mod tests {
             (650, false, false),
             (660, true, false),
             (670, false, false),
-            (680, false, true),
+            (680, true, false),
             (690, true, true),
         ];
 
@@ -3364,7 +3492,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             labels,
-            vec!["START", "ADDR 0x50 W", "ACK", "TX 0x00", "ACK", "STOP"]
+            vec!["START", "ADDR 0xA0 W", "ACK", "TX 0x00", "ACK", "STOP"]
         );
     }
 

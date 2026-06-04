@@ -37,7 +37,7 @@ impl Pcf8591 {
         }
     }
 
-    const ADDRESS7: u8 = 0x48;
+    const ADDRESS_BYTE: u8 = 0x90;
     const TIMING: I2cSlaveTiming = I2cSlaveTiming {
         min_scl_low_ns: 4_800,
         min_scl_high_ns: 4_100,
@@ -189,8 +189,8 @@ impl Pcf8591 {
 impl I2cSlaveDevice for Pcf8591 {
     type Context = AnalogInputs;
 
-    fn address7(&self) -> u8 {
-        Self::ADDRESS7
+    fn address_byte(&self) -> u8 {
+        Self::ADDRESS_BYTE
     }
 
     fn timing(&self) -> I2cSlaveTiming {

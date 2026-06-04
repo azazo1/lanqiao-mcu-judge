@@ -30,6 +30,7 @@ HTML 查看器是一个自包含文件, 直接用浏览器打开即可.
 - 左侧按 `category / group` 分类列出信号, 可以自由勾选组合显示.
 - 搜索框会同时过滤侧边栏和主视图中的信号. 对未勾选但命中的信号会以 preview 形式临时显示.
 - 搜索同时支持 alias. 例如 `i2c` / `iic`, `uart1` / `serial1`, `onewire` / `1-wire`, `adc` / `ad`, `dac` / `da` 都可以互相命中.
+- 左侧筛选区支持收起和再次展开, 收起后主波形区会自动扩宽并立即重绘.
 - 支持滚轮缩放, 鼠标拖拽平移, `Default` 恢复默认可见轨道.
   `Shift + 滚轮` 平移当前时间窗, `Alt + 滚轮` 以当前视窗中心缩放.
   在信号区还支持 `Ctrl + 滚轮` 按光标位置缩放, 以及鼠标中键拖动平移.
@@ -74,6 +75,7 @@ HTML 查看器是一个自包含文件, 直接用浏览器打开即可.
 事件轨只做语义标注, 不承载持续电平.
 
 - `event.i2c`: `START`, `REPEATED START`, `STOP`, `ADDR`, `TX`, `RX`, `ACK`, `NACK`.
+  其中 `ADDR` 会保留总线首字节的原始值, 例如 `ADDR 0xA0 W`, 不会右移掉 R/W bit.
 - `event.onewire`: 复位, ROM command, Function command, 发出字节, 发送温度数据等.
 - `event.uart1`, `event.uart2`: UART 收发帧起点.
 - `event.adc_dac`: PCF8591 控制字, ADC 采样, DAC 写入.

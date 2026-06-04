@@ -10,7 +10,7 @@ pub(crate) struct I2cSlaveTiming {
 pub(crate) trait I2cSlaveDevice {
     type Context;
 
-    fn address7(&self) -> u8;
+    fn address_byte(&self) -> u8;
 
     fn timing(&self) -> I2cSlaveTiming;
 
@@ -109,7 +109,7 @@ impl I2cSlaveFrontend {
         if scl_high != raw_scl_prev {
             trace!(
                 time_ns,
-                address = device.address7(),
+                address = device.address_byte(),
                 raw_scl = scl_high,
                 "i2c slave raw scl"
             );
@@ -117,7 +117,7 @@ impl I2cSlaveFrontend {
         if self.line_sda_prev != sda_high {
             trace!(
                 time_ns,
-                address = device.address7(),
+                address = device.address_byte(),
                 raw_sda = sda_high,
                 "i2c slave raw sda"
             );
@@ -155,13 +155,14 @@ impl I2cSlaveFrontend {
         }
 
         if self.line_sda_prev != sda_high
+            && self.scl_filter.stable_high
             && self.scl_filter.high_stable_for_ns(time_ns) >= timing.min_start_stop_scl_high_ns
         {
             if self.line_sda_prev && !sda_high {
-                trace!(time_ns, address = device.address7(), "i2c slave start");
+                trace!(time_ns, address = device.address_byte(), "i2c slave start");
                 self.begin_start_condition(time_ns, device, ctx);
             } else if !self.line_sda_prev && sda_high {
-                trace!(time_ns, address = device.address7(), "i2c slave stop");
+                trace!(time_ns, address = device.address_byte(), "i2c slave stop");
                 self.finish_stop_condition(time_ns, device, ctx);
             }
         }
@@ -181,7 +182,7 @@ impl I2cSlaveFrontend {
                 } else {
                     trace!(
                         time_ns,
-                        address = device.address7(),
+                        address = device.address_byte(),
                         mode = ?self.mode,
                         next_bit = u8::from(sda_high),
                         bit_index = self.bit_count + 1,
@@ -268,17 +269,17 @@ impl I2cSlaveFrontend {
     ) -> bool {
         match self.mode {
             I2cMode::Address => {
-                let address = self.shift >> 1;
+                let address = self.shift & 0xFE;
                 let read = self.shift & 1 != 0;
                 trace!(
                     time_ns,
-                    listener = device.address7(),
+                    listener = device.address_byte(),
                     address,
                     read,
                     byte = self.shift,
                     "i2c slave address"
                 );
-                if address != device.address7() {
+                if address != device.address_byte() {
                     self.enter_read_after_ack = false;
                     self.mode = I2cMode::Idle;
                     return false;
@@ -430,8 +431,8 @@ mod tests {
     impl I2cSlaveDevice for ReadBackDevice {
         type Context = ();
 
-        fn address7(&self) -> u8 {
-            0x50
+        fn address_byte(&self) -> u8 {
+            0xA0
         }
 
         fn timing(&self) -> I2cSlaveTiming {
