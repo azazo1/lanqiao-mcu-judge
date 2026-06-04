@@ -163,6 +163,13 @@ LED:
 
 `display_text()` 返回当前已经采样到的稳定显示结果. 当前实现不是去读某一个瞬时扫描相位, 而是维护每一位最近一次被锁存到的段码, 所以对于静态显示题目通常已经足够稳定.
 
+这里返回的是"解码后的文本", 不是固定 8 个字符:
+
+- 每个物理数码管位通常解码成 1 个字符.
+- 如果这一位带小数点, 可能会解码成 2 个字符, 例如 `5.`.
+- 如果只有小数点点亮, 会解码成 `.`.
+- 末尾空白位会被裁掉, 所以返回字符串长度不一定等于 8.
+
 `display_text(window_ms)` 会推进仿真时间, 在给定窗口内持续观察显示内容:
 
 - 如果整个窗口内显示文本保持不变, 返回该文本.
@@ -170,9 +177,17 @@ LED:
 
 这样更适合判断一段时间内显示是否稳定, 而不是只看某个瞬间.
 
-`display_number()` 和 `display_number(window_ms)` 会从当前显示文本里提取唯一的整数. 如果显示内容里没有数字, 或者同时出现了多个数字, 会直接报错.
+`display_number()` 和 `display_number(window_ms)` 会从当前显示文本里提取唯一的数值. 如果显示内容里没有数字, 或者同时出现了多个数字, 会直接报错.
+
+- 如果提取到的是纯整数, 返回整数.
+- 如果提取到的数字里包含小数点, 返回浮点数.
 
 如果一屏里同时存在多个数字片段, 可以改用 `display_number(start, end)` 或 `display_number(start, end, window_ms)`, 在指定的数码管位范围内提取数字. 位号和 `seg_pattern(1)` 一样, 都是从左到右按 `1..=8` 计数.
+
+带 `window_ms` 的版本会先复用 `display_text(window_ms)` 的整屏稳定性检查, 再读取指定范围的数值. 如果题目本身是扫描显示, 但你只关心其中几位, 有时直接用不带窗口的范围版本会更稳.
+
+如果显示里本来就混有空白位, 固定符号位, 或者像温度值 + 等级值这种分段内容, 优先按物理数码管位范围读取, 例如 `display_number(1, 6)` 和 `display_number(8, 8)`. 这样在显示带小数点时, 不会被 `display_text()` 的可变字符长度干扰.
+如果 `display_text(window_ms)` 恰好跨过一次显示刷新边缘, 也可能把中间过渡态识别成变化. 这类场景可以先额外 `run_ms(20)` 或 `run_ms(30)`, 再直接读取一次 `display_text()`.
 
 `display_number(...)` 接受前导零, 但返回值只保留数值本身. 如果题目要求精确判断位宽, 前导零, 空白位, 固定符号位, 请直接对 `display_text(...)` 的结果做字符串切片和正则判断.
 
@@ -197,7 +212,8 @@ Rhai 也自带数值解析函数, 例如:
 
 推荐写法:
 
-- 数值部分优先用 `display_text(...)[start..end]` 再配合 `parse_int(...)` 或 `parse_float(...)`.
+- 数值部分如果对应固定物理数码管位, 优先用 `display_number(start, end)` 或 `display_number(start, end, window_ms)`.
+- 数值部分如果确实要按字符串格式判断, 再用 `display_text(...)[start..end]` 配合 `parse_int(...)` 或 `parse_float(...)`.
 - 固定字符, 空白位, 前导零, 分隔符等格式要求, 直接用 `display_text(...)[start..end]` 判断.
 - 需要描述整串格式时, 再配合 `regex_is_match(...)`.
 - 不要先看当前 `hex` 的输出再反推 `expect`, 应先根据题意, 源码, 手册推导出应有结果, 再写断言.
@@ -289,6 +305,11 @@ run_ms(220);
 let value = parse_int(display_text()[7..8]);
 assert_eq(value, 1, "显示稳定");
 assert(led_on(L1), "L1 应点亮");
+
+set_temperature_c(25.9375);
+run_ms(700);
+assert_eq(display_number(1, 6), 25.500, "9bit 温度显示");
+assert_eq(display_number(8, 8), 0, "精度等级");
 
 print(snapshot_text());
 ```

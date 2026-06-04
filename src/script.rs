@@ -14,7 +14,7 @@ use rhai::{
 use tracing::{debug, trace};
 
 use crate::{
-    chip::{LedWatchStats, Simulator},
+    chip::{DisplayNumber, LedWatchStats, Simulator},
     ids::{KeyId, KeyMode, LedId, SignalId, VoltageChannel},
 };
 
@@ -735,54 +735,58 @@ fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
     let sim_display_number = Arc::clone(sim);
     engine.register_fn(
         "display_number",
-        move || -> Result<i64, Box<EvalAltResult>> {
-            sim_display_number
+        move || -> Result<Dynamic, Box<EvalAltResult>> {
+            let value = sim_display_number
                 .lock()
                 .map_err(|_| runtime_error("仿真器锁已损坏"))?
                 .display_number()
-                .map_err(|err| runtime_error(err.to_string()))
+                .map_err(|err| runtime_error(err.to_string()))?;
+            Ok(display_number_dynamic(value))
         },
     );
 
     let sim_display_number_window = Arc::clone(sim);
     engine.register_fn(
         "display_number",
-        move |duration_ms: i64| -> Result<i64, Box<EvalAltResult>> {
+        move |duration_ms: i64| -> Result<Dynamic, Box<EvalAltResult>> {
             let duration_ms = u64::try_from(duration_ms)
                 .map_err(|_| runtime_error("duration_ms 参数必须 >= 0"))?;
-            sim_display_number_window
+            let value = sim_display_number_window
                 .lock()
                 .map_err(|_| runtime_error("仿真器锁已损坏"))?
                 .observe_display_number(duration_ms)
-                .map_err(|err| runtime_error(err.to_string()))
+                .map_err(|err| runtime_error(err.to_string()))?;
+            Ok(display_number_dynamic(value))
         },
     );
 
     let sim_display_number_range = Arc::clone(sim);
     engine.register_fn(
         "display_number",
-        move |start: i64, end: i64| -> Result<i64, Box<EvalAltResult>> {
+        move |start: i64, end: i64| -> Result<Dynamic, Box<EvalAltResult>> {
             let (start, end) = script_range(start, end)?;
-            sim_display_number_range
+            let value = sim_display_number_range
                 .lock()
                 .map_err(|_| runtime_error("仿真器锁已损坏"))?
                 .display_number_in_range(start, end)
-                .map_err(|err| runtime_error(err.to_string()))
+                .map_err(|err| runtime_error(err.to_string()))?;
+            Ok(display_number_dynamic(value))
         },
     );
 
     let sim_display_number_range_window = Arc::clone(sim);
     engine.register_fn(
         "display_number",
-        move |start: i64, end: i64, duration_ms: i64| -> Result<i64, Box<EvalAltResult>> {
+        move |start: i64, end: i64, duration_ms: i64| -> Result<Dynamic, Box<EvalAltResult>> {
             let (start, end) = script_range(start, end)?;
             let duration_ms = u64::try_from(duration_ms)
                 .map_err(|_| runtime_error("duration_ms 参数必须 >= 0"))?;
-            sim_display_number_range_window
+            let value = sim_display_number_range_window
                 .lock()
                 .map_err(|_| runtime_error("仿真器锁已损坏"))?
                 .observe_display_number_in_range(start, end, duration_ms)
-                .map_err(|err| runtime_error(err.to_string()))
+                .map_err(|err| runtime_error(err.to_string()))?;
+            Ok(display_number_dynamic(value))
         },
     );
 
@@ -1023,6 +1027,13 @@ fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
 
 fn runtime_error(message: impl Into<String>) -> Box<EvalAltResult> {
     EvalAltResult::ErrorRuntime(message.into().into(), rhai::Position::NONE).into()
+}
+
+fn display_number_dynamic(value: DisplayNumber) -> Dynamic {
+    match value {
+        DisplayNumber::Integer(value) => value.into(),
+        DisplayNumber::Float(value) => value.into(),
+    }
 }
 
 fn assert_eq_dynamic(

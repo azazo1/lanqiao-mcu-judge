@@ -116,6 +116,12 @@ impl LedWatchStats {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DisplayNumber {
+    Integer(i64),
+    Float(f64),
+}
+
 impl Simulator {
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn from_hex_path(path: &Path, trace_cpu: bool) -> Result<Self> {
@@ -389,17 +395,22 @@ impl Simulator {
         Ok(initial)
     }
 
-    pub fn display_number(&self) -> Result<i64> {
+    pub fn display_number(&self) -> Result<DisplayNumber> {
         parse_display_number(&self.display_text())
     }
 
-    pub fn observe_display_number(&mut self, duration_ms: u64) -> Result<i64> {
+    pub fn observe_display_number(&mut self, duration_ms: u64) -> Result<DisplayNumber> {
         let text = self.observe_display_text(duration_ms)?;
         parse_display_number(&text)
     }
 
-    pub fn display_number_in_range(&self, start: usize, end: usize) -> Result<i64> {
-        parse_display_number_in_range(&self.display_text(), start, end)
+    pub fn display_number_in_range(&self, start: usize, end: usize) -> Result<DisplayNumber> {
+        let text = self
+            .ctx
+            .board
+            .outputs
+            .display_text_in_range(&self.seg_decoder, start, end)?;
+        parse_display_number(&text)
     }
 
     pub fn observe_display_number_in_range(
@@ -407,9 +418,9 @@ impl Simulator {
         start: usize,
         end: usize,
         duration_ms: u64,
-    ) -> Result<i64> {
-        let text = self.observe_display_text(duration_ms)?;
-        parse_display_number_in_range(&text, start, end)
+    ) -> Result<DisplayNumber> {
+        let _ = self.observe_display_text(duration_ms)?;
+        self.display_number_in_range(start, end)
     }
 
     pub fn set_seg_decode(&mut self, pattern: u8, text: &str) -> Result<()> {
@@ -722,12 +733,11 @@ impl Simulator {
         );
 
         let mut seg_chars = [' '; 8];
-        let mut seg_text = String::with_capacity(8);
+        let seg_text = self.ctx.board.outputs.display_text(&self.seg_decoder);
         let mut seg_raw = [0_u8; 8];
         for (index, digit) in self.ctx.board.outputs.digits.iter().copied().enumerate() {
             let ch = self.seg_decoder.decode_char(digit);
             seg_chars[index] = ch;
-            seg_text.push(ch);
             seg_raw[index] = digit.segments;
         }
 
@@ -1815,37 +1825,17 @@ fn set_bit_level(value: u8, bit: u8, high: bool) -> u8 {
     }
 }
 
-fn slice_text_range(text: &str, start: usize, end: usize) -> Result<String> {
-    if start == 0 || end == 0 {
-        bail!("字符串切片范围必须从 1 开始: start={start}, end={end}");
+fn parse_display_number(text: &str) -> Result<DisplayNumber> {
+    let value = extract_unique_numeric_token(text, true)?;
+    if value.contains('.') {
+        return value
+            .parse::<f64>()
+            .map(DisplayNumber::Float)
+            .map_err(|err| anyhow::anyhow!("解析显示浮点数失败: {err}"));
     }
-    if start > end {
-        bail!("字符串切片范围必须满足 start <= end: start={start}, end={end}");
-    }
-    let chars = text.chars().collect::<Vec<_>>();
-    if end > chars.len() {
-        bail!(
-            "字符串切片范围越界: 文本长度为 {}, 请求范围 {}..={}",
-            chars.len(),
-            start,
-            end
-        );
-    }
-    Ok(chars[start - 1..end].iter().collect::<String>())
-}
-
-fn parse_display_number(text: &str) -> Result<i64> {
-    parse_display_integer_slice(text)
-}
-
-fn parse_display_number_in_range(text: &str, start: usize, end: usize) -> Result<i64> {
-    parse_display_integer_slice(&slice_text_range(text, start, end)?)
-}
-
-fn parse_display_integer_slice(text: &str) -> Result<i64> {
-    let value = extract_unique_numeric_token(text, false)?;
     value
         .parse::<i64>()
+        .map(DisplayNumber::Integer)
         .map_err(|err| anyhow::anyhow!("解析显示整数失败: {err}"))
 }
 
@@ -1914,7 +1904,7 @@ mod tests {
 
     use crate::ids::{KeyId, KeyMode, LedId, SignalId};
 
-    use super::Simulator;
+    use super::{DisplayNumber, Simulator};
 
     fn sample_path(relative: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(relative)
@@ -2215,7 +2205,7 @@ mod tests {
         assert_eq!(
             sim.observe_display_number_in_range(2, 8, 30)
                 .expect("read initial distance"),
-            0
+            DisplayNumber::Integer(0)
         );
 
         sim.set_distance_cm(20.0);
@@ -2223,7 +2213,9 @@ mod tests {
         let default_distance = sim
             .observe_display_number_in_range(4, 8, 30)
             .expect("read default distance");
-        assert!((18..=20).contains(&default_distance));
+        assert!(
+            matches!(default_distance, DisplayNumber::Integer(value) if (18..=20).contains(&value))
+        );
 
         sim.tap_key("S4", 80).expect("switch to speed page");
         sim.run_ms(220).expect("run us after switching menu");
@@ -2231,7 +2223,7 @@ mod tests {
         assert_eq!(
             sim.observe_display_number_in_range(6, 8, 30)
                 .expect("read default speed"),
-            340
+            DisplayNumber::Integer(340)
         );
 
         sim.tap_key("S9", 80).expect("increase speed");
@@ -2239,7 +2231,7 @@ mod tests {
         assert_eq!(
             sim.observe_display_number_in_range(6, 8, 30)
                 .expect("read increased speed"),
-            345
+            DisplayNumber::Integer(345)
         );
 
         sim.tap_key("S4", 80).expect("switch back to distance page");
@@ -2248,31 +2240,43 @@ mod tests {
         let adjusted_distance = sim
             .observe_display_number_in_range(4, 8, 30)
             .expect("read adjusted distance");
-        assert!((19..=21).contains(&adjusted_distance));
+        assert!(
+            matches!(adjusted_distance, DisplayNumber::Integer(value) if (19..=21).contains(&value))
+        );
     }
 
     #[test]
-    fn display_number_range_extracts_requested_digits() {
+    fn display_number_parses_integer_and_float_tokens() {
         assert_eq!(
-            super::parse_display_number_in_range("23-59-50", 1, 2).expect("read hour"),
-            23
+            super::parse_display_number("25.937").expect("read float"),
+            DisplayNumber::Float(25.937)
         );
         assert_eq!(
-            super::parse_display_number_in_range("23-59-50", 4, 5).expect("read minute"),
-            59
-        );
-        assert_eq!(
-            super::parse_display_number_in_range("0007", 1, 4).expect("read leading zero int"),
-            7
+            super::parse_display_number("0007").expect("read leading zero int"),
+            DisplayNumber::Integer(7)
         );
         assert!(super::parse_display_number("23-59-50").is_err());
     }
 
     #[test]
-    fn slice_text_range_uses_display_style_positions() {
+    fn display_number_range_uses_physical_digit_positions() {
+        let mut sim = Simulator::from_hex_path(
+            &sample_path("sample/ds18b20/prj/Objects/ds18b20.hex"),
+            false,
+        )
+        .expect("load ds18b20");
+
+        sim.set_temperature_c(25.9375);
+        sim.run_ms(1100).expect("run ds18b20 to stable display");
+
         assert_eq!(
-            super::slice_text_range("23-59-50", 4, 5).expect("slice text"),
-            "59"
+            sim.display_number_in_range(1, 6)
+                .expect("read temperature range"),
+            DisplayNumber::Float(25.5)
+        );
+        assert_eq!(
+            sim.display_number_in_range(8, 8).expect("read level digit"),
+            DisplayNumber::Integer(0)
         );
     }
 

@@ -51,12 +51,34 @@ impl Outputs {
     }
 
     pub(crate) fn display_text(&self, decoder: &SegmentDecoder) -> String {
-        self.digits
-            .iter()
-            .map(|digit| decoder.decode_char(*digit))
-            .collect::<String>()
-            .trim_end()
-            .to_string()
+        let mut text = String::with_capacity(16);
+        for digit in self.digits {
+            decoder.push_decoded_text(digit, &mut text);
+        }
+        text.trim_end_matches(' ').to_string()
+    }
+
+    pub(crate) fn display_text_in_range(
+        &self,
+        decoder: &SegmentDecoder,
+        start: usize,
+        end: usize,
+    ) -> Result<String> {
+        if start == 0 || end == 0 {
+            bail!("数码管编号必须在 1..=8");
+        }
+        if start > end {
+            bail!("数码管范围必须满足 start <= end: start={start}, end={end}");
+        }
+        if end > self.digits.len() {
+            bail!("数码管编号必须在 1..=8");
+        }
+
+        let mut text = String::with_capacity((end - start + 1) * 2);
+        for digit in &self.digits[start - 1..end] {
+            decoder.push_decoded_text(*digit, &mut text);
+        }
+        Ok(text.trim_end_matches(' ').to_string())
     }
 
     pub(crate) fn seg_raw(&self, index: usize) -> Result<u8> {
@@ -140,6 +162,50 @@ impl SegmentDecoder {
         self.blank_patterns.insert(pattern);
     }
 
+    #[cfg(test)]
+    pub(crate) fn decode_text(&self, digit: DigitSample) -> String {
+        let mut text = String::with_capacity(2);
+        self.push_decoded_text(digit, &mut text);
+        text
+    }
+
+    pub(crate) fn push_decoded_text(&self, digit: DigitSample, out: &mut String) {
+        if !digit.seen {
+            out.push(' ');
+            return;
+        }
+        let pattern = !digit.segments;
+        if self.blank_patterns.contains(&pattern) {
+            out.push(' ');
+            return;
+        }
+
+        let base_pattern = pattern & 0x7F;
+        let has_dot = pattern & 0x80 != 0;
+
+        if let Some(ch) = self.char_map.get(&base_pattern).copied() {
+            out.push(ch);
+            if has_dot {
+                out.push('.');
+            }
+            return;
+        }
+
+        if self.blank_patterns.contains(&base_pattern) {
+            if has_dot {
+                out.push('.');
+            } else {
+                out.push(' ');
+            }
+            return;
+        }
+
+        out.push('?');
+        if has_dot {
+            out.push('.');
+        }
+    }
+
     pub(crate) fn decode_char(&self, digit: DigitSample) -> char {
         if !digit.seen {
             return ' ';
@@ -148,9 +214,77 @@ impl SegmentDecoder {
         if self.blank_patterns.contains(&pattern) {
             return ' ';
         }
+        let base_pattern = pattern & 0x7F;
         self.char_map
-            .get(&(pattern & 0x7F))
+            .get(&base_pattern)
             .copied()
-            .unwrap_or(if pattern & 0x80 != 0 { '.' } else { '?' })
+            .unwrap_or_else(|| {
+                if self.blank_patterns.contains(&base_pattern) && pattern & 0x80 == 0 {
+                    ' '
+                } else if pattern & 0x80 != 0 {
+                    '.'
+                } else {
+                    '?'
+                }
+            })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DigitSample, Outputs, SegmentDecoder};
+
+    #[test]
+    fn display_text_keeps_decimal_point_after_digit() {
+        let mut outputs = Outputs::default();
+        outputs.digits[0] = DigitSample {
+            segments: !0x3F,
+            seen: true,
+        };
+        outputs.digits[1] = DigitSample {
+            segments: !(0x06 | 0x80),
+            seen: true,
+        };
+        outputs.digits[2] = DigitSample {
+            segments: !0x5B,
+            seen: true,
+        };
+
+        assert_eq!(outputs.display_text(&SegmentDecoder::default()), "01.2");
+    }
+
+    #[test]
+    fn decode_text_uses_dot_for_dot_only_pattern() {
+        let decoder = SegmentDecoder::default();
+        let digit = DigitSample {
+            segments: !0x80,
+            seen: true,
+        };
+
+        assert_eq!(decoder.decode_text(digit), ".");
+    }
+
+    #[test]
+    fn display_text_in_range_uses_physical_digit_range() {
+        let mut outputs = Outputs::default();
+        outputs.digits[0] = DigitSample {
+            segments: !0x3F,
+            seen: true,
+        };
+        outputs.digits[1] = DigitSample {
+            segments: !(0x06 | 0x80),
+            seen: true,
+        };
+        outputs.digits[2] = DigitSample {
+            segments: !0x5B,
+            seen: true,
+        };
+
+        assert_eq!(
+            outputs
+                .display_text_in_range(&SegmentDecoder::default(), 2, 3)
+                .expect("display range"),
+            "1.2"
+        );
     }
 }

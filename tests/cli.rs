@@ -23,6 +23,21 @@ fn temp_script_path() -> PathBuf {
     path
 }
 
+fn ds18b20_expected_milli_celsius(temp_c: f64, resolution_level: u8) -> i64 {
+    let raw_12bit = (temp_c * 16.0).round() as i64;
+    let raw = match resolution_level {
+        0 => raw_12bit & !0x7,
+        1 => raw_12bit & !0x3,
+        2 => raw_12bit & !0x1,
+        _ => raw_12bit,
+    };
+    ((raw as f64) * 0.0625 * 1000.0) as i64
+}
+
+fn ds18b20_expected_display_celsius(temp_c: f64, resolution_level: u8) -> f64 {
+    ds18b20_expected_milli_celsius(temp_c, resolution_level) as f64 / 1000.0
+}
+
 #[test]
 fn rhai_print_writes_to_stdout() {
     let script_path = temp_script_path();
@@ -252,10 +267,16 @@ fn rhai_voltage_aliases_drive_pcf8591_inputs() {
 
 #[test]
 fn rhai_ds18b20_resolution_levels_follow_float_temperature() {
+    let level0 = ds18b20_expected_display_celsius(25.9375, 0);
+    let level1 = ds18b20_expected_display_celsius(25.9375, 1);
+    let level2 = ds18b20_expected_display_celsius(25.9375, 2);
+    let level3 = ds18b20_expected_display_celsius(25.9375, 3);
     let script_path = temp_script_path();
     std::fs::write(
         &script_path,
-        "run_ms(700);\nassert_eq(display_number(1, 6), 0, \"boot temp\");\nassert_eq(display_number(8, 8), 0, \"boot level\");\nset_temperature_c(25.9375);\nrun_ms(700);\nassert_eq(display_number(1, 6), 25500, \"level0 temp\");\nassert_eq(display_number(8, 8), 0, \"level0\");\ntap_key(S5, 80);\nrun_ms(400);\nassert_eq(display_number(1, 6), 25750, \"level1 temp\");\nassert_eq(display_number(8, 8), 1, \"level1\");\ntap_key(S5, 80);\nrun_ms(400);\nassert_eq(display_number(1, 6), 25875, \"level2 temp\");\nassert_eq(display_number(8, 8), 2, \"level2\");\ntap_key(S5, 80);\nrun_ms(400);\nassert_eq(display_number(1, 6), 25937, \"level3 temp\");\nassert_eq(display_number(8, 8), 3, \"level3\");\n",
+        format!(
+            "run_ms(700);\nrun_ms(30);\nassert_eq(display_number(1, 6), 0.000, \"boot temp\");\nassert_eq(display_number(8, 8), 0, \"boot level\");\nset_temperature_c(25.9375);\nrun_ms(700);\nrun_ms(30);\nassert_eq(display_number(1, 6), {level0:.3}, \"level0 temp\");\nassert_eq(display_number(8, 8), 0, \"level0\");\ntap_key(S5, 80);\nrun_ms(400);\nrun_ms(30);\nassert_eq(display_number(1, 6), {level1:.3}, \"level1 temp\");\nassert_eq(display_number(8, 8), 1, \"level1\");\ntap_key(S5, 80);\nrun_ms(400);\nrun_ms(30);\nassert_eq(display_number(1, 6), {level2:.3}, \"level2 temp\");\nassert_eq(display_number(8, 8), 2, \"level2\");\ntap_key(S5, 80);\nrun_ms(400);\nrun_ms(30);\nassert_eq(display_number(1, 6), {level3:.3}, \"level3 temp\");\nassert_eq(display_number(8, 8), 3, \"level3\");\n"
+        ),
     )
     .expect("write script");
 
@@ -286,7 +307,7 @@ fn rhai_ds18b20_temperature_range_handles_negative_and_high_values() {
     let script_path = temp_script_path();
     std::fs::write(
         &script_path,
-        "set_temperature_c(-25);\nrun_ms(700);\nassert_eq(display_number(1, 6), -25000, \"minus25\");\nset_temperature_c(100);\nrun_ms(700);\nassert_eq(display_number(1, 6), 100000, \"plus100\");\n",
+        "set_temperature_c(-25);\nrun_ms(700);\nassert_eq(display_number(1, 6), -25.000, \"minus25\");\nset_temperature_c(100);\nrun_ms(700);\nassert_eq(display_number(1, 5), 100.0, \"plus100\");\n",
     )
     .expect("write script");
 
