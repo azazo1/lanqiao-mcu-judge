@@ -51,6 +51,8 @@ struct WaveArgs {
     wave_html: Option<PathBuf>,
     #[arg(long)]
     wave_json: Option<PathBuf>,
+    #[arg(long)]
+    wave_msgpack: Option<PathBuf>,
     #[arg(
         long = "wave-start",
         value_name = "TIME",
@@ -71,6 +73,7 @@ impl From<WaveArgs> for WaveCaptureOptions {
         Self {
             html_path: value.wave_html,
             json_path: value.wave_json,
+            msgpack_path: value.wave_msgpack,
             start_ns: value.wave_start.into_ns(),
             end_ns: value.wave_end.map(TimeNsArg::into_ns),
         }
@@ -278,5 +281,21 @@ mod tests {
         ]);
         assert_eq!(options.start_ns, 1_000_000);
         assert_eq!(options.end_ns, Some(2_000_000));
+    }
+
+    #[test]
+    fn cli_accepts_wave_msgpack_flag() {
+        let options = dump_wave_options(&[
+            "stcjudge",
+            "dump",
+            "--hex",
+            "sample.hex",
+            "--wave-msgpack",
+            "/tmp/out.msgpack",
+        ]);
+        assert_eq!(
+            options.msgpack_path.as_deref(),
+            Some(std::path::Path::new("/tmp/out.msgpack"))
+        );
     }
 }

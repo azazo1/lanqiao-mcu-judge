@@ -6,10 +6,11 @@
 
 - `--wave-html <path>`: 导出单文件 HTML 查看器.
 - `--wave-json <path>`: 导出原始 JSON 数据.
+- `--wave-msgpack <path>`: 导出原始二进制 MessagePack 数据.
 - `--wave-start <time>`: 仅保留从该时刻开始的波形. 支持 `ns/us/ms/s` 后缀, 例如 `1ns`, `250us`, `12ms`, `1s`. 不带后缀时仍按 `ns` 解释.
 - `--wave-end <time>`: 仅保留到该时刻结束的波形. 支持 `ns/us/ms/s` 后缀, 不带后缀时仍按 `ns` 解释.
 
-可以同时导出 HTML 和 JSON. 例如:
+可以同时导出 HTML, JSON 和 MessagePack. 例如:
 
 ```bash
 stcjudge run \
@@ -18,7 +19,8 @@ stcjudge run \
   --wave-start 20ms \
   --wave-end 180ms \
   --wave-html /tmp/led_pwm_wave.html \
-  --wave-json /tmp/led_pwm_wave.json <<'EOF'
+  --wave-json /tmp/led_pwm_wave.json \
+  --wave-msgpack /tmp/led_pwm_wave.msgpack <<'EOF'
 run_ms(100);
 tap_key(S9, 80);
 run_ms(100);
@@ -57,6 +59,9 @@ stcjudge run \
 ## 查看器特性
 
 HTML 查看器是一个自包含文件, 直接用浏览器打开即可.
+
+- HTML 内部默认嵌入的是 base64 编码的 MessagePack 载荷, 而不是原始大 JSON. 这样导出体积更小, 浏览器加载时的字符串解析开销也更低.
+- `--wave-msgpack` 导出的原始二进制和 HTML 内嵌载荷使用同一份结构定义, 适合后续脚本化处理或接到其他可视化工具.
 
 - 左侧按 `category / group` 分类列出信号, 可以自由勾选组合显示.
 - 搜索框会同时过滤侧边栏和主视图中的信号. 对未勾选但命中的信号会以 preview 形式临时显示.
@@ -134,3 +139,22 @@ JSON 顶层字段:
 - `events` 是事件数组, 每项形如 `{ "track_id": "event.i2c", "t": 456, "label": "START", "detail": null }`.
 
 数字波形和文本波形都只在数值变化时记录一个点, 查看器会按阶梯方式展开.
+
+## MessagePack 结构
+
+`--wave-msgpack` 导出的顶层字段包括:
+
+- `version`
+- `start_ns`
+- `end_ns`
+- `signals`
+- `samples`
+- `events`
+
+其中:
+
+- `signals` 使用定长数组编码, 顺序为 `id`, `label`, `category`, `group`, `aliases`, `kind`, `format`, `unit`, `default_visible`.
+- `samples` 是按 signal 顺序排列的二维数组, 每个采样点编码为 `[time_ns, value]`.
+- `events` 是事件数组, 每项编码为 `[track_signal_index, time_ns, label, detail]`.
+
+这种格式会把字段名和 signal id 这类重复字符串集中保留在元数据中, 降低运行期和导出阶段的字符串处理开销.
