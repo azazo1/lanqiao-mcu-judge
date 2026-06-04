@@ -21,6 +21,7 @@ void Timer1_Init(void)		//1∫¡√Î@12.000MHz
 	EA = 1;
 }
 
+
 void main() {
 	Timer1_Init();
 	eeprom_write(0, &t, 1);

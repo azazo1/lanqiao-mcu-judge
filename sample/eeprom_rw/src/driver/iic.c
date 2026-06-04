@@ -72,6 +72,7 @@ unsigned char I2CReceiveByte(void)
 		scl = 1;
 		I2C_Delay(DELAY_TIME);
 		da <<= 1;
+		sda = 1; // avoid isr
 		if(sda) 
 			da |= 0x01;
 		scl = 0;
