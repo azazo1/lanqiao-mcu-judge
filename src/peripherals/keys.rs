@@ -18,6 +18,11 @@ impl Key {
         self.pressed[row][col] = pressed;
     }
 
+    pub(crate) fn pressed(&self, key: KeyId) -> bool {
+        let (row, col) = key.matrix_position();
+        self.pressed[row][col]
+    }
+
     pub(crate) fn row_low(&self, row: u8, latches: &[u8; 6]) -> bool {
         for col in 0..4 {
             if self.pressed[row as usize][col] && self.column_driven_low(col, latches) {

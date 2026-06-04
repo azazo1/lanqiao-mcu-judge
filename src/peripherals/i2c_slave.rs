@@ -142,12 +142,10 @@ impl I2cSlaveFrontend {
         } else {
             timing.min_scl_high_ns
         };
-        if let Some(transition) = self.scl_filter.observe(
-            time_ns,
-            scl_high,
-            rise_filter_ns,
-            timing.min_scl_low_ns,
-        ) {
+        if let Some(transition) =
+            self.scl_filter
+                .observe(time_ns, scl_high, rise_filter_ns, timing.min_scl_low_ns)
+        {
             match transition {
                 SclTransition::Rising => {
                     self.handle_scl_rising(time_ns, sda_high, device, ctx);
@@ -487,8 +485,13 @@ mod tests {
         fn tick(&mut self) {
             let line_scl_high = self.scl_high && !self.frontend.scl_drive_low();
             let line_sda_high = self.sda_high && !self.frontend.sda_drive_low();
-            self.frontend
-                .sample(self.time_ns, line_scl_high, line_sda_high, &mut self.device, &());
+            self.frontend.sample(
+                self.time_ns,
+                line_scl_high,
+                line_sda_high,
+                &mut self.device,
+                &(),
+            );
             let settled_sda_high = self.sda_high && !self.frontend.sda_drive_low();
             self.frontend.settle_lines(settled_sda_high);
         }

@@ -4,6 +4,7 @@ use anyhow::{Result, bail};
 
 use crate::chip::NS_PER_MICROSECOND;
 use crate::persistent_state::Ds18b20PersistentState;
+use crate::wave::{TRACK_EVENT_ONEWIRE, WaveEventNote};
 
 const RESET_PULSE_MIN_NS: u64 = 400 * NS_PER_MICROSECOND;
 const PRESENCE_PULSE_NS: u64 = 120 * NS_PER_MICROSECOND;
@@ -43,6 +44,7 @@ pub(crate) struct Ds18b20 {
     eeprom_th: u8,
     eeprom_tl: u8,
     eeprom_config: u8,
+    wave_events: Option<Vec<WaveEventNote>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -82,6 +84,12 @@ enum StatusResponse {
 
 impl Default for Ds18b20 {
     fn default() -> Self {
+        Self::new(true)
+    }
+}
+
+impl Ds18b20 {
+    pub(crate) fn new(wave_enabled: bool) -> Self {
         Self {
             drive_low: false,
             temperature_c: 0.0,
@@ -105,11 +113,10 @@ impl Default for Ds18b20 {
             eeprom_th: DEFAULT_TH,
             eeprom_tl: DEFAULT_TL,
             eeprom_config: DEFAULT_CONFIG,
+            wave_events: wave_enabled.then(Vec::new),
         }
     }
-}
 
-impl Ds18b20 {
     pub(crate) fn sample(&mut self, time_ns: u64, line_high: bool) {
         self.finish_background_jobs(time_ns);
 
@@ -203,6 +210,13 @@ impl Ds18b20 {
         self.update_alarm_flag();
     }
 
+    pub(crate) fn take_wave_events(&mut self) -> Vec<WaveEventNote> {
+        match self.wave_events.as_mut() {
+            Some(events) => std::mem::take(events),
+            None => Vec::new(),
+        }
+    }
+
     fn handle_reset(&mut self, time_ns: u64) {
         self.drive_low = true;
         self.read_slot_until = Some(time_ns.saturating_add(PRESENCE_PULSE_NS));
@@ -211,6 +225,15 @@ impl Ds18b20 {
         self.input_value = 0;
         self.tx_bits.clear();
         self.status_response = StatusResponse::None;
+        let presence_until = time_ns.saturating_add(PRESENCE_PULSE_NS);
+        self.push_wave_event(|| {
+            WaveEventNote::with_detail(
+                time_ns,
+                TRACK_EVENT_ONEWIRE,
+                "RESET",
+                format!("presence_until={presence_until}ns"),
+            )
+        });
     }
 
     fn expects_input_byte(&self) -> bool {
@@ -247,8 +270,11 @@ impl Ds18b20 {
     }
 
     fn handle_input_byte(&mut self, value: u8, time_ns: u64) {
+        self.push_wave_event(|| {
+            WaveEventNote::new(time_ns, TRACK_EVENT_ONEWIRE, format!("RX 0x{value:02X}"))
+        });
         match self.bus_state {
-            BusState::AwaitRomCommand => self.handle_rom_command(value),
+            BusState::AwaitRomCommand => self.handle_rom_command(value, time_ns),
             BusState::MatchRom {
                 byte_index,
                 mut candidate,
@@ -275,11 +301,18 @@ impl Ds18b20 {
         }
     }
 
-    fn handle_rom_command(&mut self, value: u8) {
+    fn handle_rom_command(&mut self, value: u8, time_ns: u64) {
+        self.push_wave_event(|| {
+            WaveEventNote::new(
+                time_ns,
+                TRACK_EVENT_ONEWIRE,
+                format!("ROM {}", rom_command_name(value)),
+            )
+        });
         match value {
             0x33 => {
                 let rom = self.rom;
-                self.load_tx_bytes(&rom);
+                self.load_tx_bytes(time_ns, &rom);
                 self.bus_state = BusState::IdleUntilReset;
             }
             0x55 => {
@@ -314,6 +347,13 @@ impl Ds18b20 {
     }
 
     fn handle_function_command(&mut self, value: u8, time_ns: u64) {
+        self.push_wave_event(|| {
+            WaveEventNote::new(
+                time_ns,
+                TRACK_EVENT_ONEWIRE,
+                format!("FUNC {}", function_command_name(value)),
+            )
+        });
         match value {
             0x44 => {
                 self.start_conversion(time_ns);
@@ -325,7 +365,7 @@ impl Ds18b20 {
             }
             0xBE => {
                 let bytes = self.scratchpad();
-                self.load_tx_bytes(&bytes);
+                self.load_tx_bytes(time_ns, &bytes);
                 self.bus_state = BusState::IdleUntilReset;
             }
             0x48 => {
@@ -443,8 +483,23 @@ impl Ds18b20 {
         }
     }
 
-    fn load_tx_bytes(&mut self, bytes: &[u8]) {
+    fn load_tx_bytes(&mut self, time_ns: u64, bytes: &[u8]) {
         self.tx_bits.clear();
+        if !bytes.is_empty() {
+            self.push_wave_event(|| {
+                let detail = bytes
+                    .iter()
+                    .map(|byte| format!("{byte:02X}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                WaveEventNote::with_detail(
+                    time_ns,
+                    TRACK_EVENT_ONEWIRE,
+                    format!("TX {} bytes", bytes.len()),
+                    detail,
+                )
+            });
+        }
         for &byte in bytes {
             for bit in 0..8 {
                 self.tx_bits.push_back(byte & (1 << bit) != 0);
@@ -467,7 +522,25 @@ impl Ds18b20 {
 
     fn start_conversion(&mut self, time_ns: u64) {
         if self.convert_busy_until.is_none() {
-            self.convert_busy_until = Some(time_ns.saturating_add(self.conversion_time_ns()));
+            let done_at = time_ns.saturating_add(self.conversion_time_ns());
+            self.convert_busy_until = Some(done_at);
+            self.push_wave_event(|| {
+                WaveEventNote::with_detail(
+                    time_ns,
+                    TRACK_EVENT_ONEWIRE,
+                    "CONVERT T",
+                    format!("done_at={done_at}ns"),
+                )
+            });
+        }
+    }
+
+    fn push_wave_event<F>(&mut self, build: F)
+    where
+        F: FnOnce() -> WaveEventNote,
+    {
+        if let Some(events) = self.wave_events.as_mut() {
+            events.push(build());
         }
     }
 
@@ -535,6 +608,29 @@ impl Ds18b20 {
         ];
         bytes[8] = crc8_maxim(&bytes[..8]);
         bytes
+    }
+}
+
+fn rom_command_name(value: u8) -> &'static str {
+    match value {
+        0x33 => "0x33 Read ROM",
+        0x55 => "0x55 Match ROM",
+        0xCC => "0xCC Skip ROM",
+        0xF0 => "0xF0 Search ROM",
+        0xEC => "0xEC Alarm Search",
+        _ => "unknown",
+    }
+}
+
+fn function_command_name(value: u8) -> &'static str {
+    match value {
+        0x44 => "0x44 Convert T",
+        0x4E => "0x4E Write Scratchpad",
+        0xBE => "0xBE Read Scratchpad",
+        0x48 => "0x48 Copy Scratchpad",
+        0xB8 => "0xB8 Recall E2",
+        0xB4 => "0xB4 Read Power Supply",
+        _ => "unknown",
     }
 }
 
@@ -690,6 +786,21 @@ mod tests {
         }
 
         assert_eq!(discovered, expected);
+    }
+
+    #[test]
+    fn wave_disabled_does_not_buffer_events() {
+        let mut harness = Harness {
+            dev: Ds18b20::new(false),
+            time_ns: 0,
+            line_high: true,
+        };
+        harness.dev.sample(0, true);
+
+        harness.reset();
+        harness.write_byte(0x33);
+
+        assert!(harness.dev.take_wave_events().is_empty());
     }
 
     #[test]

@@ -1,5 +1,7 @@
 use std::mem;
 
+use crate::wave::{TRACK_EVENT_ADC_DAC, WaveEventNote};
+
 use super::{
     analog::AnalogInputs,
     i2c_slave::{I2cSlaveDevice, I2cSlaveFrontend, I2cSlaveTiming},
@@ -13,10 +15,17 @@ pub(crate) struct Pcf8591 {
     selected_channel: u8,
     expecting_control: bool,
     frontend: I2cSlaveFrontend,
+    wave_events: Option<Vec<WaveEventNote>>,
 }
 
 impl Default for Pcf8591 {
     fn default() -> Self {
+        Self::new(true)
+    }
+}
+
+impl Pcf8591 {
+    pub(crate) fn new(wave_enabled: bool) -> Self {
         Self {
             control: 0,
             dac_value: 0,
@@ -24,11 +33,10 @@ impl Default for Pcf8591 {
             selected_channel: 0,
             expecting_control: false,
             frontend: I2cSlaveFrontend::default(),
+            wave_events: wave_enabled.then(Vec::new),
         }
     }
-}
 
-impl Pcf8591 {
     const ADDRESS7: u8 = 0x48;
     const TIMING: I2cSlaveTiming = I2cSlaveTiming {
         min_scl_low_ns: 4_800,
@@ -52,6 +60,18 @@ impl Pcf8591 {
         self.dac_value
     }
 
+    pub(crate) fn dac_voltage_v(&self) -> f32 {
+        f32::from(self.dac_value) / 255.0 * 5.0
+    }
+
+    pub(crate) fn adc_data(&self) -> u8 {
+        self.adc_data
+    }
+
+    pub(crate) fn selected_channel(&self) -> u8 {
+        self.effective_channel()
+    }
+
     pub(crate) fn sda_drive_low(&self) -> bool {
         self.frontend.sda_drive_low()
     }
@@ -62,6 +82,13 @@ impl Pcf8591 {
 
     pub(crate) fn settle_i2c_lines(&mut self, sda_high: bool) {
         self.frontend.settle_lines(sda_high);
+    }
+
+    pub(crate) fn take_wave_events(&mut self) -> Vec<WaveEventNote> {
+        match self.wave_events.as_mut() {
+            Some(events) => mem::take(events),
+            None => Vec::new(),
+        }
     }
 
     #[cfg(test)]
@@ -102,7 +129,11 @@ impl Pcf8591 {
         }
         let channel = self.effective_channel();
         let max_channel = self.max_channel();
-        self.selected_channel = if channel >= max_channel { 0 } else { channel + 1 };
+        self.selected_channel = if channel >= max_channel {
+            0
+        } else {
+            channel + 1
+        };
     }
 
     fn read_channel_code(&self, channel: u8, analog: &AnalogInputs) -> u8 {
@@ -138,6 +169,21 @@ impl Pcf8591 {
         self.adc_data = self.read_channel_code(channel, analog);
         self.advance_channel();
     }
+
+    fn push_event<L, D>(&mut self, time_ns: u64, label: L, detail: D)
+    where
+        L: FnOnce() -> String,
+        D: FnOnce() -> String,
+    {
+        if let Some(events) = self.wave_events.as_mut() {
+            events.push(WaveEventNote::with_detail(
+                time_ns,
+                TRACK_EVENT_ADC_DAC,
+                label(),
+                detail(),
+            ));
+        }
+    }
 }
 
 impl I2cSlaveDevice for Pcf8591 {
@@ -151,30 +197,60 @@ impl I2cSlaveDevice for Pcf8591 {
         Self::TIMING
     }
 
-    fn on_addressed_write(&mut self, _time_ns: u64, _ctx: &Self::Context) -> bool {
+    fn on_addressed_write(&mut self, time_ns: u64, _ctx: &Self::Context) -> bool {
         self.expecting_control = true;
+        let control = self.control;
+        self.push_event(
+            time_ns,
+            || "ADDR W".to_owned(),
+            || format!("control=0x{control:02X}"),
+        );
         true
     }
 
-    fn on_addressed_read(&mut self, _time_ns: u64, ctx: &Self::Context) -> Option<u8> {
+    fn on_addressed_read(&mut self, time_ns: u64, ctx: &Self::Context) -> Option<u8> {
         let current = self.adc_data;
+        let channel = self.effective_channel();
         self.start_conversion(ctx);
+        self.push_event(
+            time_ns,
+            || format!("ADC 0x{current:02X}"),
+            || format!("channel={channel}"),
+        );
         Some(current)
     }
 
-    fn on_write_byte(&mut self, _time_ns: u64, byte: u8, _ctx: &Self::Context) -> bool {
+    fn on_write_byte(&mut self, time_ns: u64, byte: u8, _ctx: &Self::Context) -> bool {
         if self.expecting_control {
             self.set_control(byte);
             self.expecting_control = false;
+            let channel = self.effective_channel();
+            self.push_event(
+                time_ns,
+                || format!("CTRL 0x{byte:02X}"),
+                || format!("channel={channel}"),
+            );
         } else {
             self.dac_value = byte;
+            let voltage_v = self.dac_voltage_v();
+            self.push_event(
+                time_ns,
+                || format!("DAC 0x{byte:02X}"),
+                || format!("voltage={voltage_v:.3}V"),
+            );
         }
         true
     }
 
-    fn on_read_continue(&mut self, _time_ns: u64, ctx: &Self::Context) -> u8 {
+    fn on_read_continue(&mut self, time_ns: u64, ctx: &Self::Context) -> u8 {
         let current = self.adc_data;
+        let channel = self.effective_channel();
         self.start_conversion(ctx);
+        self.push_event(
+            time_ns,
+            || format!("ADC 0x{current:02X}"),
+            || format!("channel={channel}"),
+        );
         current
     }
 }
@@ -182,7 +258,7 @@ impl I2cSlaveDevice for Pcf8591 {
 #[cfg(test)]
 mod tests {
     use super::Pcf8591;
-    use crate::peripherals::{i2c_slave::I2cSlaveDevice, AnalogInputs};
+    use crate::peripherals::{AnalogInputs, i2c_slave::I2cSlaveDevice};
 
     #[test]
     fn first_read_returns_power_on_default_then_latest_conversion() {
@@ -217,5 +293,16 @@ mod tests {
         assert_eq!(second, 204);
         assert_eq!(third, 0);
         assert_eq!(fourth, 51);
+    }
+
+    #[test]
+    fn wave_disabled_does_not_buffer_events() {
+        let mut pcf = Pcf8591::new(false);
+        let analog = AnalogInputs::default();
+
+        assert!(<Pcf8591 as I2cSlaveDevice>::on_write_byte(
+            &mut pcf, 0, 0x40, &analog
+        ));
+        assert!(pcf.take_wave_events().is_empty());
     }
 }

@@ -6,6 +6,7 @@ mod jumper;
 mod peripherals;
 mod persistent_state;
 mod script;
+mod wave;
 
 use anyhow::Result;
 

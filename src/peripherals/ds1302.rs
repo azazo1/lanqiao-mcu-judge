@@ -2,6 +2,7 @@ use anyhow::{Result, bail};
 
 use crate::chip::NS_PER_SECOND;
 use crate::persistent_state::Ds1302PersistentState;
+use crate::wave::{TRACK_EVENT_DS1302, WaveEventNote};
 
 #[derive(Debug, Clone)]
 pub(crate) struct Ds1302 {
@@ -35,10 +36,17 @@ pub(crate) struct Ds1302 {
     pub(crate) last_clock_write_value: u8,
     pub(crate) last_read_reg: u8,
     pub(crate) last_read_value: u8,
+    wave_events: Option<Vec<WaveEventNote>>,
 }
 
 impl Default for Ds1302 {
     fn default() -> Self {
+        Self::new(true)
+    }
+}
+
+impl Ds1302 {
+    pub(crate) fn new(wave_enabled: bool) -> Self {
         Self {
             ce_prev: false,
             clk_prev: false,
@@ -70,11 +78,10 @@ impl Default for Ds1302 {
             last_clock_write_value: 0,
             last_read_reg: 0,
             last_read_value: 0,
+            wave_events: wave_enabled.then(Vec::new),
         }
     }
-}
 
-impl Ds1302 {
     pub(crate) fn set_hms(&mut self, hour: u8, minute: u8, second: u8) -> Result<()> {
         if hour > 23 || minute > 59 || second > 59 {
             bail!("RTC 时间越界");
@@ -102,7 +109,7 @@ impl Ds1302 {
         }
     }
 
-    pub(crate) fn sample(&mut self, ce: bool, clk: bool, io: bool) {
+    pub(crate) fn sample(&mut self, time_ns: u64, ce: bool, clk: bool, io: bool) {
         if !ce {
             self.reset_transfer_state();
             self.ce_prev = ce;
@@ -126,8 +133,18 @@ impl Ds1302 {
                     self.bit_count = 0;
                     self.data_phase = true;
                     self.reading = self.current_reg & 0x01 != 0;
+                    let current_reg = self.current_reg;
+                    let reading = self.reading;
+                    self.push_wave_event(|| {
+                        WaveEventNote::with_detail(
+                            time_ns,
+                            TRACK_EVENT_DS1302,
+                            if reading { "CMD read" } else { "CMD write" },
+                            format!("reg=0x{current_reg:02X}"),
+                        )
+                    });
                     if self.reading {
-                        self.load_read_byte();
+                        self.load_read_byte(time_ns);
                     }
                 }
             } else if !self.reading {
@@ -139,7 +156,7 @@ impl Ds1302 {
                     let value = self.shift_in;
                     self.shift_in = 0;
                     self.bit_count = 0;
-                    self.write_register(value);
+                    self.write_register(time_ns, value);
                     if self.is_burst() {
                         self.burst_index = self.burst_index.saturating_add(1);
                     }
@@ -155,7 +172,7 @@ impl Ds1302 {
                 self.bit_count = 0;
                 if self.is_burst() {
                     self.burst_index = self.burst_index.saturating_add(1);
-                    self.load_read_byte();
+                    self.load_read_byte(time_ns);
                 }
                 self.shift_out = self.read_byte;
             }
@@ -197,6 +214,13 @@ impl Ds1302 {
         self.year = state.year;
         self.halted = state.halted;
         self.sub_ns = state.sub_ns.min(NS_PER_SECOND.saturating_sub(1));
+    }
+
+    pub(crate) fn take_wave_events(&mut self) -> Vec<WaveEventNote> {
+        match self.wave_events.as_mut() {
+            Some(events) => std::mem::take(events),
+            None => Vec::new(),
+        }
     }
 
     fn increment_date(&mut self) {
@@ -261,11 +285,21 @@ impl Ds1302 {
         self.io_level = true;
     }
 
-    fn load_read_byte(&mut self) {
+    fn load_read_byte(&mut self, time_ns: u64) {
         self.read_byte = self.read_register();
         self.last_read_reg = self.effective_reg();
         self.last_read_value = self.read_byte;
         self.shift_out = self.read_byte;
+        let read_value = self.last_read_value;
+        let read_reg = self.last_read_reg;
+        self.push_wave_event(|| {
+            WaveEventNote::with_detail(
+                time_ns,
+                TRACK_EVENT_DS1302,
+                format!("READ 0x{read_value:02X}"),
+                format!("reg=0x{read_reg:02X}"),
+            )
+        });
     }
 
     fn is_clock_burst(&self) -> bool {
@@ -318,7 +352,7 @@ impl Ds1302 {
         }
     }
 
-    fn write_register(&mut self, value: u8) {
+    fn write_register(&mut self, time_ns: u64, value: u8) {
         let reg = self.effective_reg();
         if self.write_protect && reg != 0x8E {
             return;
@@ -326,6 +360,14 @@ impl Ds1302 {
 
         self.last_write_reg = reg;
         self.last_write_value = value;
+        self.push_wave_event(|| {
+            WaveEventNote::with_detail(
+                time_ns,
+                TRACK_EVENT_DS1302,
+                format!("WRITE 0x{value:02X}"),
+                format!("reg=0x{reg:02X}"),
+            )
+        });
         if reg < 0x90 {
             self.last_clock_write_reg = reg;
             self.last_clock_write_value = value;
@@ -367,6 +409,15 @@ impl Ds1302 {
                 self.ram[((reg - 0xC0) / 2) as usize] = value;
             }
             _ => {}
+        }
+    }
+
+    fn push_wave_event<F>(&mut self, build: F)
+    where
+        F: FnOnce() -> WaveEventNote,
+    {
+        if let Some(events) = self.wave_events.as_mut() {
+            events.push(build());
         }
     }
 }
@@ -419,13 +470,13 @@ mod tests {
             ..Ds1302::default()
         };
 
-        ds1302.write_register(0x28);
+        ds1302.write_register(0, 0x28);
         ds1302.current_reg = 0x88;
-        ds1302.write_register(0x12);
+        ds1302.write_register(0, 0x12);
         ds1302.current_reg = 0x8A;
-        ds1302.write_register(0x06);
+        ds1302.write_register(0, 0x06);
         ds1302.current_reg = 0x8C;
-        ds1302.write_register(0x24);
+        ds1302.write_register(0, 0x24);
 
         assert_eq!(ds1302.date, 28);
         assert_eq!(ds1302.month, 12);
@@ -444,7 +495,7 @@ mod tests {
             ..Ds1302::default()
         };
 
-        ds1302.write_register(0x5A);
+        ds1302.write_register(0, 0x5A);
         assert_eq!(ds1302.read_register(), 0x5A);
     }
 
@@ -455,17 +506,17 @@ mod tests {
             ..Ds1302::default()
         };
 
-        ds1302.write_register(0x92);
+        ds1302.write_register(0, 0x92);
         assert_eq!(ds1302.hour, 0);
         assert!(ds1302.hour_mode_12);
         assert_eq!(ds1302.read_register(), 0x92);
 
-        ds1302.write_register(0xA1);
+        ds1302.write_register(0, 0xA1);
         assert_eq!(ds1302.hour, 13);
         assert!(ds1302.hour_mode_12);
         assert_eq!(ds1302.read_register(), 0xA1);
 
-        ds1302.write_register(0x23);
+        ds1302.write_register(0, 0x23);
         assert_eq!(ds1302.hour, 23);
         assert!(!ds1302.hour_mode_12);
         assert_eq!(ds1302.read_register(), 0x23);
@@ -478,7 +529,7 @@ mod tests {
             ..Ds1302::default()
         };
 
-        ds1302.write_register(0x80);
+        ds1302.write_register(0, 0x80);
         assert!(ds1302.halted);
 
         ds1302.tick_ns(NS_PER_SECOND);
@@ -494,11 +545,11 @@ mod tests {
             ..Ds1302::default()
         };
 
-        ds1302.write_register(0x80);
+        ds1302.write_register(0, 0x80);
         assert!(ds1302.halted);
         assert_eq!(ds1302.second, 0);
 
-        ds1302.write_register(0x25);
+        ds1302.write_register(0, 0x25);
         assert!(!ds1302.halted);
         assert_eq!(ds1302.second, 25);
         assert_eq!(ds1302.read_register(), 0x25);
@@ -516,25 +567,25 @@ mod tests {
             ..Ds1302::default()
         };
 
-        ds1302.write_register(0x80);
+        ds1302.write_register(0, 0x80);
         assert_eq!(ds1302.second, 0);
         assert!(ds1302.halted);
 
         ds1302.current_reg = 0x8E;
-        ds1302.write_register(0x80);
+        ds1302.write_register(0, 0x80);
         assert!(ds1302.write_protect);
 
         ds1302.current_reg = 0x80;
-        ds1302.write_register(0x45);
+        ds1302.write_register(0, 0x45);
         assert_eq!(ds1302.second, 0);
         assert!(ds1302.halted);
 
         ds1302.current_reg = 0x8E;
-        ds1302.write_register(0x00);
+        ds1302.write_register(0, 0x00);
         assert!(!ds1302.write_protect);
 
         ds1302.current_reg = 0x80;
-        ds1302.write_register(0x45);
+        ds1302.write_register(0, 0x45);
         assert_eq!(ds1302.second, 45);
         assert!(!ds1302.halted);
     }
@@ -563,5 +614,14 @@ mod tests {
         assert_eq!(ds1302.date, 1);
         assert_eq!(ds1302.month, 1);
         assert_eq!(ds1302.year, 0);
+    }
+
+    #[test]
+    fn wave_disabled_does_not_buffer_events() {
+        let mut ds1302 = Ds1302::new(false);
+        ds1302.current_reg = 0x80;
+        ds1302.write_register(0, 0x25);
+
+        assert!(ds1302.take_wave_events().is_empty());
     }
 }

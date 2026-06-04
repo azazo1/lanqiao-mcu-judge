@@ -24,6 +24,7 @@ use crate::{
         SegmentDecoder, UltrasonicDevice,
     },
     persistent_state::PersistentState,
+    wave::{TRACK_EVENT_CPU, WaveCaptureOptions, WaveEventNote, WaveRecorder, WaveSnapshot},
 };
 
 mod registers;
@@ -38,6 +39,7 @@ pub struct Simulator {
     code_image: Vec<u8>,
     trace_cpu: bool,
     seg_decoder: SegmentDecoder,
+    wave: WaveRecorder,
 }
 
 #[derive(Debug, Clone)]
@@ -112,18 +114,32 @@ impl LedWatchStats {
 }
 
 impl Simulator {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn from_hex_path(path: &Path, trace_cpu: bool) -> Result<Self> {
+        Self::from_hex_path_with_options(path, trace_cpu, WaveCaptureOptions::default())
+    }
+
+    pub fn from_hex_path_with_options(
+        path: &Path,
+        trace_cpu: bool,
+        wave_options: WaveCaptureOptions,
+    ) -> Result<Self> {
         let hex = fs::read_to_string(path)
             .with_context(|| format!("读取 HEX 文件失败: {}", path.display()))?;
         let code = load_ihex(&hex)?;
-        let ctx = MachineContext::new(code.clone());
-        Ok(Self {
+        let wave_enabled = wave_options.enabled();
+        let ctx = MachineContext::new_with_wave_enabled(code.clone(), wave_enabled);
+        let mut sim = Self {
             cpu: Cpu::new(),
             ctx,
             code_image: code,
             trace_cpu,
             seg_decoder: SegmentDecoder::default(),
-        })
+            wave: WaveRecorder::new(wave_options),
+        };
+        sim.ctx.ports.refresh_inputs(&sim.ctx.board);
+        sim.capture_wave_snapshot();
+        Ok(sim)
     }
 
     pub fn export_persistent_state(&self) -> String {
@@ -134,15 +150,18 @@ impl Simulator {
         let state = PersistentState::decode(text)?;
         self.ctx.board.load_persistent_state(&state);
         self.ctx.ports.refresh_inputs(&self.ctx.board);
+        self.capture_wave_snapshot();
         Ok(())
     }
 
     pub fn reset(&mut self) -> Result<()> {
         let retained = self.ctx.board.retained_state();
         self.cpu = Cpu::new();
-        self.ctx = MachineContext::new(self.code_image.clone());
+        self.ctx =
+            MachineContext::new_with_wave_enabled(self.code_image.clone(), self.wave.enabled());
         self.ctx.board.load_retained_state(&retained);
         self.ctx.ports.refresh_inputs(&self.ctx.board);
+        self.capture_wave_snapshot();
         Ok(())
     }
 
@@ -163,15 +182,19 @@ impl Simulator {
     }
 
     pub fn set_key(&mut self, name: &str, pressed: bool) -> Result<()> {
-        self.ctx.board.set_key(name, pressed)
+        self.ctx.board.set_key(name, pressed)?;
+        self.capture_control_snapshot();
+        Ok(())
     }
 
     pub fn set_key_id(&mut self, key: KeyId, pressed: bool) {
         self.ctx.board.keys.set_key_id(key, pressed);
+        self.capture_control_snapshot();
     }
 
     pub fn key_mode(&mut self, mode: KeyMode) {
         self.ctx.board.key_mode = mode;
+        self.capture_control_snapshot();
     }
 
     pub fn tap_key(&mut self, name: &str, hold_ms: u64) -> Result<()> {
@@ -191,31 +214,41 @@ impl Simulator {
     }
 
     pub fn set_rtc(&mut self, hour: u8, minute: u8, second: u8) -> Result<()> {
-        self.ctx.board.ds1302.set_hms(hour, minute, second)
+        self.ctx.board.ds1302.set_hms(hour, minute, second)?;
+        self.capture_control_snapshot();
+        Ok(())
     }
 
     pub fn set_temperature_c(&mut self, value: f32) {
         self.ctx.board.ds18b20.temperature_c = value;
+        self.capture_control_snapshot();
     }
 
     pub fn set_ds18b20_rom(&mut self, rom: &str) -> Result<()> {
-        self.ctx.board.ds18b20.set_rom_hex(rom)
+        self.ctx.board.ds18b20.set_rom_hex(rom)?;
+        self.capture_control_snapshot();
+        Ok(())
     }
 
     pub fn set_ds18b20_parasite_power(&mut self, enabled: bool) {
         self.ctx.board.ds18b20.set_parasite_power(enabled);
+        self.capture_control_snapshot();
     }
 
     pub fn set_distance_cm(&mut self, value: f32) {
         self.ctx.board.ultrasonic.distance_cm = value.max(0.0);
+        self.capture_control_snapshot();
     }
 
     pub fn set_frequency_hz(&mut self, value: f32) {
         self.ctx.board.ne555.set_frequency_hz(value);
+        self.capture_control_snapshot();
     }
 
     pub fn jumper_on(&mut self, left: SignalId, right: SignalId) -> Result<()> {
-        self.ctx.board.jumper_on(left, right)
+        self.ctx.board.jumper_on(left, right)?;
+        self.capture_control_snapshot();
+        Ok(())
     }
 
     pub fn jumper_on_named(&mut self, left: &str, right: &str) -> Result<()> {
@@ -223,7 +256,9 @@ impl Simulator {
     }
 
     pub fn jumper_off(&mut self, left: SignalId, right: SignalId) -> Result<()> {
-        self.ctx.board.jumper_off(left, right)
+        self.ctx.board.jumper_off(left, right)?;
+        self.capture_control_snapshot();
+        Ok(())
     }
 
     pub fn jumper_off_named(&mut self, left: &str, right: &str) -> Result<()> {
@@ -239,11 +274,14 @@ impl Simulator {
     }
 
     pub fn set_voltage(&mut self, name: &str, value: f32) -> Result<()> {
-        self.ctx.board.set_voltage(name, value)
+        self.ctx.board.set_voltage(name, value)?;
+        self.capture_control_snapshot();
+        Ok(())
     }
 
     pub fn set_voltage_channel(&mut self, channel: VoltageChannel, value: f32) {
         self.ctx.board.analog.set_voltage_channel(channel, value);
+        self.capture_control_snapshot();
     }
 
     pub fn da_value(&self) -> u8 {
@@ -256,6 +294,7 @@ impl Simulator {
 
     pub fn uart_write(&mut self, bytes: &[u8]) {
         self.ctx.ports.uart1.feed_rx(bytes);
+        self.capture_control_snapshot();
     }
 
     pub fn uart_take_string(&mut self) -> String {
@@ -533,6 +572,7 @@ impl Simulator {
         if !self.cpu.interrupt(pending.cpu_interrupt()) {
             return Ok(false);
         }
+        self.note_interrupt_event(pending);
         if pending.tcon_clear_mask != 0 {
             let tcon = self.cpu.sfr(SFR_TCON, &self.ctx);
             self.cpu
@@ -583,18 +623,10 @@ impl Simulator {
                 },
             ] {
                 let (enable_mask, pending, priority_high) = match candidate.source {
-                    InterruptSource::External0 => {
-                        (IE_EX0, p3 & P3_INT0 == 0, ip & IE_EX0 != 0)
-                    }
-                    InterruptSource::Timer0 => {
-                        (IE_ET0, tcon & TCON_TF0 != 0, ip & IE_ET0 != 0)
-                    }
-                    InterruptSource::External1 => {
-                        (IE_EX1, p3 & P3_INT1 == 0, ip & IE_EX1 != 0)
-                    }
-                    InterruptSource::Timer1 => {
-                        (IE_ET1, tcon & TCON_TF1 != 0, ip & IE_ET1 != 0)
-                    }
+                    InterruptSource::External0 => (IE_EX0, p3 & P3_INT0 == 0, ip & IE_EX0 != 0),
+                    InterruptSource::Timer0 => (IE_ET0, tcon & TCON_TF0 != 0, ip & IE_ET0 != 0),
+                    InterruptSource::External1 => (IE_EX1, p3 & P3_INT1 == 0, ip & IE_EX1 != 0),
+                    InterruptSource::Timer1 => (IE_ET1, tcon & TCON_TF1 != 0, ip & IE_ET1 != 0),
                     InterruptSource::Serial => {
                         (IE_ES, scon & (SCON_RI | SCON_TI) != 0, ip & IE_ES != 0)
                     }
@@ -627,8 +659,8 @@ impl Simulator {
             .ports
             .tick_ultrasonic(&mut self.ctx.board, elapsed_ns);
         self.ctx.ports.tick_pca(system_cycles)?;
-        self.ctx.ports.uart1.tick_ns(elapsed_ns);
-        let responses = self.ctx.ports.uart2.tick_ns(elapsed_ns);
+        self.ctx.ports.uart1.tick_ns(start_time_ns, elapsed_ns);
+        let responses = self.ctx.ports.uart2.tick_ns(start_time_ns, elapsed_ns);
         for response in responses {
             self.ctx.board.ultrasonic.push_response(response);
         }
@@ -641,6 +673,8 @@ impl Simulator {
             .board
             .tick_protocols(&self.ctx.ports, &board_latches, &board_latch_versions);
         self.ctx.ports.refresh_inputs(&self.ctx.board);
+        self.capture_wave_snapshot();
+        self.drain_wave_events();
         Ok(())
     }
 
@@ -654,18 +688,169 @@ impl Simulator {
             .unwrap_or(0);
         approximate_instruction_ticks(op)
     }
+
+    fn capture_control_snapshot(&mut self) {
+        self.ctx.ports.refresh_inputs(&self.ctx.board);
+        self.capture_wave_snapshot();
+        self.drain_wave_events();
+    }
+
+    fn capture_wave_snapshot(&mut self) {
+        if !self.wave.enabled() {
+            return;
+        }
+
+        let effective_board_latches = self.ctx.effective_board_latches();
+        let (i2c_slave_scl_low, i2c_slave_sda_low) = self
+            .ctx
+            .board
+            .i2c
+            .slave_drives_low(&self.ctx.board.pcf8591, &self.ctx.board.at24c02);
+        let (i2c_bus_scl, i2c_bus_sda) = self.ctx.board.i2c.line_levels(
+            self.ctx.ports.port_latch[2] & (1 << 0) != 0,
+            self.ctx.ports.port_latch[2] & (1 << 1) != 0,
+            i2c_slave_scl_low,
+            i2c_slave_sda_low,
+        );
+
+        let mut seg_chars = [' '; 8];
+        let mut seg_text = String::with_capacity(8);
+        let mut seg_raw = [0_u8; 8];
+        for (index, digit) in self.ctx.board.outputs.digits.iter().copied().enumerate() {
+            let ch = self.seg_decoder.decode_char(digit);
+            seg_chars[index] = ch;
+            seg_text.push(ch);
+            seg_raw[index] = digit.segments;
+        }
+
+        let key_order = [
+            KeyId::S4,
+            KeyId::S5,
+            KeyId::S6,
+            KeyId::S7,
+            KeyId::S8,
+            KeyId::S9,
+            KeyId::S10,
+            KeyId::S11,
+            KeyId::S12,
+            KeyId::S13,
+            KeyId::S14,
+            KeyId::S15,
+            KeyId::S16,
+            KeyId::S17,
+            KeyId::S18,
+            KeyId::S19,
+        ];
+        let mut key_states = [false; 16];
+        for (index, key) in key_order.into_iter().enumerate() {
+            key_states[index] = self.ctx.board.keys.pressed(key);
+        }
+
+        let snapshot = WaveSnapshot {
+            time_ns: self.ctx.board.sim_time_ns,
+            port_latch: self.ctx.ports.port_latch,
+            port_input: self.ctx.ports.port_input,
+            board_latches_effective: effective_board_latches,
+            board_latches_port: self.ctx.ports.board_latches,
+            board_latches_xdata: self.ctx.xdata.board_latches,
+            signal_sig_out: self.ctx.board.frequency_level(),
+            jumper_net_sig_to_sig_out: self
+                .ctx
+                .board
+                .jumper_installed(SignalId::NetSig, SignalId::SigOut),
+            i2c_master_scl: self.ctx.ports.port_latch[2] & (1 << 0) != 0,
+            i2c_master_sda: self.ctx.ports.port_latch[2] & (1 << 1) != 0,
+            i2c_bus_scl,
+            i2c_bus_sda,
+            i2c_slave_scl_low,
+            i2c_slave_sda_low,
+            onewire_master_high: self.ctx.ports.port_latch[1] & (1 << 4) != 0,
+            onewire_bus_high: self.ctx.ports.port_input[1] & (1 << 4) != 0,
+            onewire_device_low: self.ctx.board.ds18b20.drive_low,
+            ds1302_ce: self.ctx.ports.port_latch[1] & (1 << 3) != 0,
+            ds1302_clk: self.ctx.ports.port_latch[1] & (1 << 7) != 0,
+            ds1302_io: self.ctx.ports.port_input[2] & (1 << 3) != 0,
+            uart1_tx_high: self.ctx.ports.uart1.tx_line_high(),
+            uart1_rx_high: self.ctx.ports.uart1.rx_line_high(),
+            uart2_tx_high: self.ctx.ports.uart2.tx_line_high(),
+            uart2_rx_high: self.ctx.ports.uart2.rx_line_high(),
+            key_states,
+            led_states: self.ctx.board.outputs.leds,
+            relay_on: self.ctx.board.outputs.relay_on,
+            motor_on: self.ctx.board.outputs.motor_on,
+            buzzer_on: self.ctx.board.outputs.buzzer_on,
+            seg_text,
+            seg_chars,
+            seg_raw,
+            analog_rd1_v: self.ctx.board.analog.channel_voltage(1),
+            analog_rb2_v: self.ctx.board.analog.channel_voltage(3),
+            adc_code: self.ctx.board.pcf8591.adc_data(),
+            adc_channel: self.ctx.board.pcf8591.selected_channel(),
+            adc_channel_voltage_v: self
+                .ctx
+                .board
+                .analog
+                .channel_voltage(self.ctx.board.pcf8591.selected_channel()),
+            dac_code: self.ctx.board.pcf8591.dac_value(),
+            dac_voltage_v: self.ctx.board.pcf8591.dac_voltage_v(),
+            ne555_level: self.ctx.board.frequency_level(),
+            ne555_frequency_hz: self.ctx.board.ne555.frequency_hz(),
+        };
+        self.wave.observe_snapshot(&snapshot);
+    }
+
+    fn drain_wave_events(&mut self) {
+        if !self.wave.enabled() {
+            return;
+        }
+        for note in self.ctx.board.ds18b20.take_wave_events() {
+            self.wave.record_event_note(note);
+        }
+        for note in self.ctx.board.pcf8591.take_wave_events() {
+            self.wave.record_event_note(note);
+        }
+        for note in self.ctx.board.ds1302.take_wave_events() {
+            self.wave.record_event_note(note);
+        }
+        for note in self.ctx.ports.uart1.take_wave_events() {
+            self.wave.record_event_note(note);
+        }
+        for note in self.ctx.ports.uart2.take_wave_events() {
+            self.wave.record_event_note(note);
+        }
+    }
+
+    fn note_interrupt_event(&mut self, pending: PendingInterrupt) {
+        if !self.wave.enabled() {
+            return;
+        }
+        let label = match pending.source {
+            InterruptSource::External0 => "INT0 enter",
+            InterruptSource::Timer0 => "T0 enter",
+            InterruptSource::External1 => "INT1 enter",
+            InterruptSource::Timer1 => "T1 enter",
+            InterruptSource::Serial => "UART enter",
+        };
+        let note = WaveEventNote::with_detail(
+            self.ctx.board.sim_time_ns,
+            TRACK_EVENT_CPU,
+            label,
+            format!("pc=0x{:04X}", self.cpu.pc_ext(&self.ctx)),
+        );
+        self.wave.record_event_note(note);
+    }
 }
 
 fn approximate_instruction_ticks(op: u8) -> u32 {
     match op {
         0x00 => 1,
-        0x01 | 0x11 | 0x21 | 0x31 | 0x41 | 0x51 | 0x61 | 0x71 | 0x81 | 0x91 | 0xA1
-        | 0xB1 | 0xC1 | 0xD1 | 0xE1 | 0xF1 => 2,
+        0x01 | 0x11 | 0x21 | 0x31 | 0x41 | 0x51 | 0x61 | 0x71 | 0x81 | 0x91 | 0xA1 | 0xB1
+        | 0xC1 | 0xD1 | 0xE1 | 0xF1 => 2,
         0x02 | 0x12 | 0x22 | 0x32 => 2,
         0x10 | 0x20 | 0x30 | 0x40 | 0x50 | 0x60 | 0x70 | 0x80 => 2,
         0x76 | 0x77 | 0x86 | 0x87 | 0x88..=0x8F | 0x90 | 0xA6..=0xAF => 2,
-        0x05 | 0x15 | 0x42 | 0x45 | 0x52 | 0x55 | 0x62 | 0x65 | 0xA2 | 0xA3 | 0xB2
-        | 0xC2 | 0xD2 | 0xE5 | 0xF5 => 1,
+        0x05 | 0x15 | 0x42 | 0x45 | 0x52 | 0x55 | 0x62 | 0x65 | 0xA2 | 0xA3 | 0xB2 | 0xC2
+        | 0xD2 | 0xE5 | 0xF5 => 1,
         0x43 | 0x53 | 0x63 | 0x75 | 0x85 | 0x92 | 0xB4..=0xBF => 2,
         0xC0 | 0xD0 | 0xD5 | 0xD8..=0xDF => 2,
         0x73 | 0x83 | 0x93 => 2,
@@ -689,13 +874,18 @@ struct MachineContext {
 }
 
 impl MachineContext {
+    #[cfg_attr(not(test), allow(dead_code))]
     fn new(code: Vec<u8>) -> Self {
-        let mut board = BoardModel::new();
+        Self::new_with_wave_enabled(code, true)
+    }
+
+    fn new_with_wave_enabled(code: Vec<u8>, wave_enabled: bool) -> Self {
+        let mut board = BoardModel::new_with_wave_enabled(wave_enabled);
         board
             .outputs
             .sample_from_latches(&BOARD_POWER_ON_LATCHES, &[0; 4]);
         Self {
-            ports: MachinePorts::new(),
+            ports: MachinePorts::new_with_wave_enabled(wave_enabled),
             xdata: BoardXdata::default(),
             code: CodeMemory { code },
             board,
@@ -876,7 +1066,12 @@ struct MachinePorts {
 }
 
 impl MachinePorts {
+    #[allow(dead_code)]
     fn new() -> Self {
+        Self::new_with_wave_enabled(true)
+    }
+
+    fn new_with_wave_enabled(wave_enabled: bool) -> Self {
         let mut generic = [0_u8; 128];
         let mut port_latch = [0xFF_u8; 6];
         port_latch[5] = 0x3F;
@@ -894,8 +1089,18 @@ impl MachinePorts {
             board_latch_versions: [0; 4],
             latch_used: false,
             timers: TimerBlock::default(),
-            uart1: Uart::new(UART1_SFR_SCON, UART1_SFR_SBUF, uart_frame_ns(9_600)),
-            uart2: Uart::new(UART2_SFR_S2CON, UART2_SFR_S2BUF, uart_frame_ns(9_600)),
+            uart1: Uart::new(
+                UART1_SFR_SCON,
+                UART1_SFR_SBUF,
+                uart_frame_ns(9_600),
+                wave_enabled,
+            ),
+            uart2: Uart::new(
+                UART2_SFR_S2CON,
+                UART2_SFR_S2BUF,
+                uart_frame_ns(9_600),
+                wave_enabled,
+            ),
         }
     }
 
@@ -1061,30 +1266,78 @@ impl PortMapper for MachinePorts {
 }
 
 #[derive(Debug)]
+struct UartFrame {
+    byte: u8,
+    bit_index: u8,
+    bit_remaining_ns: u64,
+}
+
+impl UartFrame {
+    fn new(byte: u8, bit_ns: u64) -> Self {
+        Self {
+            byte,
+            bit_index: 0,
+            bit_remaining_ns: bit_ns,
+        }
+    }
+
+    fn current_level(&self) -> bool {
+        match self.bit_index {
+            0 => false,
+            1..=8 => self.byte & (1 << (self.bit_index - 1)) != 0,
+            9 => true,
+            _ => true,
+        }
+    }
+
+    fn advance(&mut self, elapsed_ns: u64, bit_ns: u64) -> bool {
+        let mut remaining = elapsed_ns;
+        while remaining >= self.bit_remaining_ns {
+            remaining -= self.bit_remaining_ns;
+            self.bit_index = self.bit_index.saturating_add(1);
+            if self.bit_index >= 10 {
+                return true;
+            }
+            self.bit_remaining_ns = bit_ns;
+        }
+        self.bit_remaining_ns -= remaining;
+        false
+    }
+}
+
+#[derive(Debug)]
 struct Uart {
     scon_addr: u8,
     sbuf_addr: u8,
     control: u8,
     rx_sbuf: u8,
     tx_queue: VecDeque<u8>,
+    tx_pending: VecDeque<u8>,
     rx_queue: VecDeque<u8>,
-    tx_countdown_ns: Option<(u64, u8)>,
-    rx_countdown_ns: Option<(u64, u8)>,
-    frame_ns: u64,
+    tx_frame: Option<UartFrame>,
+    rx_frame: Option<UartFrame>,
+    bit_ns: u64,
+    tx_line_high: bool,
+    rx_line_high: bool,
+    wave_events: Option<Vec<WaveEventNote>>,
 }
 
 impl Uart {
-    fn new(scon_addr: u8, sbuf_addr: u8, frame_ns: u64) -> Self {
+    fn new(scon_addr: u8, sbuf_addr: u8, frame_ns: u64, wave_enabled: bool) -> Self {
         Self {
             scon_addr,
             sbuf_addr,
             control: 0,
             rx_sbuf: 0,
             tx_queue: VecDeque::new(),
+            tx_pending: VecDeque::new(),
             rx_queue: VecDeque::new(),
-            tx_countdown_ns: None,
-            rx_countdown_ns: None,
-            frame_ns,
+            tx_frame: None,
+            rx_frame: None,
+            bit_ns: (frame_ns / 10).max(1),
+            tx_line_high: true,
+            rx_line_high: true,
+            wave_events: wave_enabled.then(Vec::new),
         }
     }
 
@@ -1100,15 +1353,33 @@ impl Uart {
         if addr == self.scon_addr {
             self.control = value;
         } else if addr == self.sbuf_addr {
-            self.tx_countdown_ns = Some((self.frame_ns, value));
+            self.tx_pending.push_back(value);
         }
     }
 
-    fn tick_ns(&mut self, elapsed_ns: u64) -> Vec<u8> {
+    fn tick_ns(&mut self, start_time_ns: u64, elapsed_ns: u64) -> Vec<u8> {
         let mut sent = Vec::new();
 
-        if let Some((remaining, byte)) = self.tx_countdown_ns.take() {
-            if elapsed_ns >= remaining {
+        if self.tx_frame.is_none()
+            && let Some(byte) = self.tx_pending.pop_front()
+        {
+            self.tx_frame = Some(UartFrame::new(byte, self.bit_ns));
+            self.tx_line_high = false;
+            let track_id = if self.scon_addr == UART2_SFR_S2CON {
+                crate::wave::TRACK_EVENT_UART2
+            } else {
+                crate::wave::TRACK_EVENT_UART1
+            };
+            self.push_wave_event(|| {
+                WaveEventNote::new(start_time_ns, track_id, format!("TX 0x{byte:02X}"))
+            });
+        }
+
+        if let Some(frame) = self.tx_frame.as_mut() {
+            if frame.advance(elapsed_ns, self.bit_ns) {
+                let byte = frame.byte;
+                self.tx_frame = None;
+                self.tx_line_high = true;
                 self.control |= if self.scon_addr == UART2_SFR_S2CON {
                     S2CON_TI
                 } else {
@@ -1117,18 +1388,30 @@ impl Uart {
                 self.tx_queue.push_back(byte);
                 sent.push(byte);
             } else {
-                self.tx_countdown_ns = Some((remaining - elapsed_ns, byte));
+                self.tx_line_high = frame.current_level();
             }
         }
 
-        if self.rx_countdown_ns.is_none()
+        if self.rx_frame.is_none()
             && let Some(byte) = self.rx_queue.pop_front()
         {
-            self.rx_countdown_ns = Some((self.frame_ns, byte));
+            self.rx_frame = Some(UartFrame::new(byte, self.bit_ns));
+            self.rx_line_high = false;
+            let track_id = if self.scon_addr == UART2_SFR_S2CON {
+                crate::wave::TRACK_EVENT_UART2
+            } else {
+                crate::wave::TRACK_EVENT_UART1
+            };
+            self.push_wave_event(|| {
+                WaveEventNote::new(start_time_ns, track_id, format!("RX 0x{byte:02X}"))
+            });
         }
 
-        if let Some((remaining, byte)) = self.rx_countdown_ns.take() {
-            if elapsed_ns >= remaining {
+        if let Some(frame) = self.rx_frame.as_mut() {
+            if frame.advance(elapsed_ns, self.bit_ns) {
+                let byte = frame.byte;
+                self.rx_frame = None;
+                self.rx_line_high = true;
                 let ren_flag = if self.scon_addr == UART2_SFR_S2CON {
                     S2CON_REN
                 } else {
@@ -1144,7 +1427,7 @@ impl Uart {
                     self.control |= ri_flag;
                 }
             } else {
-                self.rx_countdown_ns = Some((remaining - elapsed_ns, byte));
+                self.rx_line_high = frame.current_level();
             }
         }
 
@@ -1155,6 +1438,21 @@ impl Uart {
         self.rx_queue.extend(bytes.iter().copied());
     }
 
+    fn take_wave_events(&mut self) -> Vec<WaveEventNote> {
+        match self.wave_events.as_mut() {
+            Some(events) => std::mem::take(events),
+            None => Vec::new(),
+        }
+    }
+
+    fn tx_line_high(&self) -> bool {
+        self.tx_line_high
+    }
+
+    fn rx_line_high(&self) -> bool {
+        self.rx_line_high
+    }
+
     fn take_tx_string(&mut self) -> String {
         let bytes = self.tx_queue.drain(..).collect::<Vec<_>>();
         String::from_utf8_lossy(&bytes).into_owned()
@@ -1162,6 +1460,15 @@ impl Uart {
 
     fn tx_text(&self) -> String {
         String::from_utf8_lossy(self.tx_queue.as_slices().0).into_owned()
+    }
+
+    fn push_wave_event<F>(&mut self, build: F)
+    where
+        F: FnOnce() -> WaveEventNote,
+    {
+        if let Some(events) = self.wave_events.as_mut() {
+            events.push(build());
+        }
     }
 }
 
@@ -1187,17 +1494,22 @@ struct BoardModel {
 }
 
 impl BoardModel {
+    #[cfg_attr(not(test), allow(dead_code))]
     fn new() -> Self {
+        Self::new_with_wave_enabled(true)
+    }
+
+    fn new_with_wave_enabled(wave_enabled: bool) -> Self {
         Self {
             cpu_cycles: 0,
             sim_time_ns: 0,
             sim_time_ns_remainder: 0,
             system_cycle_remainder: 0,
             outputs: Outputs::default(),
-            ds18b20: Ds18b20::default(),
-            ds1302: Ds1302::default(),
+            ds18b20: Ds18b20::new(wave_enabled),
+            ds1302: Ds1302::new(wave_enabled),
             i2c: I2cBus,
-            pcf8591: Pcf8591::default(),
+            pcf8591: Pcf8591::new(wave_enabled),
             at24c02: At24c02::default(),
             ne555: Ne555::default(),
             ultrasonic: UltrasonicDevice::default(),
@@ -1275,6 +1587,7 @@ impl BoardModel {
         let p1 = ports.port_latch[1];
         let p2 = ports.port_latch[2];
         self.ds1302.sample(
+            self.sim_time_ns,
             (p1 & (1 << 3)) != 0,
             (p1 & (1 << 7)) != 0,
             (p2 & (1 << 3)) != 0,
@@ -1300,7 +1613,8 @@ impl BoardModel {
     }
 
     fn read_i2c_lines(&self, latch: u8) -> (bool, bool) {
-        let (slave_scl_low, slave_sda_low) = self.i2c.slave_drives_low(&self.pcf8591, &self.at24c02);
+        let (slave_scl_low, slave_sda_low) =
+            self.i2c.slave_drives_low(&self.pcf8591, &self.at24c02);
         self.i2c.line_levels(
             (latch & (1 << 0)) != 0,
             (latch & (1 << 1)) != 0,
@@ -1744,14 +2058,14 @@ mod tests {
             code_image: code,
             trace_cpu: false,
             seg_decoder: super::SegmentDecoder::default(),
+            wave: crate::wave::WaveRecorder::new(crate::wave::WaveCaptureOptions::default()),
         };
         sim.cpu
             .register_set(Register::IE, u16::from(super::IE_EA | super::IE_ET1));
-        sim.ctx.ports.timers.write(
-            &mut sim.ctx.ports.generic,
-            super::SFR_TCON,
-            super::TCON_TF1,
-        );
+        sim.ctx
+            .ports
+            .timers
+            .write(&mut sim.ctx.ports.generic, super::SFR_TCON, super::TCON_TF1);
 
         sim.step_once().expect("enter timer1 interrupt");
 
@@ -1790,6 +2104,21 @@ mod tests {
         assert_eq!(super::approximate_instruction_ticks(0x88), 2);
         assert_eq!(super::approximate_instruction_ticks(0xA8), 2);
         assert_eq!(super::approximate_instruction_ticks(0x90), 2);
+    }
+
+    #[test]
+    fn wave_disabled_does_not_buffer_uart_events() {
+        let mut uart = super::Uart::new(
+            super::UART1_SFR_SCON,
+            super::UART1_SFR_SBUF,
+            super::uart_frame_ns(9_600),
+            false,
+        );
+
+        uart.write(super::UART1_SFR_SBUF, 0x55);
+        let _ = uart.tick_ns(0, 1);
+
+        assert!(uart.take_wave_events().is_empty());
     }
 
     #[test]

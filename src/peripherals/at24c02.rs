@@ -265,7 +265,11 @@ mod tests {
         eeprom.buffer_write_byte(0xAB);
         eeprom.commit_page_write(50);
 
-        assert!(!<At24c02 as I2cSlaveDevice>::on_addressed_write(&mut eeprom, 50, &()));
+        assert!(!<At24c02 as I2cSlaveDevice>::on_addressed_write(
+            &mut eeprom,
+            50,
+            &()
+        ));
         assert!(<At24c02 as I2cSlaveDevice>::on_addressed_read(&mut eeprom, 50, &()).is_none());
         assert!(<At24c02 as I2cSlaveDevice>::on_addressed_write(
             &mut eeprom,

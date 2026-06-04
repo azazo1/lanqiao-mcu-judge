@@ -11,7 +11,10 @@ impl I2cBus {
         slave_scl_low: bool,
         slave_sda_low: bool,
     ) -> (bool, bool) {
-        (master_scl_high && !slave_scl_low, master_sda_high && !slave_sda_low)
+        (
+            master_scl_high && !slave_scl_low,
+            master_sda_high && !slave_sda_low,
+        )
     }
 
     pub(crate) fn sample(
@@ -24,15 +27,23 @@ impl I2cBus {
         at24c02: &mut At24c02,
     ) {
         let (slave_scl_low, slave_sda_low) = self.slave_drives_low(pcf8591, at24c02);
-        let (scl_high, sda_high) =
-            self.line_levels(master_scl_high, master_sda_high, slave_scl_low, slave_sda_low);
+        let (scl_high, sda_high) = self.line_levels(
+            master_scl_high,
+            master_sda_high,
+            slave_scl_low,
+            slave_sda_low,
+        );
 
         pcf8591.sample_i2c(time_ns, scl_high, sda_high, analog);
         at24c02.sample_i2c(time_ns, scl_high, sda_high);
 
         let (slave_scl_low, slave_sda_low) = self.slave_drives_low(pcf8591, at24c02);
-        let (_, settled_sda_high) =
-            self.line_levels(master_scl_high, master_sda_high, slave_scl_low, slave_sda_low);
+        let (_, settled_sda_high) = self.line_levels(
+            master_scl_high,
+            master_sda_high,
+            slave_scl_low,
+            slave_sda_low,
+        );
         pcf8591.settle_i2c_lines(settled_sda_high);
         at24c02.settle_i2c_lines(settled_sda_high);
     }
@@ -110,10 +121,11 @@ mod tests {
         }
 
         fn line_sda_high(&self) -> bool {
-            let (slave_scl_low, slave_sda_low) = self.bus.slave_drives_low(&self.pcf8591, &self.at24c02);
-            let (_, sda_high) = self
-                .bus
-                .line_levels(self.scl, self.sda, slave_scl_low, slave_sda_low);
+            let (slave_scl_low, slave_sda_low) =
+                self.bus.slave_drives_low(&self.pcf8591, &self.at24c02);
+            let (_, sda_high) =
+                self.bus
+                    .line_levels(self.scl, self.sda, slave_scl_low, slave_sda_low);
             sda_high
         }
 
