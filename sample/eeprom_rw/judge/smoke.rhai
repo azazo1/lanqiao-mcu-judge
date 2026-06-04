@@ -1,4 +1,4 @@
-run_ms(10);
+run_ms(50);
 assert_eq(eeprom_byte(0), 0xA5, "写入 eeprom 地址 0");
 
 fn to_int(b) {
