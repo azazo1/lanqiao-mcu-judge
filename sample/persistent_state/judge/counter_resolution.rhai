@@ -1,16 +1,12 @@
 key_mode(KEYBOARD);
 
-fn settle() {
-    run_ms(180);
-}
-
 fn tap_many(key, count) {
     let i = 0;
     while i < count {
         tap_key(key, 20);
         i += 1;
     }
-    settle();
+    run_ms(120);
 }
 
 fn screen() {
@@ -47,7 +43,7 @@ assert_screen(1, 3, 0, "S4 第 101 次");
 assert_eq(normalized_state(), boot_state, "VV 增加 1 后仍不应进入持久状态");
 
 reset();
-settle();
+run_ms(180);
 assert_screen(0, 3, 0, "reset 后 VV 清零");
 assert_eq(normalized_state(), boot_state, "reset 后持久状态仍应保持 boot");
 
@@ -57,7 +53,7 @@ let res0_state = normalized_state();
 assert(res0_state != boot_state, "R 改变后持久状态字符串应变化");
 
 reset();
-settle();
+run_ms(180);
 assert_screen(0, 0, 0, "reset 后保留 R");
 assert_eq(normalized_state(), res0_state, "reset 不应破坏 R 的持久状态");
 

@@ -1,12 +1,8 @@
 key_mode(KEYBOARD);
 
-fn settle() {
-    run_ms(180);
-}
-
 fn tap_once(key) {
     tap_key(key, 80);
-    settle();
+    run_ms(120);
 }
 
 fn screen() {

@@ -1,16 +1,12 @@
 key_mode(KEYBOARD);
 
-fn settle() {
-    run_ms(180);
-}
-
 fn tap_many(key, count) {
     let i = 0;
     while i < count {
         tap_key(key, 20);
         i += 1;
     }
-    settle();
+    run_ms(120);
 }
 
 fn screen() {
@@ -46,7 +42,7 @@ let state_a = normalized_state();
 assert(state_a != boot_state, "snapshot A 应不同于 boot");
 
 reset();
-settle();
+run_ms(180);
 assert_screen(0, 0, 1, "reset 后恢复 snapshot A");
 assert_eq(normalized_state(), state_a, "reset 后 persistent state 不变");
 
@@ -70,7 +66,7 @@ assert_eq(eeprom_byte(2), 3, "load A 后 EEPROM[0x02]");
 assert_eq(screen(), visible_b, "仅 load 不应自动刷新 RAM 缓存显示");
 
 reset();
-settle();
+run_ms(180);
 assert_screen(0, 0, 1, "load A 再 reset 后");
 tap_many(S8, 1);
 assert_screen(0, 0, 2, "snapshot A 中地址 0x01");
@@ -79,7 +75,7 @@ assert_screen(0, 0, 3, "snapshot A 中地址 0x02");
 
 load_persistent_state(state_b);
 reset();
-settle();
+run_ms(180);
 assert_screen(0, 3, 4, "load B 再 reset 后");
 tap_many(S8, 1);
 assert_screen(0, 3, 0, "snapshot B 中地址 0x01");
@@ -88,7 +84,7 @@ assert_screen(0, 3, 255, "snapshot B 中地址 0x02");
 
 load_persistent_state(boot_state);
 reset();
-settle();
+run_ms(180);
 assert_screen(0, 3, 0, "恢复 boot 后");
 assert_eq(eeprom_byte(0), 0, "恢复 boot 后 EEPROM[0x00]");
 assert_eq(eeprom_byte(1), 0, "恢复 boot 后 EEPROM[0x01]");

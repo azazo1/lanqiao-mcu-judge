@@ -1,33 +1,109 @@
-run_ms(220);
-assert_eq(seg_pattern(1), 0x38, "上电默认显示 L");
-assert_eq(parse_int(display_text(30)[1..8]), 0, "上电默认距离");
+fn settle() {
+    run_ms(220);
+}
+
+fn tap_many(key, count) {
+    let i = 0;
+    while i < count {
+        tap_key(key, 80);
+        i += 1;
+    }
+}
+
+fn assert_page(prefix, label) {
+    assert_eq(display_text(30)[0..1], prefix, label + ", 页面前缀");
+}
+
+fn distance_value() {
+    display_number(4, 8, 30)
+}
+
+fn speed_value() {
+    display_number(6, 8, 30)
+}
+
+fn assert_speed(expected, label) {
+    assert_page("P", label);
+    assert_eq(speed_value(), expected, label + ", 音速数值");
+}
+
+fn assert_distance_range(lower, upper, label) {
+    assert_page("L", label);
+    assert_in(distance_value(), lower..=upper, label + ", 距离数值");
+}
+
+fn assert_distance_formula(distance_cm, speed, tolerance, label) {
+    let expected = distance_cm * speed / 340;
+    assert_distance_range(expected - tolerance, expected + tolerance, label);
+}
+
+settle();
+assert_page("L", "上电默认距离页");
+assert_eq(distance_value(), 0, "上电默认距离值");
 
 set_distance_cm(20);
-run_ms(220);
-assert_eq(seg_pattern(1), 0x38, "距离页保持 L");
-let default_dist = parse_int(display_text(30)[3..8]);
-assert_in(default_dist, 18..=20, "20cm 障碍物在默认音速下的距离显示");
+settle();
+assert_distance_range(18, 20, "20cm 在默认音速下的距离显示");
 
 tap_key(S4, 80);
-run_ms(220);
-assert_eq(seg_pattern(1), 0x73, "S4 切换到音速页");
-assert_eq(parse_int(display_text(30)[5..8]), 340, "默认音速值");
+settle();
+assert_speed(340, "切换到音速页后默认音速");
+
+set_distance_cm(123);
+settle();
+assert_speed(340, "音速页不应被距离变化干扰");
 
 tap_key(S9, 80);
-run_ms(220);
-assert_eq(seg_pattern(1), 0x73, "音速页保持 P");
-assert_eq(parse_int(display_text(30)[5..8]), 345, "S9 增大音速");
+settle();
+assert_speed(345, "S9 单步加 5");
 
 tap_key(S8, 80);
-run_ms(220);
-assert_eq(parse_int(display_text(30)[5..8]), 340, "S8 减小音速");
+settle();
+assert_speed(340, "S8 单步减 5");
 
-tap_key(S9, 80);
-run_ms(220);
-assert_eq(parse_int(display_text(30)[5..8]), 345, "再次增大音速");
+tap_many(S9, 12);
+settle();
+assert_speed(400, "音速增加到上限 400");
+
+tap_many(S9, 2);
+settle();
+assert_speed(400, "超过上限后应保持 400");
 
 tap_key(S4, 80);
-run_ms(220);
-assert_eq(seg_pattern(1), 0x38, "切回距离页");
-let adjusted_dist = parse_int(display_text(30)[3..8]);
-assert_in(adjusted_dist, 19..=21, "音速变化后重新测得距离");
+settle();
+assert_distance_formula(123, 400, 1, "400m/s 时 123cm 的距离显示");
+
+set_distance_cm(100);
+settle();
+assert_distance_formula(100, 400, 1, "400m/s 时 100cm 的距离显示");
+
+reset();
+settle();
+assert_page("L", "复位后回到距离页");
+assert_distance_formula(100, 340, 1, "复位后保留当前距离注入");
+
+tap_key(S4, 80);
+settle();
+assert_speed(340, "复位后音速恢复默认值");
+
+tap_many(S8, 8);
+settle();
+assert_speed(300, "音速减小到下限 300");
+
+tap_many(S8, 2);
+settle();
+assert_speed(300, "低于下限后应保持 300");
+
+set_distance_cm(200);
+settle();
+assert_speed(300, "最低音速页不应被距离变化干扰");
+
+tap_key(S4, 80);
+settle();
+set_distance_cm(100);
+settle();
+assert_distance_formula(100, 300, 1, "300m/s 时 100cm 的距离显示");
+
+set_distance_cm(0);
+settle();
+assert_eq(distance_value(), 0, "0cm 输入应显示 0");

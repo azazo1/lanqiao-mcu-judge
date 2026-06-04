@@ -18,20 +18,38 @@ fn assert_only_led(expected, label) {
     }
 }
 
-run_us(34);
-assert_all_off("上电早期");
-
-let step = 0;
-while step < 10 {
-    run_ms(5);
-    let expected = (step % 8) + 1;
-    assert_only_led(expected, "流水灯步进 step: " + step);
-    step += 1;
+fn assert_step_delay_ns(dt_ns, label) {
+    assert_in(dt_ns, 4_500_000..=5_500_000, label + ", Delay5ms 应约为 5ms");
 }
 
-reset();
-let stats = watch_led_stats(L1, 200);
-assert_in(stats.changes, 9..=11, "200ms 内 L1 变化次数约 10");
-assert_in(stats.rising_edges, 4..=6, "200ms 内 L1 上升沿约 5");
-assert_in(stats.pwm_frequency_hz, 20..=30, "L1 循环频率约 25Hz");
-assert_in(stats.duty_percent, 10..=15, "L1 占空比约 12.5%");
+fn all_off() {
+    let led = 1;
+    while led <= 8 {
+        if led_on(led) {
+            return false;
+        }
+        led += 1;
+    }
+    true
+}
+
+fn wait_led_on(target, expected, label) {
+    let dt_ns = run_to(target, UP, 20_000_000);
+    assert_step_delay_ns(dt_ns, label);
+    assert_only_led(expected, label);
+}
+
+let startup_ns = run_to(|| all_off(), 2_000_000);
+assert_in(startup_ns, 0..=200_000, "上电后应先清空初始 LED 输出");
+assert_all_off("上电早期");
+
+wait_led_on(L1, 1, "流水灯步进 step: 0");
+wait_led_on(L2, 2, "流水灯步进 step: 1");
+wait_led_on(L3, 3, "流水灯步进 step: 2");
+wait_led_on(L4, 4, "流水灯步进 step: 3");
+wait_led_on(L5, 5, "流水灯步进 step: 4");
+wait_led_on(L6, 6, "流水灯步进 step: 5");
+wait_led_on(L7, 7, "流水灯步进 step: 6");
+wait_led_on(L8, 8, "流水灯步进 step: 7");
+wait_led_on(L1, 1, "流水灯步进 step: 8");
+wait_led_on(L2, 2, "流水灯步进 step: 9");

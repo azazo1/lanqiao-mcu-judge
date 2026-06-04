@@ -166,7 +166,84 @@ let dt1 = run_to(|| sim_time_ns() >= target_ns, 30_000);
 let dt2 = run_to(|| display_text() == "000", 2_000_000);
 ```
 
+对 `delay` 这类纯时序题, 可以先等待上电初始化结束, 再测后续步进:
+
+```rhai
+fn all_off() {
+    let led = 1;
+    while led <= 8 {
+        if led_on(led) {
+            return false;
+        }
+        led += 1;
+    }
+    true
+}
+
+let startup_ns = run_to(|| all_off(), 2_000_000);
+assert_in(startup_ns, 0..=200_000, "上电后应先清空初始 LED 输出");
+
+let dt0 = run_to(L1, UP, 20_000_000);
+let dt1 = run_to(L2, UP, 20_000_000);
+assert_in(dt0, 4_500_000..=5_500_000, "step0 Delay5ms 约为 5ms");
+assert_in(dt1, 4_500_000..=5_500_000, "step1 Delay5ms 约为 5ms");
+```
+
+对类似超声波, 温度, 电压这类题目, 推荐优先使用稳定显示和按位数值提取, 不要直接依赖原始段码:
+
+```rhai
+run_ms(220);
+assert_eq(display_text(30)[0..1], "L", "默认距离页");
+assert_eq(display_number(4, 8, 30), 0, "默认距离");
+
+tap_key(S4, 80);
+assert_eq(display_text(30)[0..1], "P", "切到音速页");
+assert_eq(display_number(6, 8, 30), 340, "默认音速");
+```
+
 注意, 回调内部也可以调用其他脚本接口, 包括读取显示, LED, 串口, 甚至继续推进仿真时间. `run_to` 返回的耗时会按真实推进后的仿真时间计算.
+
+但回调应尽量保持轻量:
+
+- 更适合只做简单布尔条件判断.
+- 不要在回调里反复做正则匹配, 多次字符串切片, 多次数值解析, 或其他明显偏重的逻辑.
+- 如果目标只是等待按键后显示稳定, 优先用 `tap_key(...)` 自带的释放后等待, 再配合普通的 `display_text(...)` 或 `display_number(...)` 断言, 不要把整套显示解析都塞进 `run_to(predicate)`.
+
+不推荐这样写:
+
+```rhai
+run_to(
+    || {
+        let text = screen_now();
+        regex_is_match(text, "^\\d{2}-\\d-\\d{3}$")
+            && parse_int(text[0..2]) == vv_expected
+            && parse_int(text[3..4]) == r_expected
+            && parse_int(text[5..8]) == eee_expected
+    },
+    250_000_000
+);
+```
+
+这类写法每一步都要重复取显示, 做正则, 切片, 解析数值, 在长时间等待场景下会明显拖慢脚本执行.
+
+更推荐拆开处理:
+
+1. 如果只是等待按键释放后的稳定态, 直接依赖 `tap_key(...)` 内置等待.
+2. 如果题目本身存在 `100ms`, `500ms`, `1s` 之类的业务刷新节拍, 显式 `run_ms(...)` 留出对应余量.
+3. 等显示稳定后, 再在普通断言里做字符串切片, 正则或数值解析.
+
+例如:
+
+```rhai
+tap_key(S4, 80);
+run_ms(120);
+
+let text = display_text(30);
+assert(regex_is_match(text, "^\\d{2}-\\d-\\d{3}$"), "显示格式");
+assert_eq(parse_int(text[0..2]), vv_expected, "VV");
+assert_eq(parse_int(text[3..4]), r_expected, "R");
+assert_eq(parse_int(text[5..8]), eee_expected, "EEE");
+```
 
 `run_to_ns/us/ms/s(...)` 的参数是绝对仿真时间戳, 不是相对等待时长. 它们同样返回本次推进的时间:
 
@@ -234,6 +311,17 @@ let dt_s = run_to_s(2);
 - `jumper_installed(NET_SIG, SIG_OUT)`
 
 默认跳帽状态按开发板原理图处理. 例如 `NET_SIG` 和 `SIG_OUT` 在板内默认没有硬连, 所以仅仅 `set_frequency_hz(...)` 不会自动影响 `P3.4/T0`. 如果题目或评测需要把 NE555 输出接到单片机频率输入, 需要先显式调用 `jumper_on(NET_SIG, SIG_OUT)`.
+
+`tap_key(...)` 会自动执行一次完整的按下和释放流程:
+
+- 先按下目标按键.
+- 推进 `hold_ms`.
+- 再释放按键.
+- 释放后额外再推进 `30ms`.
+
+如果只是为了等待按键释放后的稳定态, 一般不需要在 `tap_key(...)` 后面再手写一段额外的 `settle`.
+
+但这不等于可以省掉题目本身的业务刷新等待. 例如显示任务本身每 `100ms` 才更新一次, 那么在一串按键操作完成后, 仍然可能需要额外 `run_ms(...)` 去等待显示刷新, 这部分等待应按题目自身节拍来决定.
 
 ## 输出观察
 

@@ -1,16 +1,12 @@
 key_mode(KEYBOARD);
 
-fn settle() {
-    run_ms(180);
-}
-
 fn tap_many(key, count) {
     let i = 0;
     while i < count {
         tap_key(key, 20);
         i += 1;
     }
-    settle();
+    run_ms(120);
 }
 
 fn screen() {
@@ -61,7 +57,7 @@ assert_eq(eeprom_byte(0), 1, "EEPROM[0x00]");
 
 load_persistent_state(boot_state);
 reset();
-settle();
+run_ms(180);
 assert_screen(0, 3, 0, "恢复 boot 后");
 
 tap_many(S10, 1);
