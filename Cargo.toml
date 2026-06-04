@@ -17,3 +17,7 @@ rhai = { version = "1.23.6", features = ["sync", "debugging"] }
 tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+
+[profile.samply]
+inherits = "release"
+debug = true

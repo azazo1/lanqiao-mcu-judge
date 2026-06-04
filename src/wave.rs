@@ -221,7 +221,7 @@ struct SamplePoint {
 
 #[derive(Debug, Clone)]
 struct EventRecord {
-    track_id: String,
+    track_id: &'static str,
     time_ns: u64,
     label: String,
     detail: Option<String>,
@@ -230,8 +230,53 @@ struct EventRecord {
 #[derive(Debug, Clone)]
 struct SignalRecord {
     def: SignalDef,
-    last_value: Option<SignalValue>,
     points: Vec<SamplePoint>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct WaveSignalSlots {
+    pin_bytes: [usize; 6],
+    latch_bytes: [usize; 6],
+    pin_bits: [[usize; 8]; 6],
+    latch_bits: [[usize; 8]; 6],
+    board_effective: [usize; 4],
+    board_port: [usize; 4],
+    board_xdata: [usize; 4],
+    signal_sig_out: usize,
+    jumper_net_sig_to_sig_out: usize,
+    i2c_master_scl: usize,
+    i2c_master_sda: usize,
+    i2c_bus_scl: usize,
+    i2c_bus_sda: usize,
+    i2c_slave_scl_low: usize,
+    i2c_slave_sda_low: usize,
+    onewire_master_high: usize,
+    onewire_bus_high: usize,
+    onewire_device_low: usize,
+    ds1302_ce: usize,
+    ds1302_clk: usize,
+    ds1302_io: usize,
+    uart1_tx: usize,
+    uart1_rx: usize,
+    uart2_tx: usize,
+    uart2_rx: usize,
+    key_states: [usize; 16],
+    led_states: [usize; 8],
+    relay_on: usize,
+    motor_on: usize,
+    buzzer_on: usize,
+    seg_text: usize,
+    seg_digit_text: [usize; 8],
+    seg_digit_raw: [usize; 8],
+    analog_rd1_v: usize,
+    analog_rb2_v: usize,
+    adc_code: usize,
+    adc_channel: usize,
+    adc_channel_voltage_v: usize,
+    dac_code: usize,
+    dac_voltage_v: usize,
+    ne555_level: usize,
+    ne555_frequency_hz: usize,
 }
 
 fn push_alias(aliases: &mut Vec<String>, alias: impl Into<String>) {
@@ -451,6 +496,7 @@ pub(crate) struct WaveRecorder {
     window: WaveCaptureWindow,
     signal_lookup: HashMap<String, usize>,
     signals: Vec<SignalRecord>,
+    signal_slots: WaveSignalSlots,
     events: Vec<EventRecord>,
     i2c_decoder: I2cEventDecoder,
     observed_start_ns: Option<u64>,
@@ -465,12 +511,13 @@ impl WaveRecorder {
             window,
             signal_lookup: HashMap::new(),
             signals: Vec::new(),
+            signal_slots: WaveSignalSlots::default(),
             events: Vec::new(),
             i2c_decoder: I2cEventDecoder::default(),
             observed_start_ns: None,
             observed_end_ns: None,
         };
-        recorder.register_defaults();
+        recorder.signal_slots = recorder.register_defaults();
         recorder
     }
 
@@ -493,180 +540,189 @@ impl WaveRecorder {
             window,
             signal_lookup: HashMap::new(),
             signals: Vec::new(),
+            signal_slots: WaveSignalSlots::default(),
             events: Vec::new(),
             i2c_decoder: I2cEventDecoder::default(),
             observed_start_ns: None,
             observed_end_ns: None,
         };
-        recorder.register_defaults();
+        recorder.signal_slots = recorder.register_defaults();
         recorder
     }
 
-    pub(crate) fn observe_snapshot(&mut self, snapshot: &WaveSnapshot) {
+    pub(crate) fn observe_snapshot(&mut self, snapshot: WaveSnapshot) {
         if !self.window.includes(snapshot.time_ns) {
             return;
         }
+        let slots = self.signal_slots;
 
         for port in 0..6 {
-            self.record_integer(
-                &format!("pin.p{port}"),
+            self.record_integer_index(
+                slots.pin_bytes[port],
                 snapshot.time_ns,
                 i64::from(snapshot.port_input[port]),
             );
-            self.record_integer(
-                &format!("latch.p{port}"),
+            self.record_integer_index(
+                slots.latch_bytes[port],
                 snapshot.time_ns,
                 i64::from(snapshot.port_latch[port]),
             );
             for bit in 0..8 {
                 let pin_high = snapshot.port_input[port] & (1 << bit) != 0;
                 let latch_high = snapshot.port_latch[port] & (1 << bit) != 0;
-                self.record_bool(&format!("pin.p{port}.{bit}"), snapshot.time_ns, pin_high);
-                self.record_bool(
-                    &format!("latch.p{port}.{bit}"),
-                    snapshot.time_ns,
-                    latch_high,
-                );
+                self.record_bool_index(slots.pin_bits[port][bit], snapshot.time_ns, pin_high);
+                self.record_bool_index(slots.latch_bits[port][bit], snapshot.time_ns, latch_high);
             }
         }
 
         for slot in 0..4 {
-            self.record_integer(
-                &format!("board.effective.{slot}"),
+            self.record_integer_index(
+                slots.board_effective[slot],
                 snapshot.time_ns,
                 i64::from(snapshot.board_latches_effective[slot]),
             );
-            self.record_integer(
-                &format!("board.port.{slot}"),
+            self.record_integer_index(
+                slots.board_port[slot],
                 snapshot.time_ns,
                 i64::from(snapshot.board_latches_port[slot]),
             );
-            self.record_integer(
-                &format!("board.xdata.{slot}"),
+            self.record_integer_index(
+                slots.board_xdata[slot],
                 snapshot.time_ns,
                 i64::from(snapshot.board_latches_xdata[slot]),
             );
         }
 
-        self.record_bool("signal.sig_out", snapshot.time_ns, snapshot.signal_sig_out);
-        self.record_bool(
-            "jumper.net_sig_sig_out",
+        self.record_bool_index(
+            slots.signal_sig_out,
+            snapshot.time_ns,
+            snapshot.signal_sig_out,
+        );
+        self.record_bool_index(
+            slots.jumper_net_sig_to_sig_out,
             snapshot.time_ns,
             snapshot.jumper_net_sig_to_sig_out,
         );
 
-        self.record_bool("i2c.master_scl", snapshot.time_ns, snapshot.i2c_master_scl);
-        self.record_bool("i2c.master_sda", snapshot.time_ns, snapshot.i2c_master_sda);
-        self.record_bool("i2c.bus_scl", snapshot.time_ns, snapshot.i2c_bus_scl);
-        self.record_bool("i2c.bus_sda", snapshot.time_ns, snapshot.i2c_bus_sda);
-        self.record_bool(
-            "i2c.slave_scl_low",
+        self.record_bool_index(
+            slots.i2c_master_scl,
+            snapshot.time_ns,
+            snapshot.i2c_master_scl,
+        );
+        self.record_bool_index(
+            slots.i2c_master_sda,
+            snapshot.time_ns,
+            snapshot.i2c_master_sda,
+        );
+        self.record_bool_index(slots.i2c_bus_scl, snapshot.time_ns, snapshot.i2c_bus_scl);
+        self.record_bool_index(slots.i2c_bus_sda, snapshot.time_ns, snapshot.i2c_bus_sda);
+        self.record_bool_index(
+            slots.i2c_slave_scl_low,
             snapshot.time_ns,
             snapshot.i2c_slave_scl_low,
         );
-        self.record_bool(
-            "i2c.slave_sda_low",
+        self.record_bool_index(
+            slots.i2c_slave_sda_low,
             snapshot.time_ns,
             snapshot.i2c_slave_sda_low,
         );
 
-        self.record_bool(
-            "onewire.master_high",
+        self.record_bool_index(
+            slots.onewire_master_high,
             snapshot.time_ns,
             snapshot.onewire_master_high,
         );
-        self.record_bool(
-            "onewire.bus_high",
+        self.record_bool_index(
+            slots.onewire_bus_high,
             snapshot.time_ns,
             snapshot.onewire_bus_high,
         );
-        self.record_bool(
-            "onewire.device_low",
+        self.record_bool_index(
+            slots.onewire_device_low,
             snapshot.time_ns,
             snapshot.onewire_device_low,
         );
 
-        self.record_bool("ds1302.ce", snapshot.time_ns, snapshot.ds1302_ce);
-        self.record_bool("ds1302.clk", snapshot.time_ns, snapshot.ds1302_clk);
-        self.record_bool("ds1302.io", snapshot.time_ns, snapshot.ds1302_io);
+        self.record_bool_index(slots.ds1302_ce, snapshot.time_ns, snapshot.ds1302_ce);
+        self.record_bool_index(slots.ds1302_clk, snapshot.time_ns, snapshot.ds1302_clk);
+        self.record_bool_index(slots.ds1302_io, snapshot.time_ns, snapshot.ds1302_io);
 
-        self.record_bool("uart1.tx", snapshot.time_ns, snapshot.uart1_tx_high);
-        self.record_bool("uart1.rx", snapshot.time_ns, snapshot.uart1_rx_high);
-        self.record_bool("uart2.tx", snapshot.time_ns, snapshot.uart2_tx_high);
-        self.record_bool("uart2.rx", snapshot.time_ns, snapshot.uart2_rx_high);
+        self.record_bool_index(slots.uart1_tx, snapshot.time_ns, snapshot.uart1_tx_high);
+        self.record_bool_index(slots.uart1_rx, snapshot.time_ns, snapshot.uart1_rx_high);
+        self.record_bool_index(slots.uart2_tx, snapshot.time_ns, snapshot.uart2_tx_high);
+        self.record_bool_index(slots.uart2_rx, snapshot.time_ns, snapshot.uart2_rx_high);
 
-        for (index, name) in KEY_NAMES.iter().enumerate() {
-            self.record_bool(
-                &format!("key.{}", name.to_ascii_lowercase()),
+        for index in 0..KEY_NAMES.len() {
+            self.record_bool_index(
+                slots.key_states[index],
                 snapshot.time_ns,
                 snapshot.key_states[index],
             );
         }
 
-        for (index, name) in LED_NAMES.iter().enumerate() {
-            self.record_bool(
-                &format!("led.{}", name.to_ascii_lowercase()),
+        for index in 0..LED_NAMES.len() {
+            self.record_bool_index(
+                slots.led_states[index],
                 snapshot.time_ns,
                 snapshot.led_states[index],
             );
         }
-        self.record_bool("output.relay", snapshot.time_ns, snapshot.relay_on);
-        self.record_bool("output.motor", snapshot.time_ns, snapshot.motor_on);
-        self.record_bool("output.buzzer", snapshot.time_ns, snapshot.buzzer_on);
+        self.record_bool_index(slots.relay_on, snapshot.time_ns, snapshot.relay_on);
+        self.record_bool_index(slots.motor_on, snapshot.time_ns, snapshot.motor_on);
+        self.record_bool_index(slots.buzzer_on, snapshot.time_ns, snapshot.buzzer_on);
 
-        self.record_text("seg.text", snapshot.time_ns, snapshot.seg_text.clone());
         for digit in 0..8 {
-            self.record_text(
-                &format!("seg.d{}.text", digit + 1),
+            self.record_char_text_index(
+                slots.seg_digit_text[digit],
                 snapshot.time_ns,
-                snapshot.seg_chars[digit].to_string(),
+                snapshot.seg_chars[digit],
             );
-            self.record_integer(
-                &format!("seg.d{}.raw", digit + 1),
+            self.record_integer_index(
+                slots.seg_digit_raw[digit],
                 snapshot.time_ns,
                 i64::from(snapshot.seg_raw[digit]),
             );
         }
 
-        self.record_float(
-            "analog.rd1_v",
+        self.record_float_index(
+            slots.analog_rd1_v,
             snapshot.time_ns,
             f64::from(snapshot.analog_rd1_v),
         );
-        self.record_float(
-            "analog.rb2_v",
+        self.record_float_index(
+            slots.analog_rb2_v,
             snapshot.time_ns,
             f64::from(snapshot.analog_rb2_v),
         );
-        self.record_integer(
-            "pcf8591.adc_code",
+        self.record_integer_index(
+            slots.adc_code,
             snapshot.time_ns,
             i64::from(snapshot.adc_code),
         );
-        self.record_integer(
-            "pcf8591.adc_channel",
+        self.record_integer_index(
+            slots.adc_channel,
             snapshot.time_ns,
             i64::from(snapshot.adc_channel),
         );
-        self.record_float(
-            "pcf8591.adc_channel_v",
+        self.record_float_index(
+            slots.adc_channel_voltage_v,
             snapshot.time_ns,
             f64::from(snapshot.adc_channel_voltage_v),
         );
-        self.record_integer(
-            "pcf8591.dac_code",
+        self.record_integer_index(
+            slots.dac_code,
             snapshot.time_ns,
             i64::from(snapshot.dac_code),
         );
-        self.record_float(
-            "pcf8591.dac_v",
+        self.record_float_index(
+            slots.dac_voltage_v,
             snapshot.time_ns,
             f64::from(snapshot.dac_voltage_v),
         );
 
-        self.record_bool("ne555.level", snapshot.time_ns, snapshot.ne555_level);
-        self.record_float(
-            "ne555.frequency_hz",
+        self.record_bool_index(slots.ne555_level, snapshot.time_ns, snapshot.ne555_level);
+        self.record_float_index(
+            slots.ne555_frequency_hz,
             snapshot.time_ns,
             f64::from(snapshot.ne555_frequency_hz),
         );
@@ -677,6 +733,8 @@ impl WaveRecorder {
         {
             self.record_event_note(note);
         }
+
+        self.record_text_index(slots.seg_text, snapshot.time_ns, snapshot.seg_text);
     }
 
     pub(crate) fn record_event_note(&mut self, note: WaveEventNote) {
@@ -688,16 +746,17 @@ impl WaveRecorder {
         }
         self.mark_observed_time(note.time_ns);
         self.events.push(EventRecord {
-            track_id: note.track_id.to_string(),
+            track_id: note.track_id,
             time_ns: note.time_ns,
             label: note.label,
             detail: note.detail,
         });
     }
 
-    fn register_defaults(&mut self) {
+    fn register_defaults(&mut self) -> WaveSignalSlots {
+        let mut slots = WaveSignalSlots::default();
         for port in 0..6 {
-            self.register_signal(
+            slots.pin_bytes[port] = self.register_signal(
                 format!("pin.p{port}"),
                 format!("P{port} pin byte"),
                 "pins",
@@ -707,7 +766,7 @@ impl WaveRecorder {
                 None,
                 false,
             );
-            self.register_signal(
+            slots.latch_bytes[port] = self.register_signal(
                 format!("latch.p{port}"),
                 format!("P{port} latch byte"),
                 "port_latches",
@@ -718,7 +777,7 @@ impl WaveRecorder {
                 false,
             );
             for bit in 0..8 {
-                self.register_signal(
+                slots.pin_bits[port][bit] = self.register_signal(
                     format!("pin.p{port}.{bit}"),
                     format!("P{port}.{bit} pin"),
                     "pins",
@@ -728,7 +787,7 @@ impl WaveRecorder {
                     None,
                     false,
                 );
-                self.register_signal(
+                slots.latch_bits[port][bit] = self.register_signal(
                     format!("latch.p{port}.{bit}"),
                     format!("P{port}.{bit} latch"),
                     "port_latches",
@@ -742,7 +801,7 @@ impl WaveRecorder {
         }
 
         for slot in 0..4 {
-            self.register_signal(
+            slots.board_effective[slot] = self.register_signal(
                 format!("board.effective.{slot}"),
                 format!("effective latch {slot}"),
                 "board_latches",
@@ -752,7 +811,7 @@ impl WaveRecorder {
                 None,
                 false,
             );
-            self.register_signal(
+            slots.board_port[slot] = self.register_signal(
                 format!("board.port.{slot}"),
                 format!("port latch {slot}"),
                 "board_latches",
@@ -762,7 +821,7 @@ impl WaveRecorder {
                 None,
                 false,
             );
-            self.register_signal(
+            slots.board_xdata[slot] = self.register_signal(
                 format!("board.xdata.{slot}"),
                 format!("xdata latch {slot}"),
                 "board_latches",
@@ -778,7 +837,7 @@ impl WaveRecorder {
             ("signal.sig_out", "SIG_OUT", true),
             ("jumper.net_sig_sig_out", "NET_SIG<->SIG_OUT", true),
         ] {
-            self.register_signal(
+            let index = self.register_signal(
                 id,
                 label,
                 "board_signals",
@@ -788,6 +847,11 @@ impl WaveRecorder {
                 None,
                 visible,
             );
+            match id {
+                "signal.sig_out" => slots.signal_sig_out = index,
+                "jumper.net_sig_sig_out" => slots.jumper_net_sig_to_sig_out = index,
+                _ => {}
+            }
         }
 
         self.register_signal(
@@ -808,7 +872,7 @@ impl WaveRecorder {
             ("i2c.slave_scl_low", "slave SCL low", false),
             ("i2c.slave_sda_low", "slave SDA low", false),
         ] {
-            self.register_signal(
+            let index = self.register_signal(
                 id,
                 label,
                 "protocol",
@@ -818,6 +882,15 @@ impl WaveRecorder {
                 None,
                 visible,
             );
+            match id {
+                "i2c.master_scl" => slots.i2c_master_scl = index,
+                "i2c.master_sda" => slots.i2c_master_sda = index,
+                "i2c.bus_scl" => slots.i2c_bus_scl = index,
+                "i2c.bus_sda" => slots.i2c_bus_sda = index,
+                "i2c.slave_scl_low" => slots.i2c_slave_scl_low = index,
+                "i2c.slave_sda_low" => slots.i2c_slave_sda_low = index,
+                _ => {}
+            }
         }
 
         self.register_signal(
@@ -835,7 +908,7 @@ impl WaveRecorder {
             ("onewire.bus_high", "bus high", true),
             ("onewire.device_low", "device low", false),
         ] {
-            self.register_signal(
+            let index = self.register_signal(
                 id,
                 label,
                 "protocol",
@@ -845,6 +918,12 @@ impl WaveRecorder {
                 None,
                 visible,
             );
+            match id {
+                "onewire.master_high" => slots.onewire_master_high = index,
+                "onewire.bus_high" => slots.onewire_bus_high = index,
+                "onewire.device_low" => slots.onewire_device_low = index,
+                _ => {}
+            }
         }
 
         self.register_signal(
@@ -873,7 +952,7 @@ impl WaveRecorder {
             ("uart2.tx", "TX", "uart2", false),
             ("uart2.rx", "RX", "uart2", false),
         ] {
-            self.register_signal(
+            let index = self.register_signal(
                 id,
                 label,
                 "protocol",
@@ -883,6 +962,13 @@ impl WaveRecorder {
                 None,
                 visible,
             );
+            match id {
+                "uart1.tx" => slots.uart1_tx = index,
+                "uart1.rx" => slots.uart1_rx = index,
+                "uart2.tx" => slots.uart2_tx = index,
+                "uart2.rx" => slots.uart2_rx = index,
+                _ => {}
+            }
         }
 
         self.register_signal(
@@ -900,7 +986,7 @@ impl WaveRecorder {
             ("ds1302.clk", "CLK", false),
             ("ds1302.io", "IO", false),
         ] {
-            self.register_signal(
+            let index = self.register_signal(
                 id,
                 label,
                 "protocol",
@@ -910,6 +996,12 @@ impl WaveRecorder {
                 None,
                 visible,
             );
+            match id {
+                "ds1302.ce" => slots.ds1302_ce = index,
+                "ds1302.clk" => slots.ds1302_clk = index,
+                "ds1302.io" => slots.ds1302_io = index,
+                _ => {}
+            }
         }
 
         self.register_signal(
@@ -924,8 +1016,7 @@ impl WaveRecorder {
         );
 
         for (index, name) in KEY_NAMES.iter().enumerate() {
-            let _ = index;
-            self.register_signal(
+            slots.key_states[index] = self.register_signal(
                 format!("key.{}", name.to_ascii_lowercase()),
                 (*name).to_string(),
                 "keys",
@@ -937,10 +1028,10 @@ impl WaveRecorder {
             );
         }
 
-        for name in LED_NAMES {
-            self.register_signal(
+        for (index, name) in LED_NAMES.iter().enumerate() {
+            slots.led_states[index] = self.register_signal(
                 format!("led.{}", name.to_ascii_lowercase()),
-                name,
+                *name,
                 "outputs",
                 "leds",
                 SignalKind::Digital,
@@ -954,7 +1045,7 @@ impl WaveRecorder {
             ("output.motor", "motor", false),
             ("output.buzzer", "buzzer", false),
         ] {
-            self.register_signal(
+            let index = self.register_signal(
                 id,
                 label,
                 "outputs",
@@ -964,9 +1055,15 @@ impl WaveRecorder {
                 None,
                 visible,
             );
+            match id {
+                "output.relay" => slots.relay_on = index,
+                "output.motor" => slots.motor_on = index,
+                "output.buzzer" => slots.buzzer_on = index,
+                _ => {}
+            }
         }
 
-        self.register_signal(
+        slots.seg_text = self.register_signal(
             "seg.text",
             "display text",
             "display",
@@ -977,7 +1074,7 @@ impl WaveRecorder {
             true,
         );
         for digit in 1..=8 {
-            self.register_signal(
+            slots.seg_digit_text[digit - 1] = self.register_signal(
                 format!("seg.d{digit}.text"),
                 format!("D{digit} char"),
                 "display",
@@ -987,7 +1084,7 @@ impl WaveRecorder {
                 None,
                 false,
             );
-            self.register_signal(
+            slots.seg_digit_raw[digit - 1] = self.register_signal(
                 format!("seg.d{digit}.raw"),
                 format!("D{digit} raw"),
                 "display",
@@ -1083,7 +1180,7 @@ impl WaveRecorder {
                 SignalKind::Digital,
             ),
         ] {
-            self.register_signal(
+            let index = self.register_signal(
                 id,
                 label,
                 "analog",
@@ -1093,7 +1190,21 @@ impl WaveRecorder {
                 unit,
                 visible,
             );
+            match id {
+                "analog.rd1_v" => slots.analog_rd1_v = index,
+                "analog.rb2_v" => slots.analog_rb2_v = index,
+                "pcf8591.adc_code" => slots.adc_code = index,
+                "pcf8591.adc_channel" => slots.adc_channel = index,
+                "pcf8591.adc_channel_v" => slots.adc_channel_voltage_v = index,
+                "pcf8591.dac_code" => slots.dac_code = index,
+                "pcf8591.dac_v" => slots.dac_voltage_v = index,
+                "ne555.frequency_hz" => slots.ne555_frequency_hz = index,
+                "ne555.level" => slots.ne555_level = index,
+                _ => {}
+            }
         }
+
+        slots
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1107,7 +1218,7 @@ impl WaveRecorder {
         format: &'static str,
         unit: Option<&'static str>,
         default_visible: bool,
-    ) {
+    ) -> usize {
         let id = id.into();
         let label = label.into();
         let category = category.into();
@@ -1127,40 +1238,65 @@ impl WaveRecorder {
                 unit,
                 default_visible,
             },
-            last_value: None,
             points: Vec::new(),
         });
+        index
     }
 
-    fn record_bool(&mut self, id: &str, time_ns: u64, value: bool) {
-        self.record_value(id, time_ns, SignalValue::Bool(value));
+    fn record_bool_index(&mut self, index: usize, time_ns: u64, value: bool) {
+        self.record_value_index(index, time_ns, SignalValue::Bool(value));
     }
 
-    fn record_integer(&mut self, id: &str, time_ns: u64, value: i64) {
-        self.record_value(id, time_ns, SignalValue::Integer(value));
+    fn record_integer_index(&mut self, index: usize, time_ns: u64, value: i64) {
+        self.record_value_index(index, time_ns, SignalValue::Integer(value));
     }
 
-    fn record_float(&mut self, id: &str, time_ns: u64, value: f64) {
-        self.record_value(id, time_ns, SignalValue::Float(value));
+    fn record_float_index(&mut self, index: usize, time_ns: u64, value: f64) {
+        self.record_value_index(index, time_ns, SignalValue::Float(value));
     }
 
-    fn record_text(&mut self, id: &str, time_ns: u64, value: String) {
-        self.record_value(id, time_ns, SignalValue::Text(value));
-    }
-
-    fn record_value(&mut self, id: &str, time_ns: u64, value: SignalValue) {
-        let Some(index) = self.signal_lookup.get(id).copied() else {
-            return;
-        };
-        let should_push = match self.signals[index].last_value.as_ref() {
-            Some(last) => !last.same_as(&value),
+    fn record_text_index(&mut self, index: usize, time_ns: u64, value: String) {
+        let should_push = match self.signals[index].points.last() {
+            Some(last) => {
+                !matches!(&last.value, SignalValue::Text(last_text) if last_text == &value)
+            }
             None => true,
         };
         if should_push {
             self.mark_observed_time(time_ns);
-            let record = &mut self.signals[index];
-            record.last_value = Some(value.clone());
-            record.points.push(SamplePoint { time_ns, value });
+            self.signals[index].points.push(SamplePoint {
+                time_ns,
+                value: SignalValue::Text(value),
+            });
+        }
+    }
+
+    fn record_char_text_index(&mut self, index: usize, time_ns: u64, value: char) {
+        let should_push = match self.signals[index].points.last() {
+            Some(last) => match &last.value {
+                SignalValue::Text(last_text) => {
+                    let mut chars = last_text.chars();
+                    chars.next() != Some(value) || chars.next().is_some()
+                }
+                _ => true,
+            },
+            None => true,
+        };
+        if should_push {
+            self.record_text_index(index, time_ns, value.to_string());
+        }
+    }
+
+    fn record_value_index(&mut self, index: usize, time_ns: u64, value: SignalValue) {
+        let should_push = match self.signals[index].points.last() {
+            Some(last) => !last.value.same_as(&value),
+            None => true,
+        };
+        if should_push {
+            self.mark_observed_time(time_ns);
+            self.signals[index]
+                .points
+                .push(SamplePoint { time_ns, value });
         }
     }
 
@@ -1258,7 +1394,7 @@ impl WaveRecorder {
                 writer.write_all(b",")?;
             }
             writer.write_all(b"{")?;
-            write_json_field(writer, "track_id", &event.track_id)?;
+            write_json_field(writer, "track_id", event.track_id)?;
             writer.write_all(b",\"t\":")?;
             write!(writer, "{}", event.time_ns)?;
             writer.write_all(b",")?;

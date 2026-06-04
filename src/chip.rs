@@ -14,6 +14,24 @@ pub(crate) const NS_PER_MILLISECOND: u64 = 1_000_000;
 pub(crate) const NS_PER_MICROSECOND: u64 = 1_000;
 const BOARD_POWER_ON_LATCHES: [u8; 4] = [0x00, 0x70, 0x00, 0x00];
 const INTERRUPT_ENTRY_TICKS: u32 = 3;
+const WAVE_KEY_ORDER: [KeyId; 16] = [
+    KeyId::S4,
+    KeyId::S5,
+    KeyId::S6,
+    KeyId::S7,
+    KeyId::S8,
+    KeyId::S9,
+    KeyId::S10,
+    KeyId::S11,
+    KeyId::S12,
+    KeyId::S13,
+    KeyId::S14,
+    KeyId::S15,
+    KeyId::S16,
+    KeyId::S17,
+    KeyId::S18,
+    KeyId::S19,
+];
 
 use crate::{
     hex::load_ihex,
@@ -718,6 +736,9 @@ impl Simulator {
         if !self.wave.captures_time(time_ns) {
             return;
         }
+        let signal_sig_out = self.ctx.board.frequency_level();
+        let adc_channel = self.ctx.board.pcf8591.selected_channel();
+        let adc_channel_voltage_v = self.ctx.board.analog.channel_voltage(adc_channel);
 
         let effective_board_latches = self.ctx.effective_board_latches();
         let (i2c_slave_scl_low, i2c_slave_sda_low) = self
@@ -741,26 +762,8 @@ impl Simulator {
             seg_raw[index] = digit.segments;
         }
 
-        let key_order = [
-            KeyId::S4,
-            KeyId::S5,
-            KeyId::S6,
-            KeyId::S7,
-            KeyId::S8,
-            KeyId::S9,
-            KeyId::S10,
-            KeyId::S11,
-            KeyId::S12,
-            KeyId::S13,
-            KeyId::S14,
-            KeyId::S15,
-            KeyId::S16,
-            KeyId::S17,
-            KeyId::S18,
-            KeyId::S19,
-        ];
         let mut key_states = [false; 16];
-        for (index, key) in key_order.into_iter().enumerate() {
+        for (index, key) in WAVE_KEY_ORDER.into_iter().enumerate() {
             key_states[index] = self.ctx.board.keys.pressed(key);
         }
 
@@ -771,7 +774,7 @@ impl Simulator {
             board_latches_effective: effective_board_latches,
             board_latches_port: self.ctx.ports.board_latches,
             board_latches_xdata: self.ctx.xdata.board_latches,
-            signal_sig_out: self.ctx.board.frequency_level(),
+            signal_sig_out,
             jumper_net_sig_to_sig_out: self
                 .ctx
                 .board
@@ -803,18 +806,14 @@ impl Simulator {
             analog_rd1_v: self.ctx.board.analog.channel_voltage(1),
             analog_rb2_v: self.ctx.board.analog.channel_voltage(3),
             adc_code: self.ctx.board.pcf8591.adc_data(),
-            adc_channel: self.ctx.board.pcf8591.selected_channel(),
-            adc_channel_voltage_v: self
-                .ctx
-                .board
-                .analog
-                .channel_voltage(self.ctx.board.pcf8591.selected_channel()),
+            adc_channel,
+            adc_channel_voltage_v,
             dac_code: self.ctx.board.pcf8591.dac_value(),
             dac_voltage_v: self.ctx.board.pcf8591.dac_voltage_v(),
-            ne555_level: self.ctx.board.frequency_level(),
+            ne555_level: signal_sig_out,
             ne555_frequency_hz: self.ctx.board.ne555.frequency_hz(),
         };
-        self.wave.observe_snapshot(&snapshot);
+        self.wave.observe_snapshot(snapshot);
     }
 
     fn drain_wave_events(&mut self) {
