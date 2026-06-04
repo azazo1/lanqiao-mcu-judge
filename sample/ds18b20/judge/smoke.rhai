@@ -46,7 +46,6 @@ assert_eq(display_number(1, 6), -25.000, "-25 摄氏度显示");
 assert_eq(display_number(8, 8), 3, "负温时保留当前精度等级");
 
 set_temperature_c(100);
-run_ms(1100);
-run_ms(30);
-assert_eq(display_number(1, 5), 100.0, "100 摄氏度显示");
+run_ms(960);
+assert_eq(display_number(1, 6), 100.000, "100 摄氏度显示");
 assert_eq(display_number(8, 8), 3, "高温时保留当前精度等级");
