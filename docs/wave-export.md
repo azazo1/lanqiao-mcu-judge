@@ -25,6 +25,35 @@ run_ms(100);
 EOF
 ```
 
+## 先看调试时间, 再裁剪波形
+
+如果还不确定要抓哪一段时间窗, 可以先用 `RUST_LOG=debug` 跑一次脚本. 评测脚本逐语句日志里现在会带 `sim_time_ns`, 也就是该时刻的仿真时间, 单位为 `ns`.
+
+一个简单流程如下:
+
+1. 先执行:
+
+```bash
+RUST_LOG=debug stcjudge run \
+  --hex sample/led_pwm/prj/Objects/led_pwm.hex \
+  --script sample/led_pwm/judge/smoke.rhai
+```
+
+2. 在日志里找到目标现象附近的 `sim_time_ns`, 比如某次按键后显示异常, 某次 `IIC` 读写, 某次中断进入.
+3. 围绕这个时间留一点前后余量, 例如前后各 `100us` 或 `1ms`.
+4. 再执行一次并导出波形:
+
+```bash
+stcjudge run \
+  --hex sample/led_pwm/prj/Objects/led_pwm.hex \
+  --script sample/led_pwm/judge/smoke.rhai \
+  --wave-start 12.4ms \
+  --wave-end 13.6ms \
+  --wave-html /tmp/led_pwm_wave.html
+```
+
+如果日志里看到的是 `12400000 ns`, 那么可以直接写成 `--wave-start 12400000`, 也可以换成更容易读写的 `12.4ms`. 两种写法等价.
+
 ## 查看器特性
 
 HTML 查看器是一个自包含文件, 直接用浏览器打开即可.

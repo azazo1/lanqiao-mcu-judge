@@ -69,7 +69,12 @@ pub fn run_repl(sim: Simulator) -> Result<()> {
             continue;
         }
 
-        debug!(line_no, statement, "执行 REPL 语句");
+        debug!(
+            line_no,
+            sim_time_ns = current_sim_time_ns(&shared),
+            statement,
+            "执行 REPL 语句"
+        );
         if let Err(err) = eval_source_with_engine(
             &engine,
             &mut scope,
@@ -90,7 +95,12 @@ fn eval_source(sim: Simulator, label: &str, source: &str) -> Result<()> {
     let trace_state = Arc::new(Mutex::new(ScriptTraceState::default()));
     let engine = build_engine(&shared, &trace_state);
     let mut scope = build_scope();
-    debug!(label, lines = source.lines().count(), "开始执行评测脚本");
+    debug!(
+        label,
+        lines = source.lines().count(),
+        sim_time_ns = current_sim_time_ns(&shared),
+        "开始执行评测脚本"
+    );
     eval_source_with_engine(&engine, &mut scope, &trace_state, label, source)?;
     Ok(())
 }
@@ -116,7 +126,7 @@ fn eval_source_with_engine(
 fn build_engine(sim: &Arc<Mutex<Simulator>>, trace_state: &Arc<Mutex<ScriptTraceState>>) -> Engine {
     let mut engine = Engine::new();
     engine.on_print(|text| println!("{text}"));
-    register_script_progress_debugger(&mut engine, trace_state);
+    register_script_progress_debugger(&mut engine, sim, trace_state);
     engine.register_type_with_name::<LedId>("Led");
     engine.register_type_with_name::<KeyId>("Key");
     engine.register_type_with_name::<KeyMode>("KeyMode");
@@ -167,10 +177,16 @@ fn script_event_name(event: DebuggerEvent<'_>) -> &'static str {
     }
 }
 
+fn current_sim_time_ns(sim: &Arc<Mutex<Simulator>>) -> u64 {
+    sim.lock().expect("sim lock").sim_time_ns()
+}
+
 fn register_script_progress_debugger(
     engine: &mut Engine,
+    sim: &Arc<Mutex<Simulator>>,
     trace_state: &Arc<Mutex<ScriptTraceState>>,
 ) {
+    let sim = Arc::clone(sim);
     let trace_state = Arc::clone(trace_state);
     #[allow(deprecated)]
     engine.register_debugger(
@@ -192,6 +208,7 @@ fn register_script_progress_debugger(
                 }
                 snippet = source_line_snippet(&state.lines, pos);
             }
+            let sim_time_ns = current_sim_time_ns(&sim);
 
             match event {
                 DebuggerEvent::Start | DebuggerEvent::Step | DebuggerEvent::BreakPoint(_) => {
@@ -200,6 +217,7 @@ fn register_script_progress_debugger(
                         label,
                         event = script_event_name(event),
                         step,
+                        sim_time_ns,
                         line = pos.line().unwrap_or(0),
                         column = pos.position().unwrap_or(0),
                         call_level = context.call_level(),
@@ -215,6 +233,7 @@ fn register_script_progress_debugger(
                         target: "script_progress",
                         label,
                         event = script_event_name(event),
+                        sim_time_ns,
                         line = pos.line().unwrap_or(0),
                         column = pos.position().unwrap_or(0),
                         call_level = context.call_level(),
@@ -227,6 +246,7 @@ fn register_script_progress_debugger(
                         target: "script_progress",
                         label,
                         event = script_event_name(event),
+                        sim_time_ns,
                         steps = step,
                         "评测脚本执行结束"
                     );

@@ -184,6 +184,10 @@ impl Simulator {
         Ok(())
     }
 
+    pub fn sim_time_ns(&self) -> u64 {
+        self.ctx.board.sim_time_ns
+    }
+
     pub fn set_key(&mut self, name: &str, pressed: bool) -> Result<()> {
         self.ctx.board.set_key(name, pressed)?;
         self.capture_control_snapshot();
