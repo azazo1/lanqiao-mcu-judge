@@ -331,10 +331,7 @@ fn build_scope() -> Scope<'static> {
     }
     for port in 0_usize..=5 {
         for bit in 0_u8..=7 {
-            scope.push_constant(
-                format!("P{port}{bit}"),
-                RunToTarget::Pin { port, bit },
-            );
+            scope.push_constant(format!("P{port}{bit}"), RunToTarget::Pin { port, bit });
         }
     }
     for (name, target) in [
@@ -425,29 +422,35 @@ fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
     });
 
     let sim_run_to_ns = Arc::clone(sim);
-    engine.register_fn("run_to_ns", move |target_ns: i64| -> Result<i64, Box<EvalAltResult>> {
-        let target_ns =
-            u64::try_from(target_ns).map_err(|_| runtime_error("run_to_ns 参数必须 >= 0"))?;
-        let elapsed_ns = sim_run_to_ns
-            .lock()
-            .map_err(|_| runtime_error("仿真器锁已损坏"))?
-            .run_to_ns(target_ns)
-            .map_err(|err| runtime_error(err.to_string()))?;
-        script_int(elapsed_ns, "run_to_ns 返回值超出脚本整数范围")
-    });
+    engine.register_fn(
+        "run_to_ns",
+        move |target_ns: i64| -> Result<i64, Box<EvalAltResult>> {
+            let target_ns =
+                u64::try_from(target_ns).map_err(|_| runtime_error("run_to_ns 参数必须 >= 0"))?;
+            let elapsed_ns = sim_run_to_ns
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .run_to_ns(target_ns)
+                .map_err(|err| runtime_error(err.to_string()))?;
+            script_int(elapsed_ns, "run_to_ns 返回值超出脚本整数范围")
+        },
+    );
 
     let sim_run_to_us = Arc::clone(sim);
-    engine.register_fn("run_to_us", move |target_us: i64| -> Result<rhai::FLOAT, Box<EvalAltResult>> {
-        let target_us =
-            u64::try_from(target_us).map_err(|_| runtime_error("run_to_us 参数必须 >= 0"))?;
-        let target_ns = target_us.saturating_mul(NS_PER_MICROSECOND);
-        let elapsed_ns = sim_run_to_us
-            .lock()
-            .map_err(|_| runtime_error("仿真器锁已损坏"))?
-            .run_to_ns(target_ns)
-            .map_err(|err| runtime_error(err.to_string()))?;
-        Ok(elapsed_ns as rhai::FLOAT / NS_PER_MICROSECOND as rhai::FLOAT)
-    });
+    engine.register_fn(
+        "run_to_us",
+        move |target_us: i64| -> Result<rhai::FLOAT, Box<EvalAltResult>> {
+            let target_us =
+                u64::try_from(target_us).map_err(|_| runtime_error("run_to_us 参数必须 >= 0"))?;
+            let target_ns = target_us.saturating_mul(NS_PER_MICROSECOND);
+            let elapsed_ns = sim_run_to_us
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .run_to_ns(target_ns)
+                .map_err(|err| runtime_error(err.to_string()))?;
+            Ok(elapsed_ns as rhai::FLOAT / NS_PER_MICROSECOND as rhai::FLOAT)
+        },
+    );
 
     let sim_run_to_us_float = Arc::clone(sim);
     engine.register_fn(
@@ -464,17 +467,20 @@ fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
     );
 
     let sim_run_to_ms = Arc::clone(sim);
-    engine.register_fn("run_to_ms", move |target_ms: i64| -> Result<rhai::FLOAT, Box<EvalAltResult>> {
-        let target_ms =
-            u64::try_from(target_ms).map_err(|_| runtime_error("run_to_ms 参数必须 >= 0"))?;
-        let target_ns = target_ms.saturating_mul(NS_PER_MILLISECOND);
-        let elapsed_ns = sim_run_to_ms
-            .lock()
-            .map_err(|_| runtime_error("仿真器锁已损坏"))?
-            .run_to_ns(target_ns)
-            .map_err(|err| runtime_error(err.to_string()))?;
-        Ok(elapsed_ns as rhai::FLOAT / NS_PER_MILLISECOND as rhai::FLOAT)
-    });
+    engine.register_fn(
+        "run_to_ms",
+        move |target_ms: i64| -> Result<rhai::FLOAT, Box<EvalAltResult>> {
+            let target_ms =
+                u64::try_from(target_ms).map_err(|_| runtime_error("run_to_ms 参数必须 >= 0"))?;
+            let target_ns = target_ms.saturating_mul(NS_PER_MILLISECOND);
+            let elapsed_ns = sim_run_to_ms
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .run_to_ns(target_ns)
+                .map_err(|err| runtime_error(err.to_string()))?;
+            Ok(elapsed_ns as rhai::FLOAT / NS_PER_MILLISECOND as rhai::FLOAT)
+        },
+    );
 
     let sim_run_to_ms_float = Arc::clone(sim);
     engine.register_fn(
@@ -491,17 +497,20 @@ fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
     );
 
     let sim_run_to_s = Arc::clone(sim);
-    engine.register_fn("run_to_s", move |target_s: i64| -> Result<rhai::FLOAT, Box<EvalAltResult>> {
-        let target_s =
-            u64::try_from(target_s).map_err(|_| runtime_error("run_to_s 参数必须 >= 0"))?;
-        let target_ns = target_s.saturating_mul(NS_PER_SECOND);
-        let elapsed_ns = sim_run_to_s
-            .lock()
-            .map_err(|_| runtime_error("仿真器锁已损坏"))?
-            .run_to_ns(target_ns)
-            .map_err(|err| runtime_error(err.to_string()))?;
-        Ok(elapsed_ns as rhai::FLOAT / NS_PER_SECOND as rhai::FLOAT)
-    });
+    engine.register_fn(
+        "run_to_s",
+        move |target_s: i64| -> Result<rhai::FLOAT, Box<EvalAltResult>> {
+            let target_s =
+                u64::try_from(target_s).map_err(|_| runtime_error("run_to_s 参数必须 >= 0"))?;
+            let target_ns = target_s.saturating_mul(NS_PER_SECOND);
+            let elapsed_ns = sim_run_to_s
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .run_to_ns(target_ns)
+                .map_err(|err| runtime_error(err.to_string()))?;
+            Ok(elapsed_ns as rhai::FLOAT / NS_PER_SECOND as rhai::FLOAT)
+        },
+    );
 
     let sim_run_to_s_float = Arc::clone(sim);
     engine.register_fn(
@@ -1345,7 +1354,10 @@ fn register_run_to_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
     let sim_led_edge_name_timeout = Arc::clone(sim);
     engine.register_fn(
         "run_to",
-        move |led: LedId, edge: ImmutableString, timeout_ns: i64| -> Result<i64, Box<EvalAltResult>> {
+        move |led: LedId,
+              edge: ImmutableString,
+              timeout_ns: i64|
+              -> Result<i64, Box<EvalAltResult>> {
             run_to_target_wait(
                 &sim_led_edge_name_timeout,
                 RunToTarget::Led(led),
@@ -1392,7 +1404,10 @@ fn register_run_to_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
     let sim_key_edge_name_timeout = Arc::clone(sim);
     engine.register_fn(
         "run_to",
-        move |key: KeyId, edge: ImmutableString, timeout_ns: i64| -> Result<i64, Box<EvalAltResult>> {
+        move |key: KeyId,
+              edge: ImmutableString,
+              timeout_ns: i64|
+              -> Result<i64, Box<EvalAltResult>> {
             run_to_target_wait(
                 &sim_key_edge_name_timeout,
                 RunToTarget::Key(key),
@@ -1413,7 +1428,10 @@ fn register_run_to_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
     let sim_signal_edge_timeout = Arc::clone(sim);
     engine.register_fn(
         "run_to",
-        move |signal: SignalId, edge: RunToEdge, timeout_ns: i64| -> Result<i64, Box<EvalAltResult>> {
+        move |signal: SignalId,
+              edge: RunToEdge,
+              timeout_ns: i64|
+              -> Result<i64, Box<EvalAltResult>> {
             run_to_target_wait(
                 &sim_signal_edge_timeout,
                 signal_run_to_target(signal),
@@ -1439,7 +1457,10 @@ fn register_run_to_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
     let sim_signal_edge_name_timeout = Arc::clone(sim);
     engine.register_fn(
         "run_to",
-        move |signal: SignalId, edge: ImmutableString, timeout_ns: i64| -> Result<i64, Box<EvalAltResult>> {
+        move |signal: SignalId,
+              edge: ImmutableString,
+              timeout_ns: i64|
+              -> Result<i64, Box<EvalAltResult>> {
             run_to_target_wait(
                 &sim_signal_edge_name_timeout,
                 signal_run_to_target(signal),
@@ -1453,14 +1474,22 @@ fn register_run_to_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
     engine.register_fn(
         "run_to",
         move |target: ImmutableString, edge: RunToEdge| -> Result<i64, Box<EvalAltResult>> {
-            run_to_target_wait(&sim_name_edge, parse_run_to_target(target.as_str())?, edge, None)
+            run_to_target_wait(
+                &sim_name_edge,
+                parse_run_to_target(target.as_str())?,
+                edge,
+                None,
+            )
         },
     );
 
     let sim_name_edge_timeout = Arc::clone(sim);
     engine.register_fn(
         "run_to",
-        move |target: ImmutableString, edge: RunToEdge, timeout_ns: i64| -> Result<i64, Box<EvalAltResult>> {
+        move |target: ImmutableString,
+              edge: RunToEdge,
+              timeout_ns: i64|
+              -> Result<i64, Box<EvalAltResult>> {
             run_to_target_wait(
                 &sim_name_edge_timeout,
                 parse_run_to_target(target.as_str())?,
@@ -1776,9 +1805,7 @@ fn script_time_target_ns(
     let total_ns = value * scale_ns as rhai::FLOAT;
     let rounded_ns = total_ns.round();
     if (total_ns - rounded_ns).abs() > 1e-6 {
-        return Err(runtime_error(format!(
-            "{label} 参数精度不能小于 1ns"
-        )));
+        return Err(runtime_error(format!("{label} 参数精度不能小于 1ns")));
     }
     if rounded_ns > u64::MAX as rhai::FLOAT {
         return Err(runtime_error(format!("{label} 参数数值过大")));
@@ -1793,7 +1820,9 @@ mod tests {
 
     use rhai::Scope;
 
-    use super::{ScriptTraceState, build_engine, build_scope, eval_source, eval_source_with_engine};
+    use super::{
+        ScriptTraceState, build_engine, build_scope, eval_source, eval_source_with_engine,
+    };
     use crate::{chip::Simulator, wave::WaveCaptureOptions};
 
     #[test]
@@ -1887,14 +1916,8 @@ mod tests {
             add_marker(2000, "label_2us");
         "#;
 
-        eval_source_with_engine(
-            &engine,
-            &mut scope,
-            &trace_state,
-            "test:add_marker",
-            script,
-        )
-        .expect("run add_marker script");
+        eval_source_with_engine(&engine, &mut scope, &trace_state, "test:add_marker", script)
+            .expect("run add_marker script");
 
         let markers = sim.lock().expect("lock sim").recorded_wave_markers();
         assert_eq!(

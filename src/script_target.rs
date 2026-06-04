@@ -62,13 +62,9 @@ impl RunToTarget {
             "onewiremaster" | "1wiremaster" | "1wiremasterhigh" => Ok(Self::OnewireMasterHigh),
             "onewirebus" | "1wirebus" | "1wirebushigh" => Ok(Self::OnewireBusHigh),
             "onewiredevice" | "1wiredevice" | "1wiredevicelow" => Ok(Self::OnewireDeviceLow),
-            "onewiremasterhigh" | "wiremasterhigh" | "owmasterhigh" => {
-                Ok(Self::OnewireMasterHigh)
-            }
+            "onewiremasterhigh" | "wiremasterhigh" | "owmasterhigh" => Ok(Self::OnewireMasterHigh),
             "onewirebushigh" | "wirebushigh" | "owbushigh" => Ok(Self::OnewireBusHigh),
-            "onewiredevicelow" | "wiredevicelow" | "owdevicelow" => {
-                Ok(Self::OnewireDeviceLow)
-            }
+            "onewiredevicelow" | "wiredevicelow" | "owdevicelow" => Ok(Self::OnewireDeviceLow),
             "uart1tx" | "serial1tx" => Ok(Self::Uart1Tx),
             "uart1rx" | "serial1rx" => Ok(Self::Uart1Rx),
             "uart2tx" | "serial2tx" => Ok(Self::Uart2Tx),
@@ -142,8 +138,14 @@ mod tests {
 
     #[test]
     fn parse_run_to_target_supports_led_key_and_pin() {
-        assert_eq!(RunToTarget::parse("L1").unwrap(), RunToTarget::Led(LedId::L1));
-        assert_eq!(RunToTarget::parse("S4").unwrap(), RunToTarget::Key(KeyId::S4));
+        assert_eq!(
+            RunToTarget::parse("L1").unwrap(),
+            RunToTarget::Led(LedId::L1)
+        );
+        assert_eq!(
+            RunToTarget::parse("S4").unwrap(),
+            RunToTarget::Key(KeyId::S4)
+        );
         assert_eq!(RunToTarget::parse("D8").unwrap(), RunToTarget::SegDigit(8));
         assert_eq!(
             RunToTarget::parse("P00").unwrap(),
@@ -157,8 +159,14 @@ mod tests {
 
     #[test]
     fn parse_run_to_target_supports_protocol_aliases() {
-        assert_eq!(RunToTarget::parse("iic_bus_scl").unwrap(), RunToTarget::I2cBusScl);
-        assert_eq!(RunToTarget::parse("uart1_tx").unwrap(), RunToTarget::Uart1Tx);
+        assert_eq!(
+            RunToTarget::parse("iic_bus_scl").unwrap(),
+            RunToTarget::I2cBusScl
+        );
+        assert_eq!(
+            RunToTarget::parse("uart1_tx").unwrap(),
+            RunToTarget::Uart1Tx
+        );
         assert_eq!(
             RunToTarget::parse("1-wire bus").unwrap(),
             RunToTarget::OnewireBusHigh
@@ -167,7 +175,10 @@ mod tests {
             RunToTarget::parse("SIG_OUT").unwrap(),
             RunToTarget::Pin { port: 3, bit: 4 }
         );
-        assert_eq!(RunToTarget::parse("NET_SIG").unwrap(), RunToTarget::Ne555SigOut);
+        assert_eq!(
+            RunToTarget::parse("NET_SIG").unwrap(),
+            RunToTarget::Ne555SigOut
+        );
     }
 
     #[test]

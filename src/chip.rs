@@ -1,4 +1,4 @@
-use std::{cell::Cell, collections::VecDeque, fmt::Write as _, fs, path::Path};
+use std::{cell::Cell, collections::VecDeque, fmt::Write as _, fs, path::Path, rc::Rc};
 
 use anyhow::{Context, Result, bail};
 use i8051::{
@@ -60,6 +60,7 @@ pub struct Simulator {
     ctx: MachineContext,
     code_image: Vec<u8>,
     trace_cpu: bool,
+    interrupt_poll_blocked_instructions: u8,
     seg_decoder: SegmentDecoder,
     wave: WaveRecorder,
 }
@@ -159,6 +160,7 @@ impl Simulator {
             ctx,
             code_image: code,
             trace_cpu,
+            interrupt_poll_blocked_instructions: 0,
             seg_decoder: SegmentDecoder::default(),
             wave: WaveRecorder::new(wave_options),
         };
@@ -215,6 +217,7 @@ impl Simulator {
         let port_latches = LatchedBoardState::from_ports(&self.ctx.ports);
         let xdata_latches = LatchedBoardState::from_xdata(&self.ctx.xdata);
         self.cpu = Cpu::new();
+        self.interrupt_poll_blocked_instructions = 0;
         self.ctx =
             MachineContext::new_with_wave_window(self.code_image.clone(), self.wave.window());
         self.ctx.board = board;
@@ -228,6 +231,7 @@ impl Simulator {
     fn reset_power_cycle(&mut self) -> Result<()> {
         let retained = self.ctx.board.retained_state();
         self.cpu = Cpu::new();
+        self.interrupt_poll_blocked_instructions = 0;
         self.ctx =
             MachineContext::new_with_wave_window(self.code_image.clone(), self.wave.window());
         self.ctx.board.load_retained_state(&retained);
@@ -255,9 +259,7 @@ impl Simulator {
     pub fn run_to_ns(&mut self, target_ns: u64) -> Result<u64> {
         let start = self.ctx.board.sim_time_ns;
         if target_ns < start {
-            bail!(
-                "run_to_ns 目标时间戳早于当前时间: target_ns={target_ns}, current_ns={start}"
-            );
+            bail!("run_to_ns 目标时间戳早于当前时间: target_ns={target_ns}, current_ns={start}");
         }
         while self.ctx.board.sim_time_ns < target_ns {
             self.step_once()?;
@@ -758,15 +760,26 @@ impl Simulator {
 
     pub(crate) fn step_once(&mut self) -> Result<()> {
         self.ctx.ports.refresh_inputs(&self.ctx.board);
-        if self.try_enter_pending_interrupt()? {
+        let interrupt_poll_blocked = self.interrupt_poll_blocked_instructions != 0;
+        if !interrupt_poll_blocked && self.try_enter_pending_interrupt()? {
             return Ok(());
         }
-        let ticks = self.current_instruction_ticks();
+        let opcode = self.current_opcode();
+        let ticks = approximate_instruction_ticks(opcode);
         if self.trace_cpu {
             let instruction = self.cpu.decode_pc(&self.ctx);
             trace!("{instruction:#}");
         }
-        let _ = self.cpu.step(&mut self.ctx);
+        if interrupt_poll_blocked {
+            let mut ctx = InterruptPollMaskContext::new(&mut self.ctx);
+            let _ = self.cpu.step(&mut ctx);
+            self.interrupt_poll_blocked_instructions -= 1;
+        } else {
+            let _ = self.cpu.step(&mut self.ctx);
+        }
+        if opcode == 0x32 {
+            self.interrupt_poll_blocked_instructions = 1;
+        }
         self.tick_devices(ticks)
     }
 
@@ -883,15 +896,13 @@ impl Simulator {
         Ok(())
     }
 
-    fn current_instruction_ticks(&self) -> u32 {
-        let op = self
-            .ctx
+    fn current_opcode(&self) -> u8 {
+        self.ctx
             .code
             .code
             .get(usize::from(self.cpu.pc))
             .copied()
-            .unwrap_or(0);
-        approximate_instruction_ticks(op)
+            .unwrap_or(0)
     }
 
     fn capture_control_snapshot(&mut self) {
@@ -1513,6 +1524,147 @@ impl PortMapper for MachinePorts {
             }
             _ => self.generic_set(addr, byte),
         }
+    }
+}
+
+struct InterruptPollMaskContext<'a> {
+    ports: InterruptPollMaskPorts<'a>,
+    xdata: InterruptPollMaskXdata<'a>,
+    code: InterruptPollMaskCode<'a>,
+}
+
+impl<'a> InterruptPollMaskContext<'a> {
+    fn new(ctx: &'a mut MachineContext) -> Self {
+        let interrupt_poll_active = Rc::new(Cell::new(true));
+        Self {
+            ports: InterruptPollMaskPorts {
+                inner: &mut ctx.ports,
+                interrupt_poll_active: interrupt_poll_active.clone(),
+            },
+            xdata: InterruptPollMaskXdata {
+                inner: &mut ctx.xdata,
+            },
+            code: InterruptPollMaskCode {
+                inner: &mut ctx.code,
+                interrupt_poll_active,
+            },
+        }
+    }
+}
+
+impl<'a> CpuContext for InterruptPollMaskContext<'a> {
+    type Ports = InterruptPollMaskPorts<'a>;
+    type Xdata = InterruptPollMaskXdata<'a>;
+    type Code = InterruptPollMaskCode<'a>;
+
+    fn ports(&self) -> &Self::Ports {
+        &self.ports
+    }
+
+    fn xdata(&self) -> &Self::Xdata {
+        &self.xdata
+    }
+
+    fn code(&self) -> &Self::Code {
+        &self.code
+    }
+
+    fn ports_mut(&mut self) -> &mut Self::Ports {
+        &mut self.ports
+    }
+
+    fn xdata_mut(&mut self) -> &mut Self::Xdata {
+        &mut self.xdata
+    }
+
+    fn code_mut(&mut self) -> &mut Self::Code {
+        &mut self.code
+    }
+}
+
+struct InterruptPollMaskPorts<'a> {
+    inner: &'a mut MachinePorts,
+    interrupt_poll_active: Rc<Cell<bool>>,
+}
+
+impl PortMapper for InterruptPollMaskPorts<'_> {
+    type WriteValue = (u8, u8);
+
+    fn interest<C: CpuView>(&self, cpu: &C, addr: u8) -> bool {
+        self.inner.interest(cpu, addr)
+    }
+
+    fn extend_short_read<C: CpuView>(&self, cpu: &C, addr: u8) -> u16 {
+        self.inner.extend_short_read(cpu, addr)
+    }
+
+    fn pc_extension<C: CpuView>(&self, cpu: &C) -> u16 {
+        self.inner.pc_extension(cpu)
+    }
+
+    fn read<C: CpuView>(&self, cpu: &C, addr: u8) -> u8 {
+        let value = self.inner.read(cpu, addr);
+        if !self.interrupt_poll_active.get() {
+            return value;
+        }
+        match addr {
+            SFR_SCON => value & !(SCON_RI | SCON_TI),
+            SFR_TCON => value & !(TCON_TF0 | TCON_TF1),
+            SFR_P3 => value | P3_INT0 | P3_INT1,
+            _ => value,
+        }
+    }
+
+    fn read_latch<C: CpuView>(&self, cpu: &C, addr: u8) -> u8 {
+        self.inner.read_latch(cpu, addr)
+    }
+
+    fn prepare_write<C: CpuView>(&self, cpu: &C, addr: u8, value: u8) -> Self::WriteValue {
+        self.inner.prepare_write(cpu, addr, value)
+    }
+
+    fn write(&mut self, value: Self::WriteValue) {
+        self.inner.write(value);
+    }
+}
+
+struct InterruptPollMaskXdata<'a> {
+    inner: &'a mut BoardXdata,
+}
+
+impl MemoryMapper for InterruptPollMaskXdata<'_> {
+    type WriteValue = (u16, u8);
+
+    fn len(&self) -> u32 {
+        self.inner.len()
+    }
+
+    fn read<C: CpuView>(&self, cpu: &C, addr: u32) -> u8 {
+        self.inner.read(cpu, addr)
+    }
+
+    fn prepare_write<C: CpuView>(&self, cpu: &C, addr: u32, value: u8) -> Self::WriteValue {
+        self.inner.prepare_write(cpu, addr, value)
+    }
+
+    fn write(&mut self, value: Self::WriteValue) {
+        self.inner.write(value);
+    }
+}
+
+struct InterruptPollMaskCode<'a> {
+    inner: &'a mut CodeMemory,
+    interrupt_poll_active: Rc<Cell<bool>>,
+}
+
+impl ReadOnlyMemoryMapper for InterruptPollMaskCode<'_> {
+    fn len(&self) -> u32 {
+        self.inner.len()
+    }
+
+    fn read<C: CpuView>(&self, cpu: &C, addr: u32) -> u8 {
+        self.interrupt_poll_active.set(false);
+        self.inner.read(cpu, addr)
     }
 }
 
@@ -2358,6 +2510,7 @@ mod tests {
             ctx: super::MachineContext::new(code.clone()),
             code_image: code,
             trace_cpu: false,
+            interrupt_poll_blocked_instructions: 0,
             seg_decoder: super::SegmentDecoder::default(),
             wave: crate::wave::WaveRecorder::new(crate::wave::WaveCaptureOptions::default()),
         };
@@ -2390,6 +2543,64 @@ mod tests {
     }
 
     #[test]
+    fn reti_allows_one_main_instruction_before_reentering_serial_interrupt() {
+        let mut code = vec![0x00; 0x24];
+        code[0x00] = 0x75;
+        code[0x01] = 0xA8;
+        code[0x02] = super::IE_EA | super::IE_ES;
+        code[0x03] = 0xD2;
+        code[0x04] = 0x99;
+        code[0x05] = 0x10;
+        code[0x06] = 0x99;
+        code[0x07] = 0x02;
+        code[0x08] = 0x80;
+        code[0x09] = 0xFB;
+        code[0x0A] = 0x80;
+        code[0x0B] = 0xFE;
+        code[0x23] = 0x32;
+
+        let mut sim = Simulator::from_code_with_options(
+            code,
+            false,
+            crate::wave::WaveCaptureOptions::default(),
+        );
+
+        sim.step_once().expect("enable serial interrupt");
+        sim.step_once().expect("set TI pending");
+        sim.step_once().expect("enter serial interrupt");
+
+        assert_eq!(sim.cpu.pc, 0x0023);
+
+        sim.step_once().expect("execute RETI");
+        assert_eq!(sim.cpu.pc, 0x0005);
+        assert_eq!(sim.interrupt_poll_blocked_instructions, 1);
+
+        sim.step_once()
+            .expect("run one main instruction before serial reentry");
+
+        assert_eq!(sim.cpu.pc, 0x000A);
+        assert_eq!(sim.interrupt_poll_blocked_instructions, 0);
+        assert_eq!(
+            sim.cpu.sfr(super::SFR_SCON, &sim.ctx) & super::SCON_TI,
+            0,
+            "TI should be cleared by JBC before serial interrupt can reenter"
+        );
+    }
+
+    #[test]
+    fn uart_sample_can_clear_ti_and_reply_after_rx_interrupt() {
+        let mut sim =
+            Simulator::from_hex_path(&sample_path("sample/uart/prj/Objects/uart.hex"), false)
+                .expect("load uart sample");
+
+        sim.run_ms(220).expect("wait for uart sample to settle");
+        sim.uart_write(b"42");
+        sim.run_ms(220).expect("wait for uart sample reply");
+
+        assert_eq!(sim.uart_take_string(), "43");
+    }
+
+    #[test]
     fn approximate_instruction_ticks_matches_stc15_common_gpio_ops() {
         assert_eq!(super::approximate_instruction_ticks(0xA2), 1);
         assert_eq!(super::approximate_instruction_ticks(0xC2), 1);
@@ -2419,11 +2630,9 @@ mod tests {
 
     #[test]
     fn delay_sample_delay5ms_matches_run_to_timing() {
-        let mut sim = Simulator::from_hex_path(
-            &sample_path("sample/delay/prj/Objects/delay.hex"),
-            false,
-        )
-        .expect("load delay");
+        let mut sim =
+            Simulator::from_hex_path(&sample_path("sample/delay/prj/Objects/delay.hex"), false)
+                .expect("load delay");
 
         let mut startup_off_ns = None;
         while sim.sim_time_ns() <= 2 * super::NS_PER_MILLISECOND {
@@ -2505,10 +2714,10 @@ mod tests {
         sim.ctx.ports.board_latches = [0xFE, 0x10, 0x00, 0x00];
         sim.ctx.ports.board_latch_versions = [1, 1, 0, 0];
         sim.ctx.ports.latch_used = true;
-        sim.ctx
-            .board
-            .outputs
-            .sample_from_latches(&sim.ctx.ports.board_latches, &sim.ctx.ports.board_latch_versions);
+        sim.ctx.board.outputs.sample_from_latches(
+            &sim.ctx.ports.board_latches,
+            &sim.ctx.ports.board_latch_versions,
+        );
 
         sim.run_us(100).expect("advance sim time");
         let before_reset_ns = sim.sim_time_ns();

@@ -1997,12 +1997,7 @@ mod tests {
 
     #[test]
     fn signal_aliases_include_adc_variants_for_ain_inputs() {
-        let aliases = signal_aliases(
-            "analog.rd1_v",
-            "RD1/AIN1",
-            "analog",
-            "pcf8591_ne555",
-        );
+        let aliases = signal_aliases("analog.rd1_v", "RD1/AIN1", "analog", "pcf8591_ne555");
         assert!(aliases.iter().any(|alias| alias == "rd1/adc1"));
         assert!(aliases.iter().any(|alias| alias == "rd1 adc1"));
     }

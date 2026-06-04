@@ -58,6 +58,7 @@ EOF
 - 评测脚本约定放在 `sample/xxx/judge/`.
 - 详细手册见 [docs/judge-script-manual.md](docs/judge-script-manual.md).
 - 波形导出说明见 [docs/wave-export.md](docs/wave-export.md).
+- 芯片与中断仿真说明见 [docs/chip.md](docs/chip.md).
 - 现在支持 `print(...)`, `watch_led_stats(...)`, `display_text(window_ms)`, `display_number(...)`, `key_mode(...)`, `jumper_on(...)`, `jumper_off(...)`, `jumper_installed(...)` 以及内置常量 `L1..L8`, `S4..S19`, `RB2/RB3/RB4/RD1`, `KEYBOARD/KBD`, `BUTTON/BTN`, `SIG_OUT/NET_SIG`.
 - `RUST_LOG=debug` 时会输出 Rhai 脚本逐语句执行进度, 包括步号, 行列号, 调用层级和当前源码行.
 - 默认跳帽状态按原理图建模, `NET_SIG` 不会自动连到 `SIG_OUT`. 如果题目需要把 NE555 输出送到 `P3.4/T0`, 需要在脚本里显式写 `jumper_on(NET_SIG, SIG_OUT)`.
@@ -78,6 +79,7 @@ EOF
 - SCH_V31.pdf: 开发板原理图.
 - STC15_DS.pdf: STC15 系列芯片的用户手册.
 - knowledge-points.pdf: 十五届单片机考纲.
+- chip.md: 芯片与中断仿真相关说明.
 - Datasheet: 板上各个外设的用户手册.
 
 ## sample
