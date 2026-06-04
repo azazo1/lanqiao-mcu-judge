@@ -44,8 +44,8 @@ use crate::{
     persistent_state::PersistentState,
     script_target::{RunToEdge, RunToTarget},
     wave::{
-        TRACK_EVENT_CPU, WaveCaptureOptions, WaveCaptureWindow, WaveEventNote, WaveRecorder,
-        WaveSnapshot,
+        TRACK_EVENT_CPU, WaveCaptureOptions, WaveCaptureWindow, WaveEventNote, WaveMarkerNote,
+        WaveRecorder, WaveSnapshot,
     },
 };
 
@@ -312,6 +312,23 @@ impl Simulator {
 
     pub fn sim_time_ns(&self) -> u64 {
         self.ctx.board.sim_time_ns
+    }
+
+    pub fn add_wave_marker(&mut self, label: Option<&str>) {
+        self.add_wave_marker_at(self.sim_time_ns(), label);
+    }
+
+    pub fn add_wave_marker_at(&mut self, time_ns: u64, label: Option<&str>) {
+        let note = match label {
+            Some(label) => WaveMarkerNote::named(time_ns, label),
+            None => WaveMarkerNote::anonymous(time_ns),
+        };
+        self.wave.record_marker_note(note);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn recorded_wave_markers(&self) -> Vec<(u64, Option<String>)> {
+        self.wave.marker_records()
     }
 
     pub fn set_key(&mut self, name: &str, pressed: bool) -> Result<()> {

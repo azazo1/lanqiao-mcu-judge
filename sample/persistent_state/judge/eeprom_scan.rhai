@@ -41,8 +41,10 @@ fn expected_value(addr) {
     }
 }
 
+add_marker("boot");
 run_ms(240);
 let boot_state = export_persistent_state();
+add_marker("boot_state_exported");
 assert_screen(0, 3, 0, "上电");
 
 tap_many(S7, 1);
@@ -52,12 +54,14 @@ tap_many(S8, 1);
 assert_screen(0, 3, 0, "S8 从 0x20 回到 0x00");
 
 tap_many(S10, 1);
+add_marker("write_00_to_01");
 assert_screen(0, 3, 1, "地址 0x00 写入 1");
 assert_eq(eeprom_byte(0), 1, "EEPROM[0x00]");
 
 load_persistent_state(boot_state);
 reset(POWER_RESET);
 run_ms(180);
+add_marker("boot_state_restored");
 assert_screen(0, 3, 0, "恢复 boot 后");
 
 tap_many(S10, 1);
@@ -86,6 +90,7 @@ assert_screen(0, 3, 7, "地址 0x1F 经过上溢后为 7");
 
 tap_many(S8, 1);
 tap_many(S9, 1);
+add_marker("eeprom_block_written");
 assert_screen(0, 3, 255, "地址 0x20 下溢到 255");
 
 assert_eq(eeprom_byte(0), 1, "地址 0x00");
@@ -109,11 +114,13 @@ tap_many(S8, 1);
 assert_screen(0, 3, 1, "S8 从 0x20 回绕到 0x00");
 
 let scan_addr = 0;
+add_marker("sequential_scan_begin");
 while scan_addr < 32 {
     assert_screen(0, 3, expected_value(scan_addr), "S8 顺序扫描块内容");
     tap_many(S8, 1);
     scan_addr += 1;
 }
+add_marker("sequential_scan_end");
 assert_screen(0, 3, expected_value(32), "S8 顺序扫描块内容");
 
 tap_many(S8, 1);

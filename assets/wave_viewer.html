@@ -124,6 +124,7 @@ body {
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+  flex: 0 0 auto;
 }
 .marker-input {
   width: 150px;
@@ -137,11 +138,21 @@ body {
 }
 .marker-strip {
   display: flex;
-  flex: 1 1 320px;
-  flex-wrap: wrap;
+  flex: 1 1 0;
+  flex-wrap: nowrap;
   gap: 6px;
   align-items: center;
   min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  white-space: nowrap;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  overscroll-behavior-x: contain;
+}
+.marker-strip::-webkit-scrollbar {
+  display: none;
 }
 .marker-chip {
   display: inline-flex;
@@ -154,6 +165,11 @@ body {
   color: #eef2ff;
   cursor: pointer;
   user-select: none;
+  flex: 0 0 auto;
+}
+.marker-add-button {
+  padding: 6px 10px;
+  min-width: 0;
 }
 .marker-chip.active {
   background: #22314e;
@@ -459,8 +475,7 @@ canvas {
         <div class="marker-controls">
           <input id="marker-time" class="marker-input" type="text" placeholder="time, e.g. 12.5 ms">
           <input id="marker-label" class="marker-input" type="text" placeholder="label, optional">
-          <button id="marker-add">Add marker</button>
-          <button id="marker-add-cursor">Use cursor</button>
+          <button id="marker-add" class="marker-add-button">Add</button>
         </div>
         <div class="marker-strip" id="marker-strip"></div>
         <span class="marker-status" id="marker-status"></span>
@@ -545,6 +560,25 @@ function normalizeWaveSignal(entry) {
   };
 }
 
+function normalizeWaveMarker(entry) {
+  if (Array.isArray(entry)) {
+    if (entry.length < 1) {
+      return null;
+    }
+    return {
+      t: Number(entry[0]),
+      label: entry[1] == null ? null : String(entry[1]),
+    };
+  }
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+  return {
+    t: Number(entry.t ?? 0),
+    label: entry.label == null ? null : String(entry.label),
+  };
+}
+
 function normalizeWaveData(raw) {
   if (raw && !Array.isArray(raw?.samples)) {
     return raw;
@@ -555,6 +589,7 @@ function normalizeWaveData(raw) {
     : [];
   const encodedSamples = Array.isArray(raw?.samples) ? raw.samples : [];
   const encodedEvents = Array.isArray(raw?.events) ? raw.events : [];
+  const encodedMarkers = Array.isArray(raw?.markers) ? raw.markers : [];
   const samples = {};
 
   for (let index = 0; index < signals.length; index += 1) {
@@ -571,6 +606,9 @@ function normalizeWaveData(raw) {
     events: encodedEvents
       .map(entry => normalizeWaveEvent(entry, signals))
       .filter(Boolean),
+    markers: encodedMarkers
+      .map(normalizeWaveMarker)
+      .filter(marker => marker && Number.isFinite(marker.t)),
   };
 }
 
@@ -580,7 +618,7 @@ function loadWaveData() {
   const text = dataNode ? dataNode.textContent.trim() : "";
 
   if (!metaNode) {
-    return JSON.parse(text);
+    return normalizeWaveData(JSON.parse(text));
   }
 
   const meta = JSON.parse(metaNode.textContent);
@@ -623,7 +661,6 @@ const presetSelect = document.getElementById("preset-select");
 const markerTimeInput = document.getElementById("marker-time");
 const markerLabelInput = document.getElementById("marker-label");
 const markerAddButton = document.getElementById("marker-add");
-const markerAddCursorButton = document.getElementById("marker-add-cursor");
 const markerStrip = document.getElementById("marker-strip");
 const markerStatus = document.getElementById("marker-status");
 
@@ -694,11 +731,23 @@ let hoverState = null;
 let hoverActionSignalId = null;
 let hoverHandleSignalId = null;
 let rowLayout = [];
-let markers = [];
-let nextMarkerId = 1;
+let markers = Array.isArray(data.markers)
+  ? data.markers
+    .filter(marker => marker && Number.isFinite(Number(marker.t)))
+    .map((marker, index) => ({
+      id: index + 1,
+      t: clampTimeNs(Number(marker.t)),
+      label: marker.label ? marker.label.trim() || null : null,
+    }))
+  : [];
+let nextMarkerId = markers.length + 1;
 let activeMarkerId = null;
 let sidebarCollapsed = false;
 let renderScheduled = false;
+let markerStripScrollLeft = 0;
+let markerStripRevealTail = false;
+
+sortMarkers();
 
 function loadSidebarCollapsed() {
   try {
@@ -883,6 +932,17 @@ function formatMarkerTime(timeNs) {
   return formatTimeNs(timeNs, stepNs, chooseTimeUnit(stepNs));
 }
 
+function formatPreciseTimeNs(timeNs) {
+  const roundedTimeNs = Math.round(timeNs);
+  const resolvedUnit = chooseTimeUnit(Math.max(1, Math.abs(roundedTimeNs)));
+  const decimals = resolvedUnit.scale === 1 ? 0 : Math.round(Math.log10(resolvedUnit.scale));
+  const fixed = (roundedTimeNs / resolvedUnit.scale).toFixed(decimals);
+  const trimmed = fixed
+    .replace(/\.0+$/, "")
+    .replace(/(\.\d*?)0+$/, "$1");
+  return `${trimmed} ${resolvedUnit.suffix}`;
+}
+
 function markerById(markerId) {
   return markers.find(marker => marker.id === markerId) || null;
 }
@@ -961,6 +1021,7 @@ function addMarker(timeNs, label) {
   nextMarkerId += 1;
   sortMarkers();
   setMarkerStatus("");
+  markerStripRevealTail = true;
   focusMarker(markerId, { ensureVisible: true });
 }
 
@@ -984,12 +1045,14 @@ function removeMarker(markerId) {
 }
 
 function renderMarkerStrip() {
+  const previousScrollLeft = markerStripScrollLeft;
   markerStrip.innerHTML = "";
   if (!markers.length) {
     const empty = document.createElement("span");
     empty.className = "legend";
     empty.textContent = "No markers";
     markerStrip.appendChild(empty);
+    markerStripScrollLeft = 0;
     return;
   }
   for (const marker of markers) {
@@ -1025,6 +1088,14 @@ function renderMarkerStrip() {
     chip.appendChild(removeButton);
     markerStrip.appendChild(chip);
   }
+  const maxScrollLeft = Math.max(0, markerStrip.scrollWidth - markerStrip.clientWidth);
+  if (markerStripRevealTail) {
+    markerStrip.scrollLeft = maxScrollLeft;
+    markerStripRevealTail = false;
+  } else {
+    markerStrip.scrollLeft = Math.min(previousScrollLeft, maxScrollLeft);
+  }
+  markerStripScrollLeft = markerStrip.scrollLeft;
 }
 
 function parseMarkerTime(text) {
@@ -1048,6 +1119,7 @@ function addMarkerFromInputs(timeNs) {
     return;
   }
   addMarker(resolvedTime, markerLabelInput.value);
+  markerTimeInput.value = "";
 }
 
 function coverageRect() {
@@ -2842,14 +2914,22 @@ markerAddButton.addEventListener("click", () => {
   addMarkerFromInputs();
 });
 
-markerAddCursorButton.addEventListener("click", () => {
-  if (!hoverState) {
-    setMarkerStatus("Move the cursor over the wave first");
+markerStrip.addEventListener("wheel", event => {
+  if (markerStrip.scrollWidth <= markerStrip.clientWidth) {
     return;
   }
-  markerTimeInput.value = formatMarkerTime(hoverState.timeNs);
-  addMarkerFromInputs(hoverState.timeNs);
-});
+  const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+  if (!delta) {
+    return;
+  }
+  markerStrip.scrollLeft += delta;
+  markerStripScrollLeft = markerStrip.scrollLeft;
+  event.preventDefault();
+}, { passive: false });
+
+markerStrip.addEventListener("scroll", () => {
+  markerStripScrollLeft = markerStrip.scrollLeft;
+}, { passive: true });
 
 markerTimeInput.addEventListener("keydown", event => {
   if (event.key === "Enter") {
@@ -2904,7 +2984,7 @@ window.addEventListener("keydown", event => {
     }
     event.preventDefault();
     addMarker(hoverState.timeNs, markerLabelInput.value);
-    markerTimeInput.value = formatMarkerTime(hoverState.timeNs);
+    markerTimeInput.value = formatPreciseTimeNs(hoverState.timeNs);
     return;
   }
   if ((event.key === "Delete" || event.key === "Backspace") && activeMarkerId !== null) {
@@ -3125,8 +3205,15 @@ viewer.addEventListener("mousemove", event => {
 
 viewer.addEventListener("click", event => {
   const rect = canvas.getBoundingClientRect();
+  const logicalWidth = canvas.width / window.devicePixelRatio;
+  const logicalHeight = canvas.height / window.devicePixelRatio;
   const logicalX = (event.clientX - rect.left) * canvas.width / Math.max(1, rect.width) / window.devicePixelRatio;
   const logicalY = (event.clientY - rect.top) * canvas.height / Math.max(1, rect.height) / window.devicePixelRatio;
+  const marker = markerAtViewerLogicalPoint(logicalX, logicalY, logicalWidth, logicalHeight);
+  if (!marker && !rowHandleAt(logicalX, logicalY) && logicalX >= SIGNAL_LABEL_WIDTH) {
+    markerTimeInput.value = formatPreciseTimeNs(timeAtViewerLogicalX(logicalX, logicalWidth));
+    setMarkerStatus("");
+  }
   const actionRow = actionRowHit(logicalX, logicalY);
   if (!actionRow) {
     return;

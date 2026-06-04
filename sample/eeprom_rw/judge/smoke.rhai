@@ -1,4 +1,6 @@
+add_marker("boot");
 run_ms(60);
+add_marker("eeprom_write_settled");
 assert_eq(eeprom_byte(0), 0xA5, "写入 eeprom 地址 0");
 
 fn to_int(b) {
@@ -16,6 +18,7 @@ print("LED: "
     + to_int(led_on(8))
 );
 
+add_marker("led_decode_check");
 for i in 1..=8 {
     assert_eq(led_on(i), ((0xA5 >> (8-i)) & 1) == 1, "L" + (i));
 }

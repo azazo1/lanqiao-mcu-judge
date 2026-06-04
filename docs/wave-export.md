@@ -82,7 +82,8 @@ HTML 查看器是一个自包含文件, 直接用浏览器打开即可.
 - viewer 顶部支持临时 marker. 可以输入时间和可选标签来添加, 也可以使用当前悬停 cursor 时间来添加.
 - marker 会同时显示在主信号区和 minimap 中. 需要先点击聚焦 active marker, 之后再拖动移动位置, 也可以点击列表项聚焦并直接删除.
 - 在主信号区悬停时按 `m` 键, 可以直接在当前鼠标时间点添加 marker.
-- marker 只存在于当前查看器页面中, 不会写回导出的 HTML/JSON 数据.
+- Rhai 脚本也可以通过 `add_marker(...)` 预先写入导出 marker. 这些 marker 会作为 viewer 打开时的初始 marker 载入.
+- 前端手动增删拖动的 marker 仍然只存在于当前查看器页面中, 不会回写导出的 HTML, JSON 或 MessagePack 数据.
 - 左侧筛选区和右侧波形区各自独立滚动, 页面本身不会再出现整体滚动条.
 - 鼠标悬停时会显示当前时间点的信号值, 对事件轨则显示事件标签和细节; 不同事件会使用不同颜色区分.
 - 时间轴会按视图跨度自动切换 `ns/us/ms/s`, 并使用动态刻度间隔.
@@ -131,12 +132,14 @@ JSON 顶层字段:
 - `signals`
 - `samples`
 - `events`
+- `markers`
 
 其中:
 
 - `signals` 描述每条轨道的元信息, 包括 `id`, `label`, `category`, `group`, `aliases`, `kind`, `format`, `default_visible`, `unit`.
 - `samples[signal_id]` 是该轨道的变化点数组, 每项形如 `{ "t": 123, "v": ... }`.
 - `events` 是事件数组, 每项形如 `{ "track_id": "event.i2c", "t": 456, "label": "START", "detail": null }`.
+- `markers` 是 marker 数组, 每项形如 `{ "t": 789, "label": "boot" }` 或 `{ "t": 790, "label": null }`.
 
 数字波形和文本波形都只在数值变化时记录一个点, 查看器会按阶梯方式展开.
 
@@ -150,11 +153,13 @@ JSON 顶层字段:
 - `signals`
 - `samples`
 - `events`
+- `markers`
 
 其中:
 
 - `signals` 使用定长数组编码, 顺序为 `id`, `label`, `category`, `group`, `aliases`, `kind`, `format`, `unit`, `default_visible`.
 - `samples` 是按 signal 顺序排列的二维数组, 每个采样点编码为 `[time_ns, value]`.
 - `events` 是事件数组, 每项编码为 `[track_signal_index, time_ns, label, detail]`.
+- `markers` 是 marker 数组, 每项编码为 `[time_ns, label_or_null]`.
 
 这种格式会把字段名和 signal id 这类重复字符串集中保留在元数据中, 降低运行期和导出阶段的字符串处理开销.

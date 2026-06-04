@@ -122,6 +122,28 @@ impl WaveEventNote {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct WaveMarkerNote {
+    pub(crate) time_ns: u64,
+    pub(crate) label: Option<String>,
+}
+
+impl WaveMarkerNote {
+    pub(crate) fn anonymous(time_ns: u64) -> Self {
+        Self {
+            time_ns,
+            label: None,
+        }
+    }
+
+    pub(crate) fn named(time_ns: u64, label: impl Into<String>) -> Self {
+        Self {
+            time_ns,
+            label: Some(label.into()),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct WaveSnapshot {
     pub(crate) time_ns: u64,
     pub(crate) port_latch: [u8; 6],
@@ -223,6 +245,12 @@ struct EventRecord {
 }
 
 #[derive(Debug, Clone)]
+struct MarkerRecord {
+    time_ns: u64,
+    label: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 struct SignalRecord {
     def: SignalDef,
     points: Vec<SamplePoint>,
@@ -236,6 +264,7 @@ struct WaveBinaryPayload<'a> {
     signals: Vec<WaveBinarySignal<'a>>,
     samples: Vec<Vec<WaveBinarySample<'a>>>,
     events: Vec<WaveBinaryEvent<'a>>,
+    markers: Vec<WaveBinaryMarker<'a>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -265,6 +294,9 @@ enum WaveBinaryValue<'a> {
 
 #[derive(Debug, Serialize)]
 struct WaveBinaryEvent<'a>(usize, u64, &'a str, Option<&'a str>);
+
+#[derive(Debug, Serialize)]
+struct WaveBinaryMarker<'a>(u64, Option<&'a str>);
 
 impl<'a> From<&'a SignalValue> for WaveBinaryValue<'a> {
     fn from(value: &'a SignalValue) -> Self {
@@ -542,6 +574,7 @@ pub(crate) struct WaveRecorder {
     signals: Vec<SignalRecord>,
     signal_slots: WaveSignalSlots,
     events: Vec<EventRecord>,
+    markers: Vec<MarkerRecord>,
     i2c_decoder: I2cEventDecoder,
     last_snapshot: Option<WaveSnapshot>,
     observed_start_ns: Option<u64>,
@@ -558,6 +591,7 @@ impl WaveRecorder {
             signals: Vec::new(),
             signal_slots: WaveSignalSlots::default(),
             events: Vec::new(),
+            markers: Vec::new(),
             i2c_decoder: I2cEventDecoder::default(),
             last_snapshot: None,
             observed_start_ns: None,
@@ -588,6 +622,7 @@ impl WaveRecorder {
             signals: Vec::new(),
             signal_slots: WaveSignalSlots::default(),
             events: Vec::new(),
+            markers: Vec::new(),
             i2c_decoder: I2cEventDecoder::default(),
             last_snapshot: None,
             observed_start_ns: None,
@@ -918,6 +953,28 @@ impl WaveRecorder {
             label: note.label,
             detail: note.detail,
         });
+    }
+
+    pub(crate) fn record_marker_note(&mut self, note: WaveMarkerNote) {
+        if !self.window.includes(note.time_ns) {
+            return;
+        }
+        self.mark_observed_time(note.time_ns);
+        self.markers.push(MarkerRecord {
+            time_ns: note.time_ns,
+            label: note.label.and_then(|label| {
+                let trimmed = label.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_owned())
+            }),
+        });
+    }
+
+    #[cfg(test)]
+    pub(crate) fn marker_records(&self) -> Vec<(u64, Option<String>)> {
+        self.markers
+            .iter()
+            .map(|marker| (marker.time_ns, marker.label.clone()))
+            .collect()
     }
 
     fn register_defaults(&mut self) -> WaveSignalSlots {
@@ -1549,6 +1606,11 @@ impl WaveRecorder {
                     })
             })
             .collect::<Vec<_>>();
+        let markers = self
+            .markers
+            .iter()
+            .map(|marker| WaveBinaryMarker(marker.time_ns, marker.label.as_deref()))
+            .collect::<Vec<_>>();
         WaveBinaryPayload {
             version: WAVE_MSGPACK_VERSION,
             start_ns,
@@ -1556,6 +1618,7 @@ impl WaveRecorder {
             signals,
             samples,
             events,
+            markers,
         }
     }
 
@@ -1671,6 +1734,20 @@ impl WaveRecorder {
             }
             writer.write_all(b"}")?;
         }
+        writer.write_all(b"],\"markers\":[")?;
+        for (index, marker) in self.markers.iter().enumerate() {
+            if index != 0 {
+                writer.write_all(b",")?;
+            }
+            writer.write_all(b"{\"t\":")?;
+            write!(writer, "{}", marker.time_ns)?;
+            writer.write_all(b",\"label\":")?;
+            match &marker.label {
+                Some(label) => write_json_string(writer, label)?,
+                None => writer.write_all(b"null")?,
+            }
+            writer.write_all(b"}")?;
+        }
         writer.write_all(b"]}")?;
         Ok(())
     }
@@ -1735,14 +1812,15 @@ mod tests {
     use serde::Deserialize;
 
     use super::{
-        I2cEventDecoder, TRACK_EVENT_I2C, WaveCaptureWindow, WaveEventNote, WaveRecorder,
-        signal_aliases,
+        I2cEventDecoder, TRACK_EVENT_I2C, WaveCaptureWindow, WaveEventNote, WaveMarkerNote,
+        WaveRecorder, signal_aliases,
     };
 
     #[derive(Debug, Deserialize)]
     struct DecodedMsgpackPayload {
         version: u8,
         signals: Vec<DecodedMsgpackSignal>,
+        markers: Vec<DecodedMsgpackMarker>,
     }
 
     #[derive(Debug, Deserialize)]
@@ -1757,6 +1835,9 @@ mod tests {
         Option<String>,
         bool,
     );
+
+    #[derive(Debug, Deserialize)]
+    struct DecodedMsgpackMarker(u64, Option<String>);
 
     #[test]
     fn i2c_decoder_marks_start_bytes_ack_and_stop() {
@@ -1880,8 +1961,26 @@ mod tests {
     }
 
     #[test]
-    fn msgpack_payload_contains_signal_metadata() {
-        let recorder = WaveRecorder::new_with_window(WaveCaptureWindow::bounded(0, Some(100)));
+    fn recorder_window_filters_and_trims_markers() {
+        let mut recorder =
+            WaveRecorder::new_with_window(WaveCaptureWindow::bounded(100, Some(200)));
+
+        recorder.record_marker_note(WaveMarkerNote::anonymous(90));
+        recorder.record_marker_note(WaveMarkerNote::named(120, "  boot  "));
+        recorder.record_marker_note(WaveMarkerNote::named(180, "   "));
+        recorder.record_marker_note(WaveMarkerNote::named(210, "after"));
+
+        assert_eq!(
+            recorder.marker_records(),
+            vec![(120, Some(String::from("boot"))), (180, None)]
+        );
+    }
+
+    #[test]
+    fn msgpack_payload_contains_signal_metadata_and_markers() {
+        let mut recorder = WaveRecorder::new_with_window(WaveCaptureWindow::bounded(0, Some(100)));
+        recorder.record_marker_note(WaveMarkerNote::named(42, "irq"));
+        recorder.record_marker_note(WaveMarkerNote::anonymous(84));
         let payload = recorder.build_msgpack_payload().expect("build msgpack");
         let decoded: DecodedMsgpackPayload =
             rmp_serde::from_slice(&payload).expect("decode msgpack");
@@ -1897,5 +1996,11 @@ mod tests {
         assert!(!first.5.is_empty());
         assert!(!first.6.is_empty());
         let _ = (&first.4, &first.7, first.8);
+
+        assert_eq!(decoded.markers.len(), 2);
+        assert_eq!(decoded.markers[0].0, 42);
+        assert_eq!(decoded.markers[0].1.as_deref(), Some("irq"));
+        assert_eq!(decoded.markers[1].0, 84);
+        assert_eq!(decoded.markers[1].1, None);
     }
 }

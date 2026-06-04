@@ -526,6 +526,57 @@ fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
         script_int(now_ns, "sim_time_ns 返回值超出脚本整数范围")
     });
 
+    let sim_add_marker_now = Arc::clone(sim);
+    engine.register_fn("add_marker", move || -> Result<(), Box<EvalAltResult>> {
+        sim_add_marker_now
+            .lock()
+            .map_err(|_| runtime_error("仿真器锁已损坏"))?
+            .add_wave_marker(None);
+        Ok(())
+    });
+
+    let sim_add_marker_label = Arc::clone(sim);
+    engine.register_fn(
+        "add_marker",
+        move |label: ImmutableString| -> Result<(), Box<EvalAltResult>> {
+            let label = label.trim();
+            sim_add_marker_label
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .add_wave_marker((!label.is_empty()).then_some(label));
+            Ok(())
+        },
+    );
+
+    let sim_add_marker_at = Arc::clone(sim);
+    engine.register_fn(
+        "add_marker",
+        move |time_ns: i64| -> Result<(), Box<EvalAltResult>> {
+            let time_ns =
+                u64::try_from(time_ns).map_err(|_| runtime_error("add_marker 时间戳必须 >= 0"))?;
+            sim_add_marker_at
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .add_wave_marker_at(time_ns, None);
+            Ok(())
+        },
+    );
+
+    let sim_add_marker_at_label = Arc::clone(sim);
+    engine.register_fn(
+        "add_marker",
+        move |time_ns: i64, label: ImmutableString| -> Result<(), Box<EvalAltResult>> {
+            let time_ns =
+                u64::try_from(time_ns).map_err(|_| runtime_error("add_marker 时间戳必须 >= 0"))?;
+            let label = label.trim();
+            sim_add_marker_at_label
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .add_wave_marker_at(time_ns, (!label.is_empty()).then_some(label));
+            Ok(())
+        },
+    );
+
     register_run_to_api(engine, sim);
 
     let sim_export_persistent = Arc::clone(sim);
@@ -1737,10 +1788,13 @@ fn script_time_target_ns(
 
 #[cfg(test)]
 mod tests {
-    use std::time::Instant;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-    use super::eval_source;
-    use crate::chip::Simulator;
+    use rhai::Scope;
+
+    use super::{ScriptTraceState, build_engine, build_scope, eval_source, eval_source_with_engine};
+    use crate::{chip::Simulator, wave::WaveCaptureOptions};
 
     #[test]
     fn rhai_run_to_supports_signal_constants_and_absolute_time() {
@@ -1801,6 +1855,67 @@ mod tests {
             assert_eq(sim_time_ns(), 0, "power reset should restart simulator time");
         "#;
         eval_source(sim, "test:reset_modes", script).expect("run reset mode script");
+    }
+
+    #[test]
+    fn rhai_add_marker_overloads_record_expected_markers() {
+        let unique_ns = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let sim = Arc::new(Mutex::new(Simulator::nop_with_options(
+            false,
+            WaveCaptureOptions {
+                html_path: None,
+                json_path: None,
+                msgpack_path: Some(
+                    std::env::temp_dir()
+                        .join(format!("stcjudge-script-marker-{unique_ns}.msgpack")),
+                ),
+                start_ns: 0,
+                end_ns: None,
+            },
+        )));
+        let trace_state = Arc::new(Mutex::new(ScriptTraceState::default()));
+        let engine = build_engine(&sim, &trace_state);
+        let mut scope: Scope<'static> = build_scope();
+        let script = r#"
+            add_marker();
+            run_us(5);
+            add_marker("after_5us");
+            add_marker(1000);
+            add_marker(2000, "label_2us");
+        "#;
+
+        eval_source_with_engine(
+            &engine,
+            &mut scope,
+            &trace_state,
+            "test:add_marker",
+            script,
+        )
+        .expect("run add_marker script");
+
+        let markers = sim.lock().expect("lock sim").recorded_wave_markers();
+        assert_eq!(
+            markers,
+            vec![
+                (0, None),
+                (5_000, Some(String::from("after_5us"))),
+                (1_000, None),
+                (2_000, Some(String::from("label_2us"))),
+            ]
+        );
+    }
+
+    #[test]
+    fn rhai_add_marker_rejects_negative_timestamp() {
+        let sim = Simulator::nop(false);
+        let script = r#"
+            add_marker(-1, "bad");
+        "#;
+        let err = eval_source(sim, "test:add_marker_negative", script).unwrap_err();
+        assert!(err.to_string().contains("add_marker 时间戳必须 >= 0"));
     }
 
     #[test]

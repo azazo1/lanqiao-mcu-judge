@@ -121,6 +121,10 @@ reset 模式:
 - `run_ms(ms)`
 - `run_us(us)`
 - `sim_time_ns()`
+- `add_marker()`
+- `add_marker(label)`
+- `add_marker(time_ns)`
+- `add_marker(time_ns, label)`
 - `run_to(target, edge)`
 - `run_to(target, edge, timeout_ns)`
 - `run_to(predicate)`
@@ -135,6 +139,12 @@ reset 模式:
 `run_ms(...)` 和 `run_us(...)` 按精确仿真时基推进. 如果固件内部有显示刷新周期, 1s 测频窗口, 传感器采样节拍等逻辑, 在修改输入后要显式留出足够稳定时间, 不要假设几十毫秒内一定已经更新到最终结果.
 
 `sim_time_ns()` 返回当前绝对仿真时间戳, 单位是 `ns`.
+
+`add_marker(...)` 会向当前波形导出结果写入一个 marker. 不传参数时, 它会在当前 `sim_time_ns()` 位置写入一个匿名 marker.
+
+`add_marker(label)` 会在当前时间写入一个带标签的 marker. `add_marker(time_ns)` 和 `add_marker(time_ns, label)` 则使用绝对 `ns` 时间戳, 语义和 `run_to_ns(...)` 一致.
+
+如果当前没有开启 wave 导出, `add_marker(...)` 仍然可以安全调用, 但不会产生任何输出.
 
 `run_to(target, edge)` 会持续推进仿真, 直到目标信号命中指定边沿, 返回这次一共推进了多少 `ns`.
 
@@ -156,6 +166,15 @@ let dt5 = run_to(ONEWIRE_BUS, UP);
 let dt6 = run_to(NET_SIG, FLIP);
 let dt7 = run_to(SIG_OUT, FLIP);
 let dt8 = run_to(UART1_TX, FLIP, 200_000);
+```
+
+marker 示例:
+
+```rhai
+add_marker();
+run_ms(10);
+add_marker("after_boot");
+add_marker(25_000_000, "sample_point");
 ```
 
 `run_to(predicate)` 会持续推进仿真, 每推进一步就重新执行一次回调 `predicate`, 当其返回 `true` 时停止, 并返回这次一共推进了多少 `ns`.
