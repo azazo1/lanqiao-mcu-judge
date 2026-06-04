@@ -19,7 +19,7 @@ use crate::{
         DisplayNumber, LedWatchStats, NS_PER_MICROSECOND, NS_PER_MILLISECOND, NS_PER_SECOND,
         Simulator,
     },
-    ids::{KeyId, KeyMode, LedId, SignalId, VoltageChannel},
+    ids::{KeyId, KeyMode, LedId, ResetMode, SignalId, VoltageChannel},
     script_target::{RunToEdge, RunToTarget},
 };
 
@@ -139,6 +139,7 @@ fn build_engine(sim: &Arc<Mutex<Simulator>>, trace_state: &Arc<Mutex<ScriptTrace
     engine.register_type_with_name::<LedId>("Led");
     engine.register_type_with_name::<KeyId>("Key");
     engine.register_type_with_name::<KeyMode>("KeyMode");
+    engine.register_type_with_name::<ResetMode>("ResetMode");
     engine.register_type_with_name::<VoltageChannel>("VoltageChannel");
     engine.register_type_with_name::<SignalId>("Signal");
     engine.register_type_with_name::<RunToTarget>("RunToTarget");
@@ -315,6 +316,10 @@ fn build_scope() -> Scope<'static> {
     scope.push_constant("KBD", KeyMode::Keyboard);
     scope.push_constant("BUTTON", KeyMode::Button);
     scope.push_constant("BTN", KeyMode::Button);
+    scope.push_constant("CPU_RESET", ResetMode::Cpu);
+    scope.push_constant("RESET_CPU", ResetMode::Cpu);
+    scope.push_constant("POWER_RESET", ResetMode::Power);
+    scope.push_constant("RESET_POWER", ResetMode::Power);
     scope.push_constant("SIG_OUT", SignalId::SigOut);
     scope.push_constant("NET_SIG", SignalId::NetSig);
     scope.push_constant("UP", RunToEdge::Up);
@@ -555,6 +560,18 @@ fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
             .reset()
             .map_err(|err| runtime_error(err.to_string()))
     });
+
+    let sim_reset_mode = Arc::clone(sim);
+    engine.register_fn(
+        "reset",
+        move |mode: ResetMode| -> Result<(), Box<EvalAltResult>> {
+            sim_reset_mode
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .reset_with_mode(mode)
+                .map_err(|err| runtime_error(err.to_string()))
+        },
+    );
 
     let sim_key = Arc::clone(sim);
     engine.register_fn(
@@ -1769,6 +1786,21 @@ mod tests {
         "#;
         let err = eval_source(sim, "test:run_to_timeout_fail", script).unwrap_err();
         assert!(err.to_string().contains("超时"));
+    }
+
+    #[test]
+    fn rhai_reset_supports_explicit_modes() {
+        let sim = Simulator::nop(false);
+        let script = r#"
+            run_us(10);
+            let before = sim_time_ns();
+            set_frequency_hz(1500);
+            reset(CPU_RESET);
+            assert_eq(sim_time_ns(), before, "cpu reset should keep current timestamp");
+            reset(POWER_RESET);
+            assert_eq(sim_time_ns(), 0, "power reset should restart simulator time");
+        "#;
+        eval_source(sim, "test:reset_modes", script).expect("run reset mode script");
     }
 
     #[test]

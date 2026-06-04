@@ -146,6 +146,12 @@ impl KeyMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ResetMode {
+    Cpu,
+    Power,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SignalId {
     SigOut,

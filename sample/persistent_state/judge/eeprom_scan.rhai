@@ -56,7 +56,7 @@ assert_screen(0, 3, 1, "地址 0x00 写入 1");
 assert_eq(eeprom_byte(0), 1, "EEPROM[0x00]");
 
 load_persistent_state(boot_state);
-reset();
+reset(POWER_RESET);
 run_ms(180);
 assert_screen(0, 3, 0, "恢复 boot 后");
 

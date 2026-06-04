@@ -1,6 +1,6 @@
 # Persistent State
 
-这个样例专门用于验证评测器新增的 `export_persistent_state()`, `load_persistent_state(...)` 和 `reset()` 接口.
+这个样例专门用于验证评测器新增的 `export_persistent_state()`, `load_persistent_state(...)` 和 `reset()` / `reset(POWER_RESET)` 接口.
 
 建议做成矩阵键盘题, 使用默认的 `KEYBOARD` 模式.
 
@@ -61,10 +61,10 @@ VV-R-EEE
 
 - 修改 `R` 后, `export_persistent_state()` 导出的字符串会发生对应变化.
 - 修改 EEPROM 块中某些地址后, `export_persistent_state()` 导出的字符串会发生对应变化.
-- 调用 `reset()` 后, `VV` 会回到 `00`.
-- 调用 `reset()` 后, `R` 和 EEPROM 中已经写入的内容会保留.
-- 调用 `reset()` 后, `cursor` 会重新回到 `0x00`, 因而 `EEE` 应重新显示 `AT24C02[0x00]`.
-- 在运行过程中先导出一个旧状态字符串, 再继续修改 `R` 和 EEPROM 内容, 最后调用 `load_persistent_state(...)` 并配合 `reset()`, 可以恢复到更早导出的那组非易失状态.
+- 调用 `reset()` 或 `reset(POWER_RESET)` 后, `VV` 会回到 `00`.
+- 调用 `reset()` 或 `reset(POWER_RESET)` 后, `R` 和 EEPROM 中已经写入的内容会保留.
+- 调用 `reset()` 或 `reset(POWER_RESET)` 后, `cursor` 会重新回到 `0x00`, 因而 `EEE` 应重新显示 `AT24C02[0x00]`.
+- 在运行过程中先导出一个旧状态字符串, 再继续修改 `R` 和 EEPROM 内容, 最后调用 `load_persistent_state(...)` 并配合 `reset()` 或 `reset(POWER_RESET)`, 可以恢复到更早导出的那组非易失状态.
 - 程序必须能够通过 `S7` 和 `S8` 顺序扫描 `0x00..=0x20` 整个块, 不能把 `cursor` 走出这个范围.
 - 评测需要读取 AT24C02 中存储的数据进行额外的比较, 而不仅仅是通过 seg 来判断.
 

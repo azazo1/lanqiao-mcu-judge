@@ -42,7 +42,7 @@ tap_many(S4, 1);
 assert_screen(1, 3, 0, "S4 第 101 次");
 assert_eq(normalized_state(), boot_state, "VV 增加 1 后仍不应进入持久状态");
 
-reset();
+reset(POWER_RESET);
 run_ms(180);
 assert_screen(0, 3, 0, "reset 后 VV 清零");
 assert_eq(normalized_state(), boot_state, "reset 后持久状态仍应保持 boot");
@@ -52,7 +52,7 @@ assert_screen(0, 0, 0, "S6 从 3 回绕到 0");
 let res0_state = normalized_state();
 assert(res0_state != boot_state, "R 改变后持久状态字符串应变化");
 
-reset();
+reset(POWER_RESET);
 run_ms(180);
 assert_screen(0, 0, 0, "reset 后保留 R");
 assert_eq(normalized_state(), res0_state, "reset 不应破坏 R 的持久状态");

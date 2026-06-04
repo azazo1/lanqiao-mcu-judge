@@ -35,7 +35,7 @@ const WAVE_KEY_ORDER: [KeyId; 16] = [
 
 use crate::{
     hex::load_ihex,
-    ids::{KeyId, KeyMode, LedId, SignalId, VoltageChannel},
+    ids::{KeyId, KeyMode, LedId, ResetMode, SignalId, VoltageChannel},
     jumper::{BoardJumpers, LineDrive, resolve_line},
     peripherals::{
         AnalogInputs, At24c02, Ds18b20, Ds1302, I2cBus, Key, Ne555, Outputs, Pcf8591,
@@ -200,6 +200,32 @@ impl Simulator {
     }
 
     pub fn reset(&mut self) -> Result<()> {
+        self.reset_with_mode(ResetMode::Power)
+    }
+
+    pub fn reset_with_mode(&mut self, mode: ResetMode) -> Result<()> {
+        match mode {
+            ResetMode::Cpu => self.reset_cpu_only(),
+            ResetMode::Power => self.reset_power_cycle(),
+        }
+    }
+
+    fn reset_cpu_only(&mut self) -> Result<()> {
+        let board = std::mem::take(&mut self.ctx.board);
+        let port_latches = LatchedBoardState::from_ports(&self.ctx.ports);
+        let xdata_latches = LatchedBoardState::from_xdata(&self.ctx.xdata);
+        self.cpu = Cpu::new();
+        self.ctx =
+            MachineContext::new_with_wave_window(self.code_image.clone(), self.wave.window());
+        self.ctx.board = board;
+        port_latches.apply_to_ports(&mut self.ctx.ports);
+        xdata_latches.apply_to_xdata(&mut self.ctx.xdata);
+        self.ctx.ports.refresh_inputs(&self.ctx.board);
+        self.capture_wave_snapshot();
+        Ok(())
+    }
+
+    fn reset_power_cycle(&mut self) -> Result<()> {
         let retained = self.ctx.board.retained_state();
         self.cpu = Cpu::new();
         self.ctx =
@@ -1022,6 +1048,43 @@ struct MachineContext {
     xdata: BoardXdata,
     code: CodeMemory,
     board: BoardModel,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LatchedBoardState {
+    board_latches: [u8; 4],
+    board_latch_versions: [u64; 4],
+    latch_used: bool,
+}
+
+impl LatchedBoardState {
+    fn from_ports(ports: &MachinePorts) -> Self {
+        Self {
+            board_latches: ports.board_latches,
+            board_latch_versions: ports.board_latch_versions,
+            latch_used: ports.latch_used,
+        }
+    }
+
+    fn from_xdata(xdata: &BoardXdata) -> Self {
+        Self {
+            board_latches: xdata.board_latches,
+            board_latch_versions: xdata.board_latch_versions,
+            latch_used: xdata.latch_used,
+        }
+    }
+
+    fn apply_to_ports(self, ports: &mut MachinePorts) {
+        ports.board_latches = self.board_latches;
+        ports.board_latch_versions = self.board_latch_versions;
+        ports.latch_used = self.latch_used;
+    }
+
+    fn apply_to_xdata(self, xdata: &mut BoardXdata) {
+        xdata.board_latches = self.board_latches;
+        xdata.board_latch_versions = self.board_latch_versions;
+        xdata.latch_used = self.latch_used;
+    }
 }
 
 impl MachineContext {
@@ -2034,7 +2097,10 @@ mod tests {
 
     use i8051::{Cpu, Register};
 
-    use crate::ids::{KeyId, KeyMode, LedId, SignalId};
+    use crate::{
+        ids::{KeyId, KeyMode, LedId, ResetMode, SignalId},
+        peripherals::I2cSlaveDevice,
+    };
 
     use super::{DisplayNumber, Simulator};
 
@@ -2331,6 +2397,74 @@ mod tests {
             (4_500_000..=5_500_000).contains(&dt1),
             "expected L2 step near 5ms, got {dt1}ns"
         );
+    }
+
+    #[test]
+    fn power_reset_clears_peripheral_volatile_state_but_keeps_persistent_data() {
+        let mut sim = Simulator::nop(false);
+        let analog = sim.ctx.board.analog.clone();
+
+        assert!(sim.ctx.board.pcf8591.on_addressed_write(100, &analog));
+        assert!(sim.ctx.board.pcf8591.on_write_byte(100, 0x03, &analog));
+        assert!(sim.ctx.board.pcf8591.on_write_byte(100, 0xA5, &analog));
+
+        assert!(sim.ctx.board.at24c02.on_addressed_write(200, &()));
+        assert!(sim.ctx.board.at24c02.on_write_byte(200, 0x10, &()));
+        assert!(sim.ctx.board.at24c02.on_write_byte(200, 0xAB, &()));
+        sim.ctx.board.at24c02.on_i2c_stop(200, &());
+
+        sim.run_us(100).expect("advance sim time");
+        assert!(!sim.ctx.board.at24c02.on_addressed_write(201, &()));
+        assert_eq!(sim.ctx.board.pcf8591.selected_channel(), 3);
+        assert_eq!(sim.ctx.board.pcf8591.dac_value(), 0xA5);
+        assert_eq!(sim.ctx.board.at24c02.byte(0x10), 0xAB);
+        assert!(sim.sim_time_ns() > 0);
+
+        sim.reset().expect("power reset");
+
+        assert_eq!(sim.sim_time_ns(), 0);
+        assert_eq!(sim.ctx.board.pcf8591.selected_channel(), 0);
+        assert_eq!(sim.ctx.board.pcf8591.dac_value(), 0x00);
+        assert_eq!(sim.ctx.board.at24c02.byte(0x10), 0xAB);
+        assert!(sim.ctx.board.at24c02.on_addressed_write(201, &()));
+    }
+
+    #[test]
+    fn cpu_reset_preserves_peripheral_volatile_state_and_board_latches() {
+        let mut sim = Simulator::nop(false);
+        let analog = sim.ctx.board.analog.clone();
+
+        assert!(sim.ctx.board.pcf8591.on_addressed_write(100, &analog));
+        assert!(sim.ctx.board.pcf8591.on_write_byte(100, 0x02, &analog));
+        assert!(sim.ctx.board.pcf8591.on_write_byte(100, 0x5C, &analog));
+
+        assert!(sim.ctx.board.at24c02.on_addressed_write(200, &()));
+        assert!(sim.ctx.board.at24c02.on_write_byte(200, 0x20, &()));
+        assert!(sim.ctx.board.at24c02.on_write_byte(200, 0xCD, &()));
+        sim.ctx.board.at24c02.on_i2c_stop(200, &());
+
+        sim.ctx.ports.board_latches = [0xFE, 0x10, 0x00, 0x00];
+        sim.ctx.ports.board_latch_versions = [1, 1, 0, 0];
+        sim.ctx.ports.latch_used = true;
+        sim.ctx
+            .board
+            .outputs
+            .sample_from_latches(&sim.ctx.ports.board_latches, &sim.ctx.ports.board_latch_versions);
+
+        sim.run_us(100).expect("advance sim time");
+        let before_reset_ns = sim.sim_time_ns();
+
+        sim.reset_with_mode(ResetMode::Cpu).expect("cpu reset");
+
+        assert_eq!(sim.sim_time_ns(), before_reset_ns);
+        assert_eq!(sim.ctx.board.pcf8591.selected_channel(), 2);
+        assert_eq!(sim.ctx.board.pcf8591.dac_value(), 0x5C);
+        assert_eq!(sim.ctx.board.at24c02.byte(0x20), 0xCD);
+        assert!(!sim.ctx.board.at24c02.on_addressed_write(201, &()));
+        assert!(sim.ctx.ports.latch_used);
+        assert_eq!(sim.ctx.ports.board_latches[0], 0xFE);
+        assert!(sim.led_on(1).expect("read L1 after cpu reset"));
+        assert!(sim.relay_on(), "relay latch should survive cpu reset");
     }
 
     #[test]

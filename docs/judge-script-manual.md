@@ -93,6 +93,11 @@ LED:
 - `KEYBOARD` `KBD`
 - `BUTTON` `BTN`
 
+reset 模式:
+
+- `CPU_RESET` `RESET_CPU`
+- `POWER_RESET` `RESET_POWER`
+
 跳帽信号:
 
 - `SIG_OUT`
@@ -271,6 +276,7 @@ let dt_s = run_to_s(2);
 - `export_persistent_state()`
 - `load_persistent_state(text)`
 - `reset()`
+- `reset(mode)`
 
 `export_persistent_state()` 返回当前非易失外设状态的序列化字符串. 当前覆盖:
 
@@ -280,12 +286,20 @@ let dt_s = run_to_s(2);
 
 `load_persistent_state(text)` 用同版本评测器导出的字符串覆盖当前非易失状态. 它不会自动恢复 MCU 寄存器, 内部 RAM, 数码管采样缓存, LED 当前态, UART 队列等易失运行态. 如果固件把外设内容缓存到了 RAM, 脚本里通常还需要额外调用 `reset()` 或触发固件自己的重新读取流程.
 
-`reset()` 会重建 MCU 和板级运行环境, 语义上等价于重新上电. 它会清空易失运行态, 但会保留非易失外设状态, 并保留当前脚本注入条件, 包括:
+`reset()` 等价于 `reset(POWER_RESET)`. 它会重建 MCU 和板级运行环境, 语义上等价于重新上电. 它会清空外设和板级的易失运行态, 但会保留非易失外设状态, 并保留当前脚本注入条件, 包括:
 
 - 当前按键模式和按下状态.
 - 当前跳帽连接关系.
 - 当前模拟电压输入.
 - `set_temperature_c(...)`, `set_distance_cm(...)`, `set_frequency_hz(...)`, `set_ds18b20_parasite_power(...)` 注入的环境条件.
+
+`reset(CPU_RESET)` 只复位 MCU 自身状态, 包括 PC, SFR, 定时器, UART, MOVX RAM 和端口锁存器. 它不会重建外设实例, 因而会保留外设和板级当前的易失运行态, 例如:
+
+- `AT24C02` 当前的 busy 写周期和地址指针.
+- `PCF8591` 当前的 DAC 输出值和通道选择.
+- 板级锁存器当前输出, 以及由此带来的 LED, 继电器, 蜂鸣器和数码管当前显示状态.
+
+`reset(POWER_RESET)` 则会把上面这些板级和外设易失态一并清空, 只留下非易失内容和脚本注入条件.
 
 持久状态字符串只保证在同版本评测器内部自洽, 不建议跨版本长期保存或手工构造.
 

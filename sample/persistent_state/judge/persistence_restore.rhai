@@ -41,7 +41,7 @@ assert_screen(12, 0, 3, "构造 snapshot A");
 let state_a = normalized_state();
 assert(state_a != boot_state, "snapshot A 应不同于 boot");
 
-reset();
+reset(POWER_RESET);
 run_ms(180);
 assert_screen(0, 0, 1, "reset 后恢复 snapshot A");
 assert_eq(normalized_state(), state_a, "reset 后 persistent state 不变");
@@ -65,7 +65,7 @@ assert_eq(eeprom_byte(1), 2, "load A 后 EEPROM[0x01]");
 assert_eq(eeprom_byte(2), 3, "load A 后 EEPROM[0x02]");
 assert_eq(screen(), visible_b, "仅 load 不应自动刷新 RAM 缓存显示");
 
-reset();
+reset(POWER_RESET);
 run_ms(180);
 assert_screen(0, 0, 1, "load A 再 reset 后");
 tap_many(S8, 1);
@@ -74,7 +74,7 @@ tap_many(S8, 1);
 assert_screen(0, 0, 3, "snapshot A 中地址 0x02");
 
 load_persistent_state(state_b);
-reset();
+reset(POWER_RESET);
 run_ms(180);
 assert_screen(0, 3, 4, "load B 再 reset 后");
 tap_many(S8, 1);
@@ -83,7 +83,7 @@ tap_many(S8, 1);
 assert_screen(0, 3, 255, "snapshot B 中地址 0x02");
 
 load_persistent_state(boot_state);
-reset();
+reset(POWER_RESET);
 run_ms(180);
 assert_screen(0, 3, 0, "恢复 boot 后");
 assert_eq(eeprom_byte(0), 0, "恢复 boot 后 EEPROM[0x00]");
