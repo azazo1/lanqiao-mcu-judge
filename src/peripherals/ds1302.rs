@@ -2,7 +2,7 @@ use anyhow::{Result, bail};
 
 use crate::chip::NS_PER_SECOND;
 use crate::persistent_state::Ds1302PersistentState;
-use crate::wave::{TRACK_EVENT_DS1302, WaveEventNote};
+use crate::wave::{TRACK_EVENT_DS1302, WaveCaptureWindow, WaveEventNote};
 
 #[derive(Debug, Clone)]
 pub(crate) struct Ds1302 {
@@ -36,6 +36,7 @@ pub(crate) struct Ds1302 {
     pub(crate) last_clock_write_value: u8,
     pub(crate) last_read_reg: u8,
     pub(crate) last_read_value: u8,
+    wave_window: WaveCaptureWindow,
     wave_events: Option<Vec<WaveEventNote>>,
 }
 
@@ -47,6 +48,10 @@ impl Default for Ds1302 {
 
 impl Ds1302 {
     pub(crate) fn new(wave_enabled: bool) -> Self {
+        Self::new_with_wave_window(WaveCaptureWindow::from_enabled(wave_enabled))
+    }
+
+    pub(crate) fn new_with_wave_window(wave_window: WaveCaptureWindow) -> Self {
         Self {
             ce_prev: false,
             clk_prev: false,
@@ -78,7 +83,8 @@ impl Ds1302 {
             last_clock_write_value: 0,
             last_read_reg: 0,
             last_read_value: 0,
-            wave_events: wave_enabled.then(Vec::new),
+            wave_window,
+            wave_events: wave_window.enabled().then(Vec::new),
         }
     }
 
@@ -135,7 +141,7 @@ impl Ds1302 {
                     self.reading = self.current_reg & 0x01 != 0;
                     let current_reg = self.current_reg;
                     let reading = self.reading;
-                    self.push_wave_event(|| {
+                    self.push_wave_event(time_ns, || {
                         WaveEventNote::with_detail(
                             time_ns,
                             TRACK_EVENT_DS1302,
@@ -292,7 +298,7 @@ impl Ds1302 {
         self.shift_out = self.read_byte;
         let read_value = self.last_read_value;
         let read_reg = self.last_read_reg;
-        self.push_wave_event(|| {
+        self.push_wave_event(time_ns, || {
             WaveEventNote::with_detail(
                 time_ns,
                 TRACK_EVENT_DS1302,
@@ -360,7 +366,7 @@ impl Ds1302 {
 
         self.last_write_reg = reg;
         self.last_write_value = value;
-        self.push_wave_event(|| {
+        self.push_wave_event(time_ns, || {
             WaveEventNote::with_detail(
                 time_ns,
                 TRACK_EVENT_DS1302,
@@ -412,11 +418,13 @@ impl Ds1302 {
         }
     }
 
-    fn push_wave_event<F>(&mut self, build: F)
+    fn push_wave_event<F>(&mut self, time_ns: u64, build: F)
     where
         F: FnOnce() -> WaveEventNote,
     {
-        if let Some(events) = self.wave_events.as_mut() {
+        if self.wave_window.includes(time_ns)
+            && let Some(events) = self.wave_events.as_mut()
+        {
             events.push(build());
         }
     }

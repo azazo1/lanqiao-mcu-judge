@@ -34,12 +34,50 @@ impl WaveCaptureOptions {
         self.html_path.is_some() || self.json_path.is_some()
     }
 
+    pub(crate) fn window(&self) -> WaveCaptureWindow {
+        WaveCaptureWindow {
+            enabled: self.enabled(),
+            start_ns: self.start_ns,
+            end_ns: self.end_bound(),
+        }
+    }
+
     fn end_bound(&self) -> u64 {
         self.end_ns.unwrap_or(u64::MAX)
     }
+}
 
-    fn includes(&self, time_ns: u64) -> bool {
-        self.enabled() && (self.start_ns..=self.end_bound()).contains(&time_ns)
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct WaveCaptureWindow {
+    enabled: bool,
+    start_ns: u64,
+    end_ns: u64,
+}
+
+impl WaveCaptureWindow {
+    pub(crate) fn from_enabled(enabled: bool) -> Self {
+        Self {
+            enabled,
+            start_ns: 0,
+            end_ns: u64::MAX,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn bounded(start_ns: u64, end_ns: Option<u64>) -> Self {
+        Self {
+            enabled: true,
+            start_ns,
+            end_ns: end_ns.unwrap_or(u64::MAX),
+        }
+    }
+
+    pub(crate) fn enabled(self) -> bool {
+        self.enabled
+    }
+
+    pub(crate) fn includes(self, time_ns: u64) -> bool {
+        self.enabled && self.start_ns <= time_ns && time_ns <= self.end_ns
     }
 }
 
@@ -410,6 +448,7 @@ impl I2cEventDecoder {
 
 pub(crate) struct WaveRecorder {
     options: WaveCaptureOptions,
+    window: WaveCaptureWindow,
     signal_lookup: HashMap<String, usize>,
     signals: Vec<SignalRecord>,
     events: Vec<EventRecord>,
@@ -420,8 +459,10 @@ pub(crate) struct WaveRecorder {
 
 impl WaveRecorder {
     pub(crate) fn new(options: WaveCaptureOptions) -> Self {
+        let window = options.window();
         let mut recorder = Self {
             options,
+            window,
             signal_lookup: HashMap::new(),
             signals: Vec::new(),
             events: Vec::new(),
@@ -434,15 +475,49 @@ impl WaveRecorder {
     }
 
     pub(crate) fn enabled(&self) -> bool {
-        self.options.enabled()
+        self.window.enabled()
+    }
+
+    pub(crate) fn captures_time(&self, time_ns: u64) -> bool {
+        self.window.includes(time_ns)
+    }
+
+    pub(crate) fn window(&self) -> WaveCaptureWindow {
+        self.window
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_with_window(window: WaveCaptureWindow) -> Self {
+        let mut recorder = Self {
+            options: WaveCaptureOptions::default(),
+            window,
+            signal_lookup: HashMap::new(),
+            signals: Vec::new(),
+            events: Vec::new(),
+            i2c_decoder: I2cEventDecoder::default(),
+            observed_start_ns: None,
+            observed_end_ns: None,
+        };
+        recorder.register_defaults();
+        recorder
     }
 
     pub(crate) fn observe_snapshot(&mut self, snapshot: &WaveSnapshot) {
-        if !self.options.includes(snapshot.time_ns) {
+        if !self.window.includes(snapshot.time_ns) {
             return;
         }
 
         for port in 0..6 {
+            self.record_integer(
+                &format!("pin.p{port}"),
+                snapshot.time_ns,
+                i64::from(snapshot.port_input[port]),
+            );
+            self.record_integer(
+                &format!("latch.p{port}"),
+                snapshot.time_ns,
+                i64::from(snapshot.port_latch[port]),
+            );
             for bit in 0..8 {
                 let pin_high = snapshot.port_input[port] & (1 << bit) != 0;
                 let latch_high = snapshot.port_latch[port] & (1 << bit) != 0;
@@ -605,7 +680,7 @@ impl WaveRecorder {
     }
 
     pub(crate) fn record_event_note(&mut self, note: WaveEventNote) {
-        if !self.options.includes(note.time_ns) {
+        if !self.window.includes(note.time_ns) {
             return;
         }
         if !self.signal_lookup.contains_key(note.track_id) {
@@ -622,6 +697,26 @@ impl WaveRecorder {
 
     fn register_defaults(&mut self) {
         for port in 0..6 {
+            self.register_signal(
+                format!("pin.p{port}"),
+                format!("P{port} pin byte"),
+                "pins",
+                format!("P{port} pins"),
+                SignalKind::Integer,
+                "hex8",
+                None,
+                false,
+            );
+            self.register_signal(
+                format!("latch.p{port}"),
+                format!("P{port} latch byte"),
+                "port_latches",
+                format!("P{port} latches"),
+                SignalKind::Integer,
+                "hex8",
+                None,
+                false,
+            );
             for bit in 0..8 {
                 self.register_signal(
                     format!("pin.p{port}.{bit}"),
@@ -3517,7 +3612,10 @@ render();
 
 #[cfg(test)]
 mod tests {
-    use super::{I2cEventDecoder, TRACK_EVENT_I2C, signal_aliases};
+    use super::{
+        I2cEventDecoder, TRACK_EVENT_I2C, WaveCaptureWindow, WaveEventNote, WaveRecorder,
+        signal_aliases,
+    };
 
     #[test]
     fn i2c_decoder_marks_start_bytes_ack_and_stop() {
@@ -3624,5 +3722,19 @@ mod tests {
         let aliases = signal_aliases("uart1.tx", "TX", "protocol", "uart1");
         assert!(aliases.iter().any(|alias| alias == "serial1 tx"));
         assert!(aliases.iter().any(|alias| alias == "serial 1"));
+    }
+
+    #[test]
+    fn recorder_window_filters_out_of_range_events() {
+        let mut recorder =
+            WaveRecorder::new_with_window(WaveCaptureWindow::bounded(100, Some(200)));
+
+        recorder.record_event_note(WaveEventNote::new(90, TRACK_EVENT_I2C, "before"));
+        recorder.record_event_note(WaveEventNote::new(100, TRACK_EVENT_I2C, "inside"));
+        recorder.record_event_note(WaveEventNote::new(210, TRACK_EVENT_I2C, "after"));
+
+        assert_eq!(recorder.events.len(), 1);
+        assert_eq!(recorder.events[0].time_ns, 100);
+        assert_eq!(recorder.events[0].label, "inside");
     }
 }

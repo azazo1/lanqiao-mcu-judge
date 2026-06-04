@@ -24,7 +24,10 @@ use crate::{
         SegmentDecoder, UltrasonicDevice,
     },
     persistent_state::PersistentState,
-    wave::{TRACK_EVENT_CPU, WaveCaptureOptions, WaveEventNote, WaveRecorder, WaveSnapshot},
+    wave::{
+        TRACK_EVENT_CPU, WaveCaptureOptions, WaveCaptureWindow, WaveEventNote, WaveRecorder,
+        WaveSnapshot,
+    },
 };
 
 mod registers;
@@ -127,8 +130,8 @@ impl Simulator {
         let hex = fs::read_to_string(path)
             .with_context(|| format!("读取 HEX 文件失败: {}", path.display()))?;
         let code = load_ihex(&hex)?;
-        let wave_enabled = wave_options.enabled();
-        let ctx = MachineContext::new_with_wave_enabled(code.clone(), wave_enabled);
+        let wave_window = wave_options.window();
+        let ctx = MachineContext::new_with_wave_window(code.clone(), wave_window);
         let mut sim = Self {
             cpu: Cpu::new(),
             ctx,
@@ -158,7 +161,7 @@ impl Simulator {
         let retained = self.ctx.board.retained_state();
         self.cpu = Cpu::new();
         self.ctx =
-            MachineContext::new_with_wave_enabled(self.code_image.clone(), self.wave.enabled());
+            MachineContext::new_with_wave_window(self.code_image.clone(), self.wave.window());
         self.ctx.board.load_retained_state(&retained);
         self.ctx.ports.refresh_inputs(&self.ctx.board);
         self.capture_wave_snapshot();
@@ -696,7 +699,8 @@ impl Simulator {
     }
 
     fn capture_wave_snapshot(&mut self) {
-        if !self.wave.enabled() {
+        let time_ns = self.ctx.board.sim_time_ns;
+        if !self.wave.captures_time(time_ns) {
             return;
         }
 
@@ -747,7 +751,7 @@ impl Simulator {
         }
 
         let snapshot = WaveSnapshot {
-            time_ns: self.ctx.board.sim_time_ns,
+            time_ns,
             port_latch: self.ctx.ports.port_latch,
             port_input: self.ctx.ports.port_input,
             board_latches_effective: effective_board_latches,
@@ -821,7 +825,8 @@ impl Simulator {
     }
 
     fn note_interrupt_event(&mut self, pending: PendingInterrupt) {
-        if !self.wave.enabled() {
+        let time_ns = self.ctx.board.sim_time_ns;
+        if !self.wave.captures_time(time_ns) {
             return;
         }
         let label = match pending.source {
@@ -832,7 +837,7 @@ impl Simulator {
             InterruptSource::Serial => "UART enter",
         };
         let note = WaveEventNote::with_detail(
-            self.ctx.board.sim_time_ns,
+            time_ns,
             TRACK_EVENT_CPU,
             label,
             format!("pc=0x{:04X}", self.cpu.pc_ext(&self.ctx)),
@@ -880,12 +885,16 @@ impl MachineContext {
     }
 
     fn new_with_wave_enabled(code: Vec<u8>, wave_enabled: bool) -> Self {
-        let mut board = BoardModel::new_with_wave_enabled(wave_enabled);
+        Self::new_with_wave_window(code, WaveCaptureWindow::from_enabled(wave_enabled))
+    }
+
+    fn new_with_wave_window(code: Vec<u8>, wave_window: WaveCaptureWindow) -> Self {
+        let mut board = BoardModel::new_with_wave_window(wave_window);
         board
             .outputs
             .sample_from_latches(&BOARD_POWER_ON_LATCHES, &[0; 4]);
         Self {
-            ports: MachinePorts::new_with_wave_enabled(wave_enabled),
+            ports: MachinePorts::new_with_wave_window(wave_window),
             xdata: BoardXdata::default(),
             code: CodeMemory { code },
             board,
@@ -1072,6 +1081,10 @@ impl MachinePorts {
     }
 
     fn new_with_wave_enabled(wave_enabled: bool) -> Self {
+        Self::new_with_wave_window(WaveCaptureWindow::from_enabled(wave_enabled))
+    }
+
+    fn new_with_wave_window(wave_window: WaveCaptureWindow) -> Self {
         let mut generic = [0_u8; 128];
         let mut port_latch = [0xFF_u8; 6];
         port_latch[5] = 0x3F;
@@ -1093,13 +1106,13 @@ impl MachinePorts {
                 UART1_SFR_SCON,
                 UART1_SFR_SBUF,
                 uart_frame_ns(9_600),
-                wave_enabled,
+                wave_window,
             ),
             uart2: Uart::new(
                 UART2_SFR_S2CON,
                 UART2_SFR_S2BUF,
                 uart_frame_ns(9_600),
-                wave_enabled,
+                wave_window,
             ),
         }
     }
@@ -1319,11 +1332,12 @@ struct Uart {
     bit_ns: u64,
     tx_line_high: bool,
     rx_line_high: bool,
+    wave_window: WaveCaptureWindow,
     wave_events: Option<Vec<WaveEventNote>>,
 }
 
 impl Uart {
-    fn new(scon_addr: u8, sbuf_addr: u8, frame_ns: u64, wave_enabled: bool) -> Self {
+    fn new(scon_addr: u8, sbuf_addr: u8, frame_ns: u64, wave_window: WaveCaptureWindow) -> Self {
         Self {
             scon_addr,
             sbuf_addr,
@@ -1337,7 +1351,8 @@ impl Uart {
             bit_ns: (frame_ns / 10).max(1),
             tx_line_high: true,
             rx_line_high: true,
-            wave_events: wave_enabled.then(Vec::new),
+            wave_window,
+            wave_events: wave_window.enabled().then(Vec::new),
         }
     }
 
@@ -1370,7 +1385,7 @@ impl Uart {
             } else {
                 crate::wave::TRACK_EVENT_UART1
             };
-            self.push_wave_event(|| {
+            self.push_wave_event(start_time_ns, || {
                 WaveEventNote::new(start_time_ns, track_id, format!("TX 0x{byte:02X}"))
             });
         }
@@ -1402,7 +1417,7 @@ impl Uart {
             } else {
                 crate::wave::TRACK_EVENT_UART1
             };
-            self.push_wave_event(|| {
+            self.push_wave_event(start_time_ns, || {
                 WaveEventNote::new(start_time_ns, track_id, format!("RX 0x{byte:02X}"))
             });
         }
@@ -1462,11 +1477,13 @@ impl Uart {
         String::from_utf8_lossy(self.tx_queue.as_slices().0).into_owned()
     }
 
-    fn push_wave_event<F>(&mut self, build: F)
+    fn push_wave_event<F>(&mut self, time_ns: u64, build: F)
     where
         F: FnOnce() -> WaveEventNote,
     {
-        if let Some(events) = self.wave_events.as_mut() {
+        if self.wave_window.includes(time_ns)
+            && let Some(events) = self.wave_events.as_mut()
+        {
             events.push(build());
         }
     }
@@ -1500,16 +1517,20 @@ impl BoardModel {
     }
 
     fn new_with_wave_enabled(wave_enabled: bool) -> Self {
+        Self::new_with_wave_window(WaveCaptureWindow::from_enabled(wave_enabled))
+    }
+
+    fn new_with_wave_window(wave_window: WaveCaptureWindow) -> Self {
         Self {
             cpu_cycles: 0,
             sim_time_ns: 0,
             sim_time_ns_remainder: 0,
             system_cycle_remainder: 0,
             outputs: Outputs::default(),
-            ds18b20: Ds18b20::new(wave_enabled),
-            ds1302: Ds1302::new(wave_enabled),
+            ds18b20: Ds18b20::new_with_wave_window(wave_window),
+            ds1302: Ds1302::new_with_wave_window(wave_window),
             i2c: I2cBus,
-            pcf8591: Pcf8591::new(wave_enabled),
+            pcf8591: Pcf8591::new_with_wave_window(wave_window),
             at24c02: At24c02::default(),
             ne555: Ne555::default(),
             ultrasonic: UltrasonicDevice::default(),
@@ -2112,7 +2133,7 @@ mod tests {
             super::UART1_SFR_SCON,
             super::UART1_SFR_SBUF,
             super::uart_frame_ns(9_600),
-            false,
+            super::WaveCaptureWindow::from_enabled(false),
         );
 
         uart.write(super::UART1_SFR_SBUF, 0x55);

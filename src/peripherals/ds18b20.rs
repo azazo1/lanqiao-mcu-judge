@@ -4,7 +4,7 @@ use anyhow::{Result, bail};
 
 use crate::chip::NS_PER_MICROSECOND;
 use crate::persistent_state::Ds18b20PersistentState;
-use crate::wave::{TRACK_EVENT_ONEWIRE, WaveEventNote};
+use crate::wave::{TRACK_EVENT_ONEWIRE, WaveCaptureWindow, WaveEventNote};
 
 const RESET_PULSE_MIN_NS: u64 = 400 * NS_PER_MICROSECOND;
 const PRESENCE_PULSE_NS: u64 = 120 * NS_PER_MICROSECOND;
@@ -44,6 +44,7 @@ pub(crate) struct Ds18b20 {
     eeprom_th: u8,
     eeprom_tl: u8,
     eeprom_config: u8,
+    wave_window: WaveCaptureWindow,
     wave_events: Option<Vec<WaveEventNote>>,
 }
 
@@ -90,6 +91,10 @@ impl Default for Ds18b20 {
 
 impl Ds18b20 {
     pub(crate) fn new(wave_enabled: bool) -> Self {
+        Self::new_with_wave_window(WaveCaptureWindow::from_enabled(wave_enabled))
+    }
+
+    pub(crate) fn new_with_wave_window(wave_window: WaveCaptureWindow) -> Self {
         Self {
             drive_low: false,
             temperature_c: 0.0,
@@ -113,7 +118,8 @@ impl Ds18b20 {
             eeprom_th: DEFAULT_TH,
             eeprom_tl: DEFAULT_TL,
             eeprom_config: DEFAULT_CONFIG,
-            wave_events: wave_enabled.then(Vec::new),
+            wave_window,
+            wave_events: wave_window.enabled().then(Vec::new),
         }
     }
 
@@ -226,7 +232,7 @@ impl Ds18b20 {
         self.tx_bits.clear();
         self.status_response = StatusResponse::None;
         let presence_until = time_ns.saturating_add(PRESENCE_PULSE_NS);
-        self.push_wave_event(|| {
+        self.push_wave_event(time_ns, || {
             WaveEventNote::with_detail(
                 time_ns,
                 TRACK_EVENT_ONEWIRE,
@@ -270,7 +276,7 @@ impl Ds18b20 {
     }
 
     fn handle_input_byte(&mut self, value: u8, time_ns: u64) {
-        self.push_wave_event(|| {
+        self.push_wave_event(time_ns, || {
             WaveEventNote::new(time_ns, TRACK_EVENT_ONEWIRE, format!("RX 0x{value:02X}"))
         });
         match self.bus_state {
@@ -302,7 +308,7 @@ impl Ds18b20 {
     }
 
     fn handle_rom_command(&mut self, value: u8, time_ns: u64) {
-        self.push_wave_event(|| {
+        self.push_wave_event(time_ns, || {
             WaveEventNote::new(
                 time_ns,
                 TRACK_EVENT_ONEWIRE,
@@ -347,7 +353,7 @@ impl Ds18b20 {
     }
 
     fn handle_function_command(&mut self, value: u8, time_ns: u64) {
-        self.push_wave_event(|| {
+        self.push_wave_event(time_ns, || {
             WaveEventNote::new(
                 time_ns,
                 TRACK_EVENT_ONEWIRE,
@@ -486,7 +492,7 @@ impl Ds18b20 {
     fn load_tx_bytes(&mut self, time_ns: u64, bytes: &[u8]) {
         self.tx_bits.clear();
         if !bytes.is_empty() {
-            self.push_wave_event(|| {
+            self.push_wave_event(time_ns, || {
                 let detail = bytes
                     .iter()
                     .map(|byte| format!("{byte:02X}"))
@@ -524,7 +530,7 @@ impl Ds18b20 {
         if self.convert_busy_until.is_none() {
             let done_at = time_ns.saturating_add(self.conversion_time_ns());
             self.convert_busy_until = Some(done_at);
-            self.push_wave_event(|| {
+            self.push_wave_event(time_ns, || {
                 WaveEventNote::with_detail(
                     time_ns,
                     TRACK_EVENT_ONEWIRE,
@@ -535,11 +541,13 @@ impl Ds18b20 {
         }
     }
 
-    fn push_wave_event<F>(&mut self, build: F)
+    fn push_wave_event<F>(&mut self, time_ns: u64, build: F)
     where
         F: FnOnce() -> WaveEventNote,
     {
-        if let Some(events) = self.wave_events.as_mut() {
+        if self.wave_window.includes(time_ns)
+            && let Some(events) = self.wave_events.as_mut()
+        {
             events.push(build());
         }
     }

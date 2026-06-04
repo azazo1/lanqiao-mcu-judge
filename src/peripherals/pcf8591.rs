@@ -1,6 +1,6 @@
 use std::mem;
 
-use crate::wave::{TRACK_EVENT_ADC_DAC, WaveEventNote};
+use crate::wave::{TRACK_EVENT_ADC_DAC, WaveCaptureWindow, WaveEventNote};
 
 use super::{
     analog::AnalogInputs,
@@ -15,6 +15,7 @@ pub(crate) struct Pcf8591 {
     selected_channel: u8,
     expecting_control: bool,
     frontend: I2cSlaveFrontend,
+    wave_window: WaveCaptureWindow,
     wave_events: Option<Vec<WaveEventNote>>,
 }
 
@@ -26,6 +27,10 @@ impl Default for Pcf8591 {
 
 impl Pcf8591 {
     pub(crate) fn new(wave_enabled: bool) -> Self {
+        Self::new_with_wave_window(WaveCaptureWindow::from_enabled(wave_enabled))
+    }
+
+    pub(crate) fn new_with_wave_window(wave_window: WaveCaptureWindow) -> Self {
         Self {
             control: 0,
             dac_value: 0,
@@ -33,7 +38,8 @@ impl Pcf8591 {
             selected_channel: 0,
             expecting_control: false,
             frontend: I2cSlaveFrontend::default(),
-            wave_events: wave_enabled.then(Vec::new),
+            wave_window,
+            wave_events: wave_window.enabled().then(Vec::new),
         }
     }
 
@@ -175,7 +181,9 @@ impl Pcf8591 {
         L: FnOnce() -> String,
         D: FnOnce() -> String,
     {
-        if let Some(events) = self.wave_events.as_mut() {
+        if self.wave_window.includes(time_ns)
+            && let Some(events) = self.wave_events.as_mut()
+        {
             events.push(WaveEventNote::with_detail(
                 time_ns,
                 TRACK_EVENT_ADC_DAC,
@@ -259,6 +267,7 @@ impl I2cSlaveDevice for Pcf8591 {
 mod tests {
     use super::Pcf8591;
     use crate::peripherals::{AnalogInputs, i2c_slave::I2cSlaveDevice};
+    use crate::wave::WaveCaptureWindow;
 
     #[test]
     fn first_read_returns_power_on_default_then_latest_conversion() {
@@ -304,5 +313,23 @@ mod tests {
             &mut pcf, 0, 0x40, &analog
         ));
         assert!(pcf.take_wave_events().is_empty());
+    }
+
+    #[test]
+    fn wave_window_skips_events_before_start() {
+        let mut pcf = Pcf8591::new_with_wave_window(WaveCaptureWindow::bounded(100, Some(200)));
+        let analog = AnalogInputs::default();
+
+        assert!(<Pcf8591 as I2cSlaveDevice>::on_write_byte(
+            &mut pcf, 50, 0x40, &analog
+        ));
+        assert!(pcf.take_wave_events().is_empty());
+
+        assert!(<Pcf8591 as I2cSlaveDevice>::on_write_byte(
+            &mut pcf, 150, 0x41, &analog
+        ));
+        let events = pcf.take_wave_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].time_ns, 150);
     }
 }
