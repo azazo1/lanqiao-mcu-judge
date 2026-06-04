@@ -48,3 +48,29 @@ judge-samples:
             "$bin" run --script "$judge"
         fi
     done < <(find sample -type f -path '*/judge/*.rhai' | sort)
+
+wave-sample sample script start="0" end="" output="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    bin="target/release/stcjudge"
+    judge="sample/{{ sample }}/judge/{{ script }}"
+    hex="sample/{{ sample }}/prj/Objects/{{ sample }}.hex"
+    script_name=$(basename "$judge" .rhai)
+    output_path="{{ output }}"
+    if [ -z "$output_path" ]; then
+        output_dir="outputs/waves/{{ sample }}"
+        mkdir -p "$output_dir"
+        output_path="$output_dir/$script_name.html"
+    else
+        mkdir -p "$(dirname "$output_path")"
+    fi
+    cargo build --release --bin stcjudge
+    cmd=("$bin" run --script "$judge" --wave-start "{{ start }}" --wave-html "$output_path")
+    if [ -f "$hex" ]; then
+        cmd=("$bin" run --hex "$hex" --script "$judge" --wave-start "{{ start }}" --wave-html "$output_path")
+    fi
+    if [ -n "{{ end }}" ]; then
+        cmd+=(--wave-end "{{ end }}")
+    fi
+    "${cmd[@]}"
+    echo "wave html: $output_path"

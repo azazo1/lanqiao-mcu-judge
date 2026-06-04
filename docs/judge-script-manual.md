@@ -410,6 +410,20 @@ let dt_s = run_to_s(2);
 
 `eeprom_byte(addr)` 返回当前 `AT24C02` 指定地址中的原始字节, 范围是 `0..=255`. 对需要验证 EEPROM 块扫描, 指针回绕, 持久化恢复的题目, 可以直接读取指定地址, 不必只靠数码管结果反推内部状态.
 
+`uart_take()` 返回当前已经发出的串口文本, 并清空内部发送队列. 如果要确认某次串口输出已经被完整消费, 可以连续调用两次, 第二次应返回空字符串.
+
+串口题常见写法:
+
+```rhai
+uart_write("00012");
+run_ms(220);
+assert_eq(uart_take(), "13", "串口应返回原值加 1");
+assert_eq(uart_take(), "", "读取后串口缓冲应为空");
+let text = display_text(30);
+assert_eq(text[0..3], "   ", "前 3 位保持空白");
+assert_eq(text[3..8], "00012", "右 5 位补零显示原值");
+```
+
 ## Rhai 字符串切片和正则
 
 - `regex_is_match(text, pattern)`
