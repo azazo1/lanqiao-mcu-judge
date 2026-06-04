@@ -115,7 +115,11 @@ LED:
 
 - `run_ms(ms)`
 - `run_us(us)`
+- `sim_time_ns()`
 - `run_to(target, edge)`
+- `run_to(target, edge, timeout_ns)`
+- `run_to(predicate)`
+- `run_to(predicate, timeout_ns)`
 - `run_to_ns(target_ns)`
 - `run_to_us(target_us)`
 - `run_to_ms(target_ms)`
@@ -125,7 +129,11 @@ LED:
 
 `run_ms(...)` 和 `run_us(...)` 按精确仿真时基推进. 如果固件内部有显示刷新周期, 1s 测频窗口, 传感器采样节拍等逻辑, 在修改输入后要显式留出足够稳定时间, 不要假设几十毫秒内一定已经更新到最终结果.
 
+`sim_time_ns()` 返回当前绝对仿真时间戳, 单位是 `ns`.
+
 `run_to(target, edge)` 会持续推进仿真, 直到目标信号命中指定边沿, 返回这次一共推进了多少 `ns`.
+
+`run_to(target, edge, timeout_ns)` 会在上面的基础上增加超时限制. 如果在 `timeout_ns` 内仍未命中目标边沿, 会直接报错.
 
 - `UP` 表示 `false -> true`
 - `DOWN` 表示 `true -> false`
@@ -142,7 +150,23 @@ let dt4 = run_to(UART1_TX, DOWN);
 let dt5 = run_to(ONEWIRE_BUS, UP);
 let dt6 = run_to(NET_SIG, FLIP);
 let dt7 = run_to(SIG_OUT, FLIP);
+let dt8 = run_to(UART1_TX, FLIP, 200_000);
 ```
+
+`run_to(predicate)` 会持续推进仿真, 每推进一步就重新执行一次回调 `predicate`, 当其返回 `true` 时停止, 并返回这次一共推进了多少 `ns`.
+
+`run_to(predicate, timeout_ns)` 则会额外增加超时限制.
+
+回调应当返回布尔值. 常见写法例如:
+
+```rhai
+let dt0 = run_to(|| led_on(L1));
+let target_ns = sim_time_ns() + 20_000;
+let dt1 = run_to(|| sim_time_ns() >= target_ns, 30_000);
+let dt2 = run_to(|| display_text() == "000", 2_000_000);
+```
+
+注意, 回调内部也可以调用其他脚本接口, 包括读取显示, LED, 串口, 甚至继续推进仿真时间. `run_to` 返回的耗时会按真实推进后的仿真时间计算.
 
 `run_to_ns/us/ms/s(...)` 的参数是绝对仿真时间戳, 不是相对等待时长. 它们同样返回本次推进的时间:
 
@@ -162,8 +186,8 @@ let dt_s = run_to_s(2);
 
 注意:
 
-- `run_to(...)` 当前没有超时参数. 如果目标边沿永远不会出现, 脚本会一直运行下去.
-- `run_to(...)` 的命中精度取决于仿真步进. 返回值是首次观测到目标边沿时, 相对于调用点累计推进的时间.
+- 不带 `timeout_ns` 的 `run_to(...)` 如果条件永远不满足, 脚本会一直运行下去.
+- `run_to(...)` 的命中精度取决于仿真步进. 返回值是首次观测到目标边沿或条件成立时, 相对于调用点累计推进的时间.
 
 ## 状态导入导出
 

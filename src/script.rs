@@ -8,7 +8,8 @@ use std::{
 use anyhow::{Context, Result, anyhow, bail};
 use regex::Regex;
 use rhai::{
-    Dynamic, Engine, EvalAltResult, ImmutableString, Map, Position, Scope,
+    Dynamic, Engine, EvalAltResult, FnPtr, ImmutableString, Map, NativeCallContext, Position,
+    Scope,
     debugger::{DebuggerCommand, DebuggerEvent},
 };
 use tracing::{debug, trace};
@@ -25,7 +26,7 @@ use crate::{
 pub fn run_script(sim: Simulator, path: &Path) -> Result<()> {
     let source = std::fs::read_to_string(path)
         .with_context(|| format!("读取脚本失败: {}", path.display()))?;
-    eval_source(sim, &format!("file:{}", path.display()), &source)
+    run_script_source(sim, &format!("file:{}", path.display()), &source)
 }
 
 pub fn run_script_stdin(sim: Simulator) -> Result<()> {
@@ -36,7 +37,11 @@ pub fn run_script_stdin(sim: Simulator) -> Result<()> {
     if source.trim().is_empty() {
         bail!("标准输入中没有 Rhai 脚本内容");
     }
-    eval_source(sim, "stdin", &source)
+    run_script_source(sim, "stdin", &source)
+}
+
+pub fn run_script_source(sim: Simulator, label: &str, source: &str) -> Result<()> {
+    eval_source(sim, label, source)
 }
 
 pub fn run_repl(sim: Simulator) -> Result<()> {
@@ -506,6 +511,15 @@ fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
             Ok(elapsed_ns as rhai::FLOAT / NS_PER_SECOND as rhai::FLOAT)
         },
     );
+
+    let sim_time_now = Arc::clone(sim);
+    engine.register_fn("sim_time_ns", move || -> Result<i64, Box<EvalAltResult>> {
+        let now_ns = sim_time_now
+            .lock()
+            .map_err(|_| runtime_error("仿真器锁已损坏"))?
+            .sim_time_ns();
+        script_int(now_ns, "sim_time_ns 返回值超出脚本整数范围")
+    });
 
     register_run_to_api(engine, sim);
 
@@ -1177,12 +1191,23 @@ fn register_run_to_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
     engine.register_fn(
         "run_to",
         move |target: RunToTarget, edge: RunToEdge| -> Result<i64, Box<EvalAltResult>> {
-            let elapsed_ns = sim_target_edge
-                .lock()
-                .map_err(|_| runtime_error("仿真器锁已损坏"))?
-                .run_to_target(target, edge)
-                .map_err(|err| runtime_error(err.to_string()))?;
-            script_int(elapsed_ns, "run_to 返回值超出脚本整数范围")
+            run_to_target_wait(&sim_target_edge, target, edge, None)
+        },
+    );
+
+    let sim_target_edge_timeout = Arc::clone(sim);
+    engine.register_fn(
+        "run_to",
+        move |target: RunToTarget,
+              edge: RunToEdge,
+              timeout_ns: i64|
+              -> Result<i64, Box<EvalAltResult>> {
+            run_to_target_wait(
+                &sim_target_edge_timeout,
+                target,
+                edge,
+                Some(script_duration_ns(timeout_ns, "timeout_ns")?),
+            )
         },
     );
 
@@ -1190,14 +1215,28 @@ fn register_run_to_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
     engine.register_fn(
         "run_to",
         move |target: RunToTarget, edge: ImmutableString| -> Result<i64, Box<EvalAltResult>> {
-            let edge =
-                RunToEdge::parse(edge.as_str()).map_err(|err| runtime_error(err.to_string()))?;
-            let elapsed_ns = sim_target_edge_name
-                .lock()
-                .map_err(|_| runtime_error("仿真器锁已损坏"))?
-                .run_to_target(target, edge)
-                .map_err(|err| runtime_error(err.to_string()))?;
-            script_int(elapsed_ns, "run_to 返回值超出脚本整数范围")
+            run_to_target_wait(
+                &sim_target_edge_name,
+                target,
+                parse_run_to_edge(edge.as_str())?,
+                None,
+            )
+        },
+    );
+
+    let sim_target_edge_name_timeout = Arc::clone(sim);
+    engine.register_fn(
+        "run_to",
+        move |target: RunToTarget,
+              edge: ImmutableString,
+              timeout_ns: i64|
+              -> Result<i64, Box<EvalAltResult>> {
+            run_to_target_wait(
+                &sim_target_edge_name_timeout,
+                target,
+                parse_run_to_edge(edge.as_str())?,
+                Some(script_duration_ns(timeout_ns, "timeout_ns")?),
+            )
         },
     );
 
@@ -1205,12 +1244,20 @@ fn register_run_to_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
     engine.register_fn(
         "run_to",
         move |led: LedId, edge: RunToEdge| -> Result<i64, Box<EvalAltResult>> {
-            let elapsed_ns = sim_led_edge
-                .lock()
-                .map_err(|_| runtime_error("仿真器锁已损坏"))?
-                .run_to_target(RunToTarget::Led(led), edge)
-                .map_err(|err| runtime_error(err.to_string()))?;
-            script_int(elapsed_ns, "run_to 返回值超出脚本整数范围")
+            run_to_target_wait(&sim_led_edge, RunToTarget::Led(led), edge, None)
+        },
+    );
+
+    let sim_led_edge_timeout = Arc::clone(sim);
+    engine.register_fn(
+        "run_to",
+        move |led: LedId, edge: RunToEdge, timeout_ns: i64| -> Result<i64, Box<EvalAltResult>> {
+            run_to_target_wait(
+                &sim_led_edge_timeout,
+                RunToTarget::Led(led),
+                edge,
+                Some(script_duration_ns(timeout_ns, "timeout_ns")?),
+            )
         },
     );
 
@@ -1218,14 +1265,25 @@ fn register_run_to_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
     engine.register_fn(
         "run_to",
         move |led: LedId, edge: ImmutableString| -> Result<i64, Box<EvalAltResult>> {
-            let edge =
-                RunToEdge::parse(edge.as_str()).map_err(|err| runtime_error(err.to_string()))?;
-            let elapsed_ns = sim_led_edge_name
-                .lock()
-                .map_err(|_| runtime_error("仿真器锁已损坏"))?
-                .run_to_target(RunToTarget::Led(led), edge)
-                .map_err(|err| runtime_error(err.to_string()))?;
-            script_int(elapsed_ns, "run_to 返回值超出脚本整数范围")
+            run_to_target_wait(
+                &sim_led_edge_name,
+                RunToTarget::Led(led),
+                parse_run_to_edge(edge.as_str())?,
+                None,
+            )
+        },
+    );
+
+    let sim_led_edge_name_timeout = Arc::clone(sim);
+    engine.register_fn(
+        "run_to",
+        move |led: LedId, edge: ImmutableString, timeout_ns: i64| -> Result<i64, Box<EvalAltResult>> {
+            run_to_target_wait(
+                &sim_led_edge_name_timeout,
+                RunToTarget::Led(led),
+                parse_run_to_edge(edge.as_str())?,
+                Some(script_duration_ns(timeout_ns, "timeout_ns")?),
+            )
         },
     );
 
@@ -1233,12 +1291,20 @@ fn register_run_to_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
     engine.register_fn(
         "run_to",
         move |key: KeyId, edge: RunToEdge| -> Result<i64, Box<EvalAltResult>> {
-            let elapsed_ns = sim_key_edge
-                .lock()
-                .map_err(|_| runtime_error("仿真器锁已损坏"))?
-                .run_to_target(RunToTarget::Key(key), edge)
-                .map_err(|err| runtime_error(err.to_string()))?;
-            script_int(elapsed_ns, "run_to 返回值超出脚本整数范围")
+            run_to_target_wait(&sim_key_edge, RunToTarget::Key(key), edge, None)
+        },
+    );
+
+    let sim_key_edge_timeout = Arc::clone(sim);
+    engine.register_fn(
+        "run_to",
+        move |key: KeyId, edge: RunToEdge, timeout_ns: i64| -> Result<i64, Box<EvalAltResult>> {
+            run_to_target_wait(
+                &sim_key_edge_timeout,
+                RunToTarget::Key(key),
+                edge,
+                Some(script_duration_ns(timeout_ns, "timeout_ns")?),
+            )
         },
     );
 
@@ -1246,14 +1312,25 @@ fn register_run_to_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
     engine.register_fn(
         "run_to",
         move |key: KeyId, edge: ImmutableString| -> Result<i64, Box<EvalAltResult>> {
-            let edge =
-                RunToEdge::parse(edge.as_str()).map_err(|err| runtime_error(err.to_string()))?;
-            let elapsed_ns = sim_key_edge_name
-                .lock()
-                .map_err(|_| runtime_error("仿真器锁已损坏"))?
-                .run_to_target(RunToTarget::Key(key), edge)
-                .map_err(|err| runtime_error(err.to_string()))?;
-            script_int(elapsed_ns, "run_to 返回值超出脚本整数范围")
+            run_to_target_wait(
+                &sim_key_edge_name,
+                RunToTarget::Key(key),
+                parse_run_to_edge(edge.as_str())?,
+                None,
+            )
+        },
+    );
+
+    let sim_key_edge_name_timeout = Arc::clone(sim);
+    engine.register_fn(
+        "run_to",
+        move |key: KeyId, edge: ImmutableString, timeout_ns: i64| -> Result<i64, Box<EvalAltResult>> {
+            run_to_target_wait(
+                &sim_key_edge_name_timeout,
+                RunToTarget::Key(key),
+                parse_run_to_edge(edge.as_str())?,
+                Some(script_duration_ns(timeout_ns, "timeout_ns")?),
+            )
         },
     );
 
@@ -1261,12 +1338,20 @@ fn register_run_to_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
     engine.register_fn(
         "run_to",
         move |signal: SignalId, edge: RunToEdge| -> Result<i64, Box<EvalAltResult>> {
-            let elapsed_ns = sim_signal_edge
-                .lock()
-                .map_err(|_| runtime_error("仿真器锁已损坏"))?
-                .run_to_target(signal_run_to_target(signal), edge)
-                .map_err(|err| runtime_error(err.to_string()))?;
-            script_int(elapsed_ns, "run_to 返回值超出脚本整数范围")
+            run_to_target_wait(&sim_signal_edge, signal_run_to_target(signal), edge, None)
+        },
+    );
+
+    let sim_signal_edge_timeout = Arc::clone(sim);
+    engine.register_fn(
+        "run_to",
+        move |signal: SignalId, edge: RunToEdge, timeout_ns: i64| -> Result<i64, Box<EvalAltResult>> {
+            run_to_target_wait(
+                &sim_signal_edge_timeout,
+                signal_run_to_target(signal),
+                edge,
+                Some(script_duration_ns(timeout_ns, "timeout_ns")?),
+            )
         },
     );
 
@@ -1274,14 +1359,25 @@ fn register_run_to_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
     engine.register_fn(
         "run_to",
         move |signal: SignalId, edge: ImmutableString| -> Result<i64, Box<EvalAltResult>> {
-            let edge =
-                RunToEdge::parse(edge.as_str()).map_err(|err| runtime_error(err.to_string()))?;
-            let elapsed_ns = sim_signal_edge_name
-                .lock()
-                .map_err(|_| runtime_error("仿真器锁已损坏"))?
-                .run_to_target(signal_run_to_target(signal), edge)
-                .map_err(|err| runtime_error(err.to_string()))?;
-            script_int(elapsed_ns, "run_to 返回值超出脚本整数范围")
+            run_to_target_wait(
+                &sim_signal_edge_name,
+                signal_run_to_target(signal),
+                parse_run_to_edge(edge.as_str())?,
+                None,
+            )
+        },
+    );
+
+    let sim_signal_edge_name_timeout = Arc::clone(sim);
+    engine.register_fn(
+        "run_to",
+        move |signal: SignalId, edge: ImmutableString, timeout_ns: i64| -> Result<i64, Box<EvalAltResult>> {
+            run_to_target_wait(
+                &sim_signal_edge_name_timeout,
+                signal_run_to_target(signal),
+                parse_run_to_edge(edge.as_str())?,
+                Some(script_duration_ns(timeout_ns, "timeout_ns")?),
+            )
         },
     );
 
@@ -1289,14 +1385,20 @@ fn register_run_to_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
     engine.register_fn(
         "run_to",
         move |target: ImmutableString, edge: RunToEdge| -> Result<i64, Box<EvalAltResult>> {
-            let target =
-                RunToTarget::parse(target.as_str()).map_err(|err| runtime_error(err.to_string()))?;
-            let elapsed_ns = sim_name_edge
-                .lock()
-                .map_err(|_| runtime_error("仿真器锁已损坏"))?
-                .run_to_target(target, edge)
-                .map_err(|err| runtime_error(err.to_string()))?;
-            script_int(elapsed_ns, "run_to 返回值超出脚本整数范围")
+            run_to_target_wait(&sim_name_edge, parse_run_to_target(target.as_str())?, edge, None)
+        },
+    );
+
+    let sim_name_edge_timeout = Arc::clone(sim);
+    engine.register_fn(
+        "run_to",
+        move |target: ImmutableString, edge: RunToEdge, timeout_ns: i64| -> Result<i64, Box<EvalAltResult>> {
+            run_to_target_wait(
+                &sim_name_edge_timeout,
+                parse_run_to_target(target.as_str())?,
+                edge,
+                Some(script_duration_ns(timeout_ns, "timeout_ns")?),
+            )
         },
     );
 
@@ -1304,16 +1406,52 @@ fn register_run_to_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
     engine.register_fn(
         "run_to",
         move |target: ImmutableString, edge: ImmutableString| -> Result<i64, Box<EvalAltResult>> {
-            let target =
-                RunToTarget::parse(target.as_str()).map_err(|err| runtime_error(err.to_string()))?;
-            let edge =
-                RunToEdge::parse(edge.as_str()).map_err(|err| runtime_error(err.to_string()))?;
-            let elapsed_ns = sim_name_edge_name
-                .lock()
-                .map_err(|_| runtime_error("仿真器锁已损坏"))?
-                .run_to_target(target, edge)
-                .map_err(|err| runtime_error(err.to_string()))?;
-            script_int(elapsed_ns, "run_to 返回值超出脚本整数范围")
+            run_to_target_wait(
+                &sim_name_edge_name,
+                parse_run_to_target(target.as_str())?,
+                parse_run_to_edge(edge.as_str())?,
+                None,
+            )
+        },
+    );
+
+    let sim_name_edge_name_timeout = Arc::clone(sim);
+    engine.register_fn(
+        "run_to",
+        move |target: ImmutableString,
+              edge: ImmutableString,
+              timeout_ns: i64|
+              -> Result<i64, Box<EvalAltResult>> {
+            run_to_target_wait(
+                &sim_name_edge_name_timeout,
+                parse_run_to_target(target.as_str())?,
+                parse_run_to_edge(edge.as_str())?,
+                Some(script_duration_ns(timeout_ns, "timeout_ns")?),
+            )
+        },
+    );
+
+    let sim_callback = Arc::clone(sim);
+    engine.register_fn(
+        "run_to",
+        move |ctx: NativeCallContext, predicate: FnPtr| -> Result<i64, Box<EvalAltResult>> {
+            run_to_callback_wait(ctx, &sim_callback, predicate, None)
+        },
+    );
+
+    let sim_callback_timeout = Arc::clone(sim);
+    engine.register_fn(
+        "run_to",
+        move |ctx: NativeCallContext,
+              predicate: FnPtr,
+              timeout_ns: i64|
+              -> Result<i64, Box<EvalAltResult>> {
+            run_to_callback_wait(
+                ctx,
+                &sim_callback_timeout,
+                predicate,
+                Some(script_duration_ns(timeout_ns, "timeout_ns")?),
+            )
         },
     );
 }
@@ -1322,6 +1460,68 @@ fn signal_run_to_target(signal: SignalId) -> RunToTarget {
     match signal {
         SignalId::SigOut => RunToTarget::Pin { port: 3, bit: 4 },
         SignalId::NetSig => RunToTarget::Ne555SigOut,
+    }
+}
+
+fn parse_run_to_target(target: &str) -> Result<RunToTarget, Box<EvalAltResult>> {
+    RunToTarget::parse(target).map_err(|err| runtime_error(err.to_string()))
+}
+
+fn parse_run_to_edge(edge: &str) -> Result<RunToEdge, Box<EvalAltResult>> {
+    RunToEdge::parse(edge).map_err(|err| runtime_error(err.to_string()))
+}
+
+fn script_duration_ns(value: i64, label: &str) -> Result<u64, Box<EvalAltResult>> {
+    u64::try_from(value).map_err(|_| runtime_error(format!("{label} 参数必须 >= 0")))
+}
+
+fn run_to_target_wait(
+    sim: &Arc<Mutex<Simulator>>,
+    target: RunToTarget,
+    edge: RunToEdge,
+    timeout_ns: Option<u64>,
+) -> Result<i64, Box<EvalAltResult>> {
+    let elapsed_ns = sim
+        .lock()
+        .map_err(|_| runtime_error("仿真器锁已损坏"))?
+        .run_to_target_with_timeout(target, edge, timeout_ns)
+        .map_err(|err| runtime_error(err.to_string()))?;
+    script_int(elapsed_ns, "run_to 返回值超出脚本整数范围")
+}
+
+fn run_to_callback_wait(
+    ctx: NativeCallContext,
+    sim: &Arc<Mutex<Simulator>>,
+    predicate: FnPtr,
+    timeout_ns: Option<u64>,
+) -> Result<i64, Box<EvalAltResult>> {
+    let start_ns = current_sim_time_ns(sim);
+    loop {
+        let ready = predicate
+            .call_within_context::<bool>(&ctx, ())
+            .map_err(|err| runtime_error(err.to_string()))?;
+        let elapsed_ns = current_sim_time_ns(sim).saturating_sub(start_ns);
+        if ready {
+            if let Some(timeout_ns) = timeout_ns
+                && elapsed_ns > timeout_ns
+            {
+                return Err(runtime_error(format!(
+                    "run_to 回调等待超时: timeout_ns={timeout_ns}"
+                )));
+            }
+            return script_int(elapsed_ns, "run_to 返回值超出脚本整数范围");
+        }
+        if let Some(timeout_ns) = timeout_ns
+            && elapsed_ns >= timeout_ns
+        {
+            return Err(runtime_error(format!(
+                "run_to 回调等待超时: timeout_ns={timeout_ns}"
+            )));
+        }
+        sim.lock()
+            .map_err(|_| runtime_error("仿真器锁已损坏"))?
+            .step_once()
+            .map_err(|err| runtime_error(err.to_string()))?;
     }
 }
 
@@ -1520,6 +1720,8 @@ fn script_time_target_ns(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Instant;
+
     use super::eval_source;
     use crate::chip::Simulator;
 
@@ -1537,5 +1739,55 @@ mod tests {
             assert(t2 > 0, "run_to should detect SIG_OUT flip");
         "#;
         eval_source(sim, "test:run_to", script).expect("run rhai script");
+    }
+
+    #[test]
+    fn rhai_run_to_supports_timeout_and_callback_predicate() {
+        let sim = Simulator::nop(false);
+        let script = r#"
+            set_frequency_hz(2000);
+            jumper_on(NET_SIG, SIG_OUT);
+
+            let dt0 = run_to(NET_SIG, FLIP, 1_000_000);
+            assert(dt0 > 0, "edge run_to with timeout should succeed");
+
+            let dt1 = run_to(|| led_on(L1), 10_000);
+            assert_eq(dt1, 0, "callback run_to should return immediately when already true");
+
+            let target_ns = sim_time_ns() + 20_000;
+            let dt2 = run_to(|| sim_time_ns() >= target_ns, 30_000);
+            assert_in(dt2, 20_000..=30_000, "callback run_to should wait until condition becomes true");
+        "#;
+        eval_source(sim, "test:run_to_timeout", script).expect("run rhai timeout script");
+    }
+
+    #[test]
+    fn rhai_run_to_timeout_reports_failure() {
+        let sim = Simulator::nop(false);
+        let script = r#"
+            run_to(|| false, 1000);
+        "#;
+        let err = eval_source(sim, "test:run_to_timeout_fail", script).unwrap_err();
+        assert!(err.to_string().contains("超时"));
+    }
+
+    #[test]
+    #[ignore = "manual benchmark"]
+    fn bench_run_to_callback_predicate() {
+        let sim = Simulator::nop(false);
+        let script = r#"
+            set_frequency_hz(2000);
+            let rounds = 200;
+            let total = 0;
+            for i in 0..rounds {
+                let next_ns = sim_time_ns() + 1000;
+                total += run_to(|| sim_time_ns() >= next_ns, 10_000);
+            }
+            total
+        "#;
+        let started = Instant::now();
+        eval_source(sim, "bench:run_to_callback", script).expect("run callback benchmark");
+        let elapsed = started.elapsed();
+        eprintln!("bench_run_to_callback_predicate elapsed={elapsed:?}");
     }
 }

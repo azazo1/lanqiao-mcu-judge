@@ -239,19 +239,46 @@ impl Simulator {
         Ok(self.ctx.board.sim_time_ns.saturating_sub(start))
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn run_to_target(&mut self, target: RunToTarget, edge: RunToEdge) -> Result<u64> {
+        self.run_to_target_with_timeout(target, edge, None)
+    }
+
+    pub fn run_to_target_with_timeout(
+        &mut self,
+        target: RunToTarget,
+        edge: RunToEdge,
+        timeout_ns: Option<u64>,
+    ) -> Result<u64> {
         let start = self.ctx.board.sim_time_ns;
         let mut previous = self.read_run_to_target(target);
         loop {
+            let elapsed_ns = self.ctx.board.sim_time_ns.saturating_sub(start);
+            if let Some(timeout_ns) = timeout_ns
+                && elapsed_ns >= timeout_ns
+            {
+                bail!("run_to 等待超时: timeout_ns={timeout_ns}");
+            }
             self.step_once()?;
             let current = self.read_run_to_target(target);
+            let elapsed_ns = self.ctx.board.sim_time_ns.saturating_sub(start);
             let matched = match edge {
                 RunToEdge::Up => !previous && current,
                 RunToEdge::Down => previous && !current,
                 RunToEdge::Flip => previous != current,
             };
             if matched {
-                return Ok(self.ctx.board.sim_time_ns.saturating_sub(start));
+                if let Some(timeout_ns) = timeout_ns
+                    && elapsed_ns > timeout_ns
+                {
+                    bail!("run_to 等待超时: timeout_ns={timeout_ns}");
+                }
+                return Ok(elapsed_ns);
+            }
+            if let Some(timeout_ns) = timeout_ns
+                && elapsed_ns >= timeout_ns
+            {
+                bail!("run_to 等待超时: timeout_ns={timeout_ns}");
             }
             previous = current;
         }
@@ -686,7 +713,7 @@ impl Simulator {
         out
     }
 
-    fn step_once(&mut self) -> Result<()> {
+    pub(crate) fn step_once(&mut self) -> Result<()> {
         self.ctx.ports.refresh_inputs(&self.ctx.board);
         if self.try_enter_pending_interrupt()? {
             return Ok(());

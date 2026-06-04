@@ -7,6 +7,9 @@ clippy:
 test:
     cargo test --release
 
+bench-run-to-callback:
+    cargo test --release bench_run_to_callback_predicate -- --ignored --nocapture
+
 run-sample hex script:
     cargo run --release -- run --hex {{ hex }} --script {{ script }}
 
