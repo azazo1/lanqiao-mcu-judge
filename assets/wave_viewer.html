@@ -112,19 +112,23 @@ body {
   grid-row: 2;
 }
 .marker-panel {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
+  display: grid;
   align-items: center;
   padding: 0 16px 12px 16px;
   background: #12172a;
 }
 .marker-controls {
+  grid-row: 1;
+  grid-column: 1;
+  justify-self: start;
+  z-index: 1;
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
-  flex: 0 0 auto;
+  min-width: 0;
+  padding-right: 10px;
+  background: #12172a;
 }
 .marker-input {
   width: 150px;
@@ -137,13 +141,17 @@ body {
   padding: 7px 10px;
 }
 .marker-strip {
+  grid-row: 1;
+  grid-column: 1;
   display: flex;
-  flex: 1 1 0;
   flex-wrap: nowrap;
   gap: 6px;
   align-items: center;
   min-width: 0;
-  max-width: 100%;
+  width: 100%;
+  box-sizing: border-box;
+  padding-left: calc(12px + var(--marker-strip-left-inset, 0px));
+  padding-right: calc(12px + var(--marker-strip-right-inset, 0px));
   overflow-x: auto;
   overflow-y: hidden;
   white-space: nowrap;
@@ -166,6 +174,7 @@ body {
   cursor: pointer;
   user-select: none;
   flex: 0 0 auto;
+  min-width: 0;
 }
 .marker-add-button {
   padding: 6px 10px;
@@ -189,9 +198,18 @@ body {
   line-height: 1;
 }
 .marker-status {
+  grid-row: 1;
+  grid-column: 1;
+  justify-self: end;
+  z-index: 1;
   color: #f6c3c3;
   font-size: 12px;
   white-space: nowrap;
+  padding-left: 10px;
+  background: #12172a;
+}
+.marker-status:empty {
+  display: none;
 }
 .overview-row {
   display: grid;
@@ -661,6 +679,7 @@ const presetSelect = document.getElementById("preset-select");
 const markerTimeInput = document.getElementById("marker-time");
 const markerLabelInput = document.getElementById("marker-label");
 const markerAddButton = document.getElementById("marker-add");
+const markerControls = document.querySelector(".marker-controls");
 const markerStrip = document.getElementById("marker-strip");
 const markerStatus = document.getElementById("marker-status");
 
@@ -958,6 +977,7 @@ function sortMarkers() {
 
 function setMarkerStatus(text) {
   markerStatus.textContent = text || "";
+  updateMarkerStripInsets();
 }
 
 function markerInView(marker) {
@@ -1044,6 +1064,17 @@ function removeMarker(markerId) {
   render();
 }
 
+function updateMarkerStripInsets() {
+  const controlsWidth = markerControls
+    ? Math.ceil(markerControls.getBoundingClientRect().width + 10)
+    : 0;
+  const statusWidth = markerStatus && markerStatus.textContent
+    ? Math.ceil(markerStatus.getBoundingClientRect().width + 10)
+    : 0;
+  markerStrip.style.setProperty("--marker-strip-left-inset", `${controlsWidth}px`);
+  markerStrip.style.setProperty("--marker-strip-right-inset", `${statusWidth}px`);
+}
+
 function renderMarkerStrip() {
   const previousScrollLeft = markerStripScrollLeft;
   markerStrip.innerHTML = "";
@@ -1052,6 +1083,7 @@ function renderMarkerStrip() {
     empty.className = "legend";
     empty.textContent = "No markers";
     markerStrip.appendChild(empty);
+    updateMarkerStripInsets();
     markerStripScrollLeft = 0;
     return;
   }
@@ -1071,6 +1103,7 @@ function renderMarkerStrip() {
     chip.appendChild(swatch);
 
     const text = document.createElement("span");
+    text.className = "marker-chip-text";
     text.textContent = marker.label
       ? `${marker.label} @ ${formatMarkerTime(marker.t)}`
       : formatMarkerTime(marker.t);
@@ -1088,6 +1121,7 @@ function renderMarkerStrip() {
     chip.appendChild(removeButton);
     markerStrip.appendChild(chip);
   }
+  updateMarkerStripInsets();
   const maxScrollLeft = Math.max(0, markerStrip.scrollWidth - markerStrip.clientWidth);
   if (markerStripRevealTail) {
     markerStrip.scrollLeft = maxScrollLeft;
