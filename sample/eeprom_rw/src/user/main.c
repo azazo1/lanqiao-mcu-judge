@@ -1,9 +1,11 @@
 #include "eeprom.h"
 #include "utils.h"
 
+u8 t = 0xA5;
+
 void Timer1_Isr(void) interrupt 3
 {
-	write0(0x80, 0xff);
+	write0(0x80, t);
 }
 
 void Timer1_Init(void)		//1∫¡√Î@12.000MHz
@@ -20,9 +22,9 @@ void Timer1_Init(void)		//1∫¡√Î@12.000MHz
 
 
 void main() {
-	u8 t = 0xA5;
 	Timer1_Init();
 	eeprom_write(0, &t, 1);
+	t = 0;
 	eeprom_read(0, &t, 1);
 	while (1) {}
 }

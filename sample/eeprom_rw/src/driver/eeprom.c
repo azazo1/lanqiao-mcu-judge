@@ -30,6 +30,7 @@ void eeprom_read(u8 addr, u8 *buf, u8 len) {
 }
 
 void eeprom_write(u8 addr, u8 *buf, u8 len) {
+	u8 i;
 	I2CStart();
 	I2CSendByte(0xA0);
 	I2CWaitAck();
@@ -42,5 +43,6 @@ void eeprom_write(u8 addr, u8 *buf, u8 len) {
 		I2C_Delay(200);
 	}
 	I2CStop();
-	Delay5ms();
+	for (i = 0; i < 10; ++i)
+		Delay5ms();
 }
