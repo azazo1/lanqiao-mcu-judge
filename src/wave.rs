@@ -452,6 +452,13 @@ fn add_alias_forms(aliases: &mut Vec<String>, text: &str) {
     if normalized.contains("dac") {
         push_alias(aliases, normalized.replace("dac", "da"));
     }
+    if lowercase.contains("ain") {
+        push_alias(aliases, lowercase.replace("ain", "adc"));
+    }
+    if normalized.contains("ain") {
+        push_alias(aliases, normalized.replace("ain", "adc"));
+        push_alias(aliases, normalized.replace("ain", "analog"));
+    }
     if normalized.contains("ne555") {
         push_alias(aliases, normalized.replace("ne555", "555"));
         push_alias(aliases, normalized.replace("ne555", "timer555"));
@@ -1944,6 +1951,18 @@ mod tests {
         let aliases = signal_aliases("uart1.tx", "TX", "protocol", "uart1");
         assert!(aliases.iter().any(|alias| alias == "serial1 tx"));
         assert!(aliases.iter().any(|alias| alias == "serial 1"));
+    }
+
+    #[test]
+    fn signal_aliases_include_adc_variants_for_ain_inputs() {
+        let aliases = signal_aliases(
+            "analog.rd1_v",
+            "RD1/AIN1",
+            "analog",
+            "pcf8591_ne555",
+        );
+        assert!(aliases.iter().any(|alias| alias == "rd1/adc1"));
+        assert!(aliases.iter().any(|alias| alias == "rd1 adc1"));
     }
 
     #[test]

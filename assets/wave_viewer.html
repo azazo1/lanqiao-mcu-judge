@@ -695,6 +695,7 @@ const signals = data.signals.map(signal => ({
 }));
 const signalById = new Map(signals.map(signal => [signal.id, signal]));
 const samples = data.samples;
+const analogScaleById = new Map();
 const events = data.events;
 const eventsByTrack = new Map();
 for (const event of events) {
@@ -717,6 +718,13 @@ for (const signal of signals) {
   groups.get(key).signals.push(signal);
 }
 
+for (const signal of signals) {
+  if (signal.kind !== "analog") {
+    continue;
+  }
+  analogScaleById.set(signal.id, computeAnalogScale(signal));
+}
+
 const DEFAULT_SELECTED_IDS = signals
   .filter(signal => signal.default_visible)
   .map(signal => signal.id);
@@ -729,7 +737,7 @@ const QUICK_PRESET_DEFS = [
   { id: "led", label: "LED", queries: ["led"] },
   { id: "key", label: "Keys", queries: ["key", "button", "kbd", "keyboard"] },
   { id: "seg", label: "SEG", queries: ["seg", "display"] },
-  { id: "adc_dac", label: "ADC / DAC", queries: ["adc", "dac"], includeQueries: ["iic", "i2c", "cpu", "seg", "display", "p2"] },
+  { id: "adc_dac", label: "ADC / DAC", queries: ["adc", "dac", "ain"], includeQueries: ["iic", "i2c", "cpu", "seg", "display", "p2"] },
   { id: "onewire", label: "1-Wire", queries: ["onewire", "1-wire"], includeQueries: ["cpu", "seg", "display"] },
   { id: "cpu", label: "CPU / IRQ", queries: ["cpu", "interrupt"] },
   { id: "pins", label: "Pins", queries: ["pins", "pin"] },
@@ -1863,6 +1871,44 @@ function pointValueText(signal, value) {
   return String(value);
 }
 
+function computeAnalogScale(signal) {
+  const points = sampleArray(signal);
+  let observedMin = Number.POSITIVE_INFINITY;
+  let observedMax = Number.NEGATIVE_INFINITY;
+  for (const point of points) {
+    const value = Number(point.v);
+    if (!Number.isFinite(value)) {
+      continue;
+    }
+    observedMin = Math.min(observedMin, value);
+    observedMax = Math.max(observedMax, value);
+  }
+  if (!Number.isFinite(observedMin) || !Number.isFinite(observedMax)) {
+    return { min: 0, max: 1 };
+  }
+  if (signal.unit === "V") {
+    return { min: 0, max: 5 };
+  }
+  if (signal.unit === "Hz") {
+    return { min: 0, max: Math.max(1, observedMax) };
+  }
+  if (observedMin === observedMax) {
+    const padding = Math.max(1, Math.abs(observedMin) * 0.1);
+    return {
+      min: observedMin - padding,
+      max: observedMax + padding,
+    };
+  }
+  return {
+    min: observedMin,
+    max: observedMax,
+  };
+}
+
+function analogScaleOf(signal) {
+  return analogScaleById.get(signal.id) || { min: 0, max: 1 };
+}
+
 function chooseTimeUnit(referenceNs) {
   if (referenceNs >= 1_000_000_000) {
     return { suffix: "s", scale: 1_000_000_000 };
@@ -1965,11 +2011,20 @@ function pointRangeForView(points) {
   if (!points.length) {
     return null;
   }
-  const startIndex = Math.max(0, firstTimedIndexGreaterThan(points, viewStart) - 1);
-  const endExclusive = Math.max(startIndex + 1, firstTimedIndexGreaterThan(points, viewEnd));
+  const firstAfterStart = firstTimedIndexGreaterThan(points, viewStart);
+  const firstAfterEnd = firstTimedIndexGreaterThan(points, viewEnd);
+  const startIndex = Math.max(0, firstAfterStart - 1);
+  const hasLeftNeighbor = startIndex < firstAfterStart;
+  const hasRightNeighbor = firstAfterEnd < points.length;
+  const endExclusive = Math.max(
+    startIndex + 1,
+    Math.min(points.length, firstAfterEnd + (hasRightNeighbor ? 1 : 0))
+  );
   return {
     startIndex,
-    endExclusive: Math.min(points.length, endExclusive),
+    endExclusive,
+    startTime: hasLeftNeighbor ? points[startIndex].t : viewStart,
+    endTime: hasRightNeighbor ? points[firstAfterEnd].t : viewEnd,
   };
 }
 
@@ -1998,25 +2053,20 @@ function xOf(timeNs, waveLeft, waveWidth) {
   return waveLeft + (timeNs - viewStart) * waveWidth / span;
 }
 
-function columnRangeForTimeSpan(startNs, endNs, pixelCount) {
+function columnRangeForTimeSpan(startNs, endNs, pixelCount, extraPixels = 0) {
   if (endNs <= startNs || pixelCount <= 0) {
     return null;
   }
   const spanNs = Math.max(1, viewEnd - viewStart);
-  const left = Math.max(
-    0,
-    Math.min(
-      pixelCount - 1,
-      Math.floor((Math.max(startNs, viewStart) - viewStart) * pixelCount / spanNs)
-    )
-  );
-  const right = Math.max(
-    left,
-    Math.min(
-      pixelCount - 1,
-      Math.ceil((Math.min(endNs, viewEnd) - viewStart) * pixelCount / spanNs) - 1
-    )
-  );
+  const minPixel = -extraPixels;
+  const maxPixel = pixelCount - 1 + extraPixels;
+  const rawLeft = Math.floor((startNs - viewStart) * pixelCount / spanNs);
+  const rawRight = Math.ceil((endNs - viewStart) * pixelCount / spanNs) - 1;
+  if (rawRight < minPixel || rawLeft > maxPixel) {
+    return null;
+  }
+  const left = Math.max(minPixel, Math.min(maxPixel, rawLeft));
+  const right = Math.max(left, Math.max(minPixel, Math.min(maxPixel, rawRight)));
   return { left, right };
 }
 
@@ -2070,7 +2120,7 @@ function buildRenderDetail(waveWidth) {
     nsPerPixel,
     denseDigitalThreshold: pixelCount * 6,
     denseBusThreshold: pixelCount,
-    denseAnalogThreshold: pixelCount * 2,
+    denseAnalogThreshold: Math.max(pixelCount * 12, 4096),
     eventLineGapPx: nsPerPixel >= 1_000_000 ? 4 : (nsPerPixel >= 100_000 ? 2 : 0),
     eventLabelGapPx: nsPerPixel >= 1_000_000 ? 72 : (nsPerPixel >= 100_000 ? 40 : (nsPerPixel >= 10_000 ? 24 : 12)),
   };
@@ -2395,36 +2445,43 @@ function shouldKeepMarkerFocusOnMouseDown(event) {
 function renderDigitalDense(points, range, rowTop, rowHeight, waveLeft, waveWidth, detail) {
   const highY = rowTop + 16;
   const lowY = rowTop + rowHeight - 12;
-  const highDiff = new Int32Array(detail.pixelCount + 1);
-  const lowDiff = new Int32Array(detail.pixelCount + 1);
-  let segmentStart = viewStart;
+  const extraPixels = 1;
+  const columnCount = detail.pixelCount + extraPixels * 2;
+  const highDiff = new Int32Array(columnCount + 1);
+  const lowDiff = new Int32Array(columnCount + 1);
+  let segmentStart = range.startTime;
   let currentValue = Boolean(points[range.startIndex].v);
-  for (let index = range.startIndex + 1; index <= range.endExclusive; index += 1) {
-    const nextTime = index < points.length ? points[index].t : viewEnd;
-    const bounds = columnRangeForTimeSpan(segmentStart, nextTime, detail.pixelCount);
+  for (let index = range.startIndex + 1; index < range.endExclusive; index += 1) {
+    const nextTime = points[index].t;
+    const bounds = columnRangeForTimeSpan(segmentStart, nextTime, detail.pixelCount, extraPixels);
     if (bounds) {
       const diff = currentValue ? highDiff : lowDiff;
-      diff[bounds.left] += 1;
-      diff[bounds.right + 1] -= 1;
-    }
-    if (index >= range.endExclusive) {
-      break;
+      diff[bounds.left + extraPixels] += 1;
+      diff[bounds.right + extraPixels + 1] -= 1;
     }
     segmentStart = points[index].t;
     currentValue = Boolean(points[index].v);
+  }
+  if (segmentStart < range.endTime) {
+    const bounds = columnRangeForTimeSpan(segmentStart, range.endTime, detail.pixelCount, extraPixels);
+    if (bounds) {
+      const diff = currentValue ? highDiff : lowDiff;
+      diff[bounds.left + extraPixels] += 1;
+      diff[bounds.right + extraPixels + 1] -= 1;
+    }
   }
   ctx.strokeStyle = "#83a8ff";
   ctx.lineWidth = 1;
   ctx.beginPath();
   let highCount = 0;
   let lowCount = 0;
-  for (let pixel = 0; pixel < detail.pixelCount; pixel += 1) {
+  for (let pixel = 0; pixel < columnCount; pixel += 1) {
     highCount += highDiff[pixel];
     lowCount += lowDiff[pixel];
     if (!highCount && !lowCount) {
       continue;
     }
-    const x = waveLeft + pixel + 0.5;
+    const x = waveLeft + (pixel - extraPixels) + 0.5;
     if (highCount && lowCount) {
       ctx.moveTo(x, highY);
       ctx.lineTo(x, lowY);
@@ -2457,7 +2514,7 @@ function renderDigital(signal, rowTop, rowHeight, waveLeft, waveWidth, detail) {
   ctx.lineWidth = 2;
   ctx.beginPath();
   let currentValue = Boolean(points[range.startIndex].v);
-  ctx.moveTo(waveLeft, currentValue ? highY : lowY);
+  ctx.moveTo(xOf(range.startTime, waveLeft, waveWidth), currentValue ? highY : lowY);
   for (let index = range.startIndex + 1; index < range.endExclusive; index += 1) {
     const point = points[index];
     const x = xOf(point.t, waveLeft, waveWidth);
@@ -2465,7 +2522,7 @@ function renderDigital(signal, rowTop, rowHeight, waveLeft, waveWidth, detail) {
     currentValue = Boolean(point.v);
     ctx.lineTo(x, currentValue ? highY : lowY);
   }
-  ctx.lineTo(waveLeft + waveWidth, currentValue ? highY : lowY);
+  ctx.lineTo(xOf(range.endTime, waveLeft, waveWidth), currentValue ? highY : lowY);
   ctx.stroke();
 }
 
@@ -2479,19 +2536,17 @@ function renderBusLike(signal, rowTop, rowHeight, waveLeft, waveWidth, detail) {
     return;
   }
   const denseMode = (range.endExclusive - range.startIndex) > detail.denseBusThreshold;
-  let segmentStart = viewStart;
+  let segmentStart = range.startTime;
   let segmentValue = points[range.startIndex].v;
   let lastLabelRight = Number.NEGATIVE_INFINITY;
-  for (let index = range.startIndex + 1; index <= range.endExclusive; index += 1) {
-    const nextTime = index < points.length ? points[index].t : viewEnd;
+  for (let index = range.startIndex + 1; index < range.endExclusive; index += 1) {
+    const nextTime = points[index].t;
     const left = xOf(segmentStart, waveLeft, waveWidth);
-    const right = xOf(Math.min(viewEnd, nextTime), waveLeft, waveWidth);
+    const right = xOf(nextTime, waveLeft, waveWidth);
     const width = Math.max(1, right - left);
     if (denseMode && width < 1.25) {
-      if (index < range.endExclusive) {
-        segmentStart = points[index].t;
-        segmentValue = points[index].v;
-      }
+      segmentStart = points[index].t;
+      segmentValue = points[index].v;
       continue;
     }
     ctx.fillStyle = signal.kind === "text" ? "#27405f" : "#1d3557";
@@ -2505,55 +2560,126 @@ function renderBusLike(signal, rowTop, rowHeight, waveLeft, waveWidth, detail) {
       ctx.fillText(text, left + 6, rowTop + rowHeight / 2 + 4);
       lastLabelRight = left + 6 + ctx.measureText(text).width;
     }
-    if (index < range.endExclusive) {
-      segmentStart = points[index].t;
-      segmentValue = points[index].v;
+    segmentStart = points[index].t;
+    segmentValue = points[index].v;
+  }
+  if (segmentStart < range.endTime) {
+    const left = xOf(segmentStart, waveLeft, waveWidth);
+    const right = xOf(range.endTime, waveLeft, waveWidth);
+    const width = Math.max(1, right - left);
+    if (!(denseMode && width < 1.25)) {
+      ctx.fillStyle = signal.kind === "text" ? "#27405f" : "#1d3557";
+      ctx.fillRect(left, rowTop + 8, width, rowHeight - 16);
+      ctx.strokeStyle = "#7fb8ff";
+      ctx.strokeRect(left, rowTop + 8, width, rowHeight - 16);
+      const text = pointValueText(signal, segmentValue);
+      const minTextWidth = denseMode ? 54 : 30;
+      if (width > minTextWidth && left >= lastLabelRight + 10) {
+        ctx.fillStyle = "#eef3ff";
+        ctx.fillText(text, left + 6, rowTop + rowHeight / 2 + 4);
+      }
     }
   }
 }
 
+function analogYOfValue(value, min, max, rowTop, rowHeight) {
+  const ratio = (value - min) / (max - min);
+  return rowTop + rowHeight - 12 - ratio * (rowHeight - 24);
+}
+
 function renderAnalogDense(points, range, signal, rowTop, rowHeight, waveLeft, detail) {
-  const visible = [];
-  visible.push({ t: viewStart, v: Number(points[range.startIndex].v) });
-  for (let index = range.startIndex + 1; index < range.endExclusive; index += 1) {
-    visible.push({ t: points[index].t, v: Number(points[index].v) });
-  }
-  let min = visible[0].v;
-  let max = visible[0].v;
-  for (const point of visible) {
-    min = Math.min(min, point.v);
-    max = Math.max(max, point.v);
-  }
-  if (min === max) {
-    min -= 1;
-    max += 1;
-  }
-  const mins = new Float64Array(detail.pixelCount);
-  const maxs = new Float64Array(detail.pixelCount);
+  const extraPixels = 1;
+  const columnCount = detail.pixelCount + extraPixels * 2;
+  let segmentStart = range.startTime;
+  let currentValue = Number(points[range.startIndex].v);
+  const scale = analogScaleOf(signal);
+  const min = scale.min;
+  const max = scale.max;
+  const representative = new Float64Array(columnCount);
+  const occupied = new Uint8Array(columnCount);
+  const compressed = new Uint8Array(columnCount);
+  const mins = new Float64Array(columnCount);
+  const maxs = new Float64Array(columnCount);
+  representative.fill(Number.NaN);
   mins.fill(Number.POSITIVE_INFINITY);
   maxs.fill(Number.NEGATIVE_INFINITY);
-  for (const point of visible) {
-    const bounds = columnRangeForTimeSpan(point.t, point.t + 1, detail.pixelCount);
+  for (let index = range.startIndex + 1; index < range.endExclusive; index += 1) {
+    const nextTime = points[index].t;
+    const bounds = columnRangeForTimeSpan(segmentStart, nextTime, detail.pixelCount, extraPixels);
     if (!bounds) {
+      segmentStart = points[index].t;
+      currentValue = Number(points[index].v);
       continue;
     }
-    mins[bounds.left] = Math.min(mins[bounds.left], point.v);
-    maxs[bounds.left] = Math.max(maxs[bounds.left], point.v);
+    for (let pixel = bounds.left; pixel <= bounds.right; pixel += 1) {
+      const offsetPixel = pixel + extraPixels;
+      if (!occupied[offsetPixel]) {
+        representative[offsetPixel] = currentValue;
+        occupied[offsetPixel] = 1;
+      } else if (representative[offsetPixel] !== currentValue) {
+        compressed[offsetPixel] = 1;
+      }
+      mins[offsetPixel] = Math.min(mins[offsetPixel], currentValue);
+      maxs[offsetPixel] = Math.max(maxs[offsetPixel], currentValue);
+    }
+    segmentStart = points[index].t;
+    currentValue = Number(points[index].v);
   }
-  ctx.strokeStyle = "#8affc1";
+  if (segmentStart < range.endTime) {
+    const bounds = columnRangeForTimeSpan(segmentStart, range.endTime, detail.pixelCount, extraPixels);
+    if (bounds) {
+      for (let pixel = bounds.left; pixel <= bounds.right; pixel += 1) {
+        const offsetPixel = pixel + extraPixels;
+        if (!occupied[offsetPixel]) {
+          representative[offsetPixel] = currentValue;
+          occupied[offsetPixel] = 1;
+        } else if (representative[offsetPixel] !== currentValue) {
+          compressed[offsetPixel] = 1;
+        }
+        mins[offsetPixel] = Math.min(mins[offsetPixel], currentValue);
+        maxs[offsetPixel] = Math.max(maxs[offsetPixel], currentValue);
+      }
+    }
+  }
+  ctx.strokeStyle = "rgba(138, 255, 193, 0.35)";
   ctx.lineWidth = 1;
   ctx.beginPath();
-  for (let pixel = 0; pixel < detail.pixelCount; pixel += 1) {
-    if (!Number.isFinite(mins[pixel]) || !Number.isFinite(maxs[pixel])) {
+  for (let pixel = 0; pixel < columnCount; pixel += 1) {
+    if (!compressed[pixel] || !Number.isFinite(mins[pixel]) || !Number.isFinite(maxs[pixel])) {
       continue;
     }
-    const x = waveLeft + pixel + 0.5;
-    const highRatio = (maxs[pixel] - min) / (max - min);
-    const lowRatio = (mins[pixel] - min) / (max - min);
-    const yHigh = rowTop + rowHeight - 12 - highRatio * (rowHeight - 24);
-    const yLow = rowTop + rowHeight - 12 - lowRatio * (rowHeight - 24);
+    const x = waveLeft + (pixel - extraPixels) + 0.5;
+    const yHigh = analogYOfValue(maxs[pixel], min, max, rowTop, rowHeight);
+    const yLow = analogYOfValue(mins[pixel], min, max, rowTop, rowHeight);
     ctx.moveTo(x, yHigh);
     ctx.lineTo(x, yLow);
+  }
+  ctx.stroke();
+  ctx.strokeStyle = "#8affc1";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  let started = false;
+  let previousY = 0;
+  for (let pixel = 0; pixel < columnCount; pixel += 1) {
+    if (!occupied[pixel]) {
+      started = false;
+      continue;
+    }
+    const left = waveLeft + (pixel - extraPixels);
+    const right = left + 1;
+    const y = analogYOfValue(representative[pixel], min, max, rowTop, rowHeight);
+    if (!started) {
+      ctx.moveTo(left, y);
+      ctx.lineTo(right, y);
+      started = true;
+    } else {
+      if (y !== previousY) {
+        ctx.lineTo(left, previousY);
+        ctx.lineTo(left, y);
+      }
+      ctx.lineTo(right, y);
+    }
+    previousY = y;
   }
   ctx.stroke();
   ctx.fillStyle = "#9aa4d6";
@@ -2575,35 +2701,27 @@ function renderAnalog(signal, rowTop, rowHeight, waveLeft, waveWidth, detail) {
     return;
   }
   const visible = [];
-  visible.push({ t: viewStart, v: Number(points[range.startIndex].v) });
+  visible.push({ t: range.startTime, v: Number(points[range.startIndex].v) });
   for (let index = range.startIndex + 1; index < range.endExclusive; index += 1) {
     const point = points[index];
     visible.push({ t: point.t, v: Number(point.v) });
   }
-  let min = visible[0].v;
-  let max = visible[0].v;
-  for (const point of visible) {
-    min = Math.min(min, point.v);
-    max = Math.max(max, point.v);
-  }
-  if (min === max) {
-    min -= 1;
-    max += 1;
-  }
+  const scale = analogScaleOf(signal);
+  const min = scale.min;
+  const max = scale.max;
   ctx.strokeStyle = "#8affc1";
   ctx.lineWidth = 2;
   ctx.beginPath();
-  for (let index = 0; index < visible.length; index += 1) {
+  let currentY = analogYOfValue(visible[0].v, min, max, rowTop, rowHeight);
+  ctx.moveTo(xOf(range.startTime, waveLeft, waveWidth), currentY);
+  for (let index = 1; index < visible.length; index += 1) {
     const point = visible[index];
     const x = xOf(point.t, waveLeft, waveWidth);
-    const ratio = (point.v - min) / (max - min);
-    const y = rowTop + rowHeight - 12 - ratio * (rowHeight - 24);
-    if (index === 0) {
-      ctx.moveTo(x, y);
-    } else {
-      ctx.lineTo(x, y);
-    }
+    ctx.lineTo(x, currentY);
+    currentY = analogYOfValue(point.v, min, max, rowTop, rowHeight);
+    ctx.lineTo(x, currentY);
   }
+  ctx.lineTo(xOf(range.endTime, waveLeft, waveWidth), currentY);
   ctx.stroke();
   ctx.fillStyle = "#9aa4d6";
   ctx.fillText(`${min.toFixed(3)} .. ${max.toFixed(3)}${signal.unit ? ` ${signal.unit}` : ""}`, waveLeft + 8, rowTop + 14);
@@ -2868,6 +2986,10 @@ function render() {
       ctx.lineTo(centerX + 4, centerY);
       ctx.stroke();
     }
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(leftLabel, rowTop + 1, waveWidth, Math.max(1, rowHeight - 2));
+    ctx.clip();
     if (signal.kind === "digital") {
       renderDigital(signal, rowTop, rowHeight, leftLabel, waveWidth, detail);
     } else if (signal.kind === "analog") {
@@ -2877,6 +2999,7 @@ function render() {
     } else if (signal.kind === "event") {
       renderEvent(signal, rowTop, rowHeight, leftLabel, waveWidth, detail);
     }
+    ctx.restore();
     ctx.restore();
   });
 
