@@ -120,6 +120,8 @@ void rtc_set_12h(bit t12) { // to 12 mode
 		th = ((ch & 0x10) >> 4) * 10 + (ch & 0x0f);
 		if (pm) {
 			th += 12;
+		} else if (th == 12) {
+			th = 0;
 		}
 	} else {
 		th = ((ch & 0x30) >> 4) * 10 + (ch & 0x0f);
@@ -132,7 +134,7 @@ void rtc_set_12h(bit t12) { // to 12 mode
 		}
 	}
 
-	th = (t12 ? 0x80 : 0) | ((t12 & pm) ? 0x10 : 0x00) | (th / 10) << 4 | (th % 10);
+	th = (t12 ? 0x80 : 0) | ((t12 & pm) ? 0x20 : 0x00) | ((th / 10) << 4) | (th % 10);
 	Write_Ds1302_Byte(0x8E, 0x00);
 	Write_Ds1302_Byte(0x84, th);
 	Write_Ds1302_Byte(0x8E, 0x80);
