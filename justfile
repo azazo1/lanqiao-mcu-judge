@@ -6,6 +6,7 @@ clippy:
 
 test:
     cargo test --release
+    just judge-samples
 
 bench-run-to-callback:
     cargo test --release bench_run_to_callback_predicate -- --ignored --nocapture
@@ -24,12 +25,23 @@ judge-sample sample script="smoke.rhai":
     set -euo pipefail
     bin="target/release/stcjudge"
     judge="sample/{{ sample }}/judge/{{ script }}"
-    hex="sample/{{ sample }}/prj/Objects/{{ sample }}.hex"
+    sample_dir="sample/{{ sample }}"
+    hex_dir="$sample_dir/prj/Objects"
+    hex_candidates=()
+    if [ -d "$hex_dir" ]; then
+        while IFS= read -r hex; do
+            hex_candidates+=("$hex")
+        done < <(find "$hex_dir" -maxdepth 1 -type f -name '*.hex' | sort)
+    fi
     cargo build --release --bin stcjudge
-    if [ -f "$hex" ]; then
-        "$bin" run --hex "$hex" --script "$judge"
-    else
+    if [ "${#hex_candidates[@]}" -eq 1 ]; then
+        "$bin" run --hex "${hex_candidates[0]}" --script "$judge"
+    elif [ "${#hex_candidates[@]}" -eq 0 ]; then
+        echo "warning: no hex found in $hex_dir, run script without --hex" >&2
         "$bin" run --script "$judge"
+    else
+        echo "expected exactly one hex in $hex_dir, found ${#hex_candidates[@]}" >&2
+        exit 1
     fi
 
 judge-samples:
@@ -39,13 +51,22 @@ judge-samples:
     cargo build --release --bin stcjudge
     while IFS= read -r judge; do
         sample_dir=$(dirname "$(dirname "$judge")")
-        sample_name=$(basename "$sample_dir")
-        hex="$sample_dir/prj/Objects/$sample_name.hex"
+        hex_dir="$sample_dir/prj/Objects"
+        hex_candidates=()
+        if [ -d "$hex_dir" ]; then
+            while IFS= read -r hex; do
+                hex_candidates+=("$hex")
+            done < <(find "$hex_dir" -maxdepth 1 -type f -name '*.hex' | sort)
+        fi
         echo "==> $judge"
-        if [ -f "$hex" ]; then
-            "$bin" run --hex "$hex" --script "$judge"
-        else
+        if [ "${#hex_candidates[@]}" -eq 1 ]; then
+            "$bin" run --hex "${hex_candidates[0]}" --script "$judge"
+        elif [ "${#hex_candidates[@]}" -eq 0 ]; then
+            echo "warning: no hex found in $hex_dir, run script without --hex" >&2
             "$bin" run --script "$judge"
+        else
+            echo "expected exactly one hex in $hex_dir, found ${#hex_candidates[@]}" >&2
+            exit 1
         fi
     done < <(find sample -type f -path '*/judge/*.rhai' | sort)
 
@@ -54,7 +75,14 @@ wave-sample sample script start="0" end="" output="":
     set -euo pipefail
     bin="target/release/stcjudge"
     judge="sample/{{ sample }}/judge/{{ script }}"
-    hex="sample/{{ sample }}/prj/Objects/{{ sample }}.hex"
+    sample_dir="sample/{{ sample }}"
+    hex_dir="$sample_dir/prj/Objects"
+    hex_candidates=()
+    if [ -d "$hex_dir" ]; then
+        while IFS= read -r hex; do
+            hex_candidates+=("$hex")
+        done < <(find "$hex_dir" -maxdepth 1 -type f -name '*.hex' | sort)
+    fi
     script_name=$(basename "$judge" .rhai)
     output_path="{{ output }}"
     if [ -z "$output_path" ]; then
@@ -66,8 +94,13 @@ wave-sample sample script start="0" end="" output="":
     fi
     cargo build --release --bin stcjudge
     cmd=("$bin" run --script "$judge" --wave-start "{{ start }}" --wave-html "$output_path")
-    if [ -f "$hex" ]; then
-        cmd=("$bin" run --hex "$hex" --script "$judge" --wave-start "{{ start }}" --wave-html "$output_path")
+    if [ "${#hex_candidates[@]}" -eq 1 ]; then
+        cmd=("$bin" run --hex "${hex_candidates[0]}" --script "$judge" --wave-start "{{ start }}" --wave-html "$output_path")
+    elif [ "${#hex_candidates[@]}" -eq 0 ]; then
+        echo "warning: no hex found in $hex_dir, run script without --hex" >&2
+    elif [ "${#hex_candidates[@]}" -gt 1 ]; then
+        echo "expected exactly one hex in $hex_dir, found ${#hex_candidates[@]}" >&2
+        exit 1
     fi
     if [ -n "{{ end }}" ]; then
         cmd+=(--wave-end "{{ end }}")

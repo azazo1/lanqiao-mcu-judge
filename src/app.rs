@@ -2,6 +2,7 @@ use std::{path::PathBuf, str::FromStr};
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
+use tracing::warn;
 use tracing_subscriber::{EnvFilter, fmt};
 
 use crate::{chip::Simulator, wave::WaveCaptureOptions};
@@ -232,7 +233,10 @@ fn load_simulator(
     match hex {
         Some(path) => Simulator::from_hex_path_with_options(path, trace_cpu, wave_options)
             .with_context(|| format!("加载 HEX 失败: {}", path.display())),
-        None => Ok(Simulator::nop_with_options(trace_cpu, wave_options)),
+        None => {
+            warn!("未提供 --hex, 将使用仅执行 NOP 的空程序");
+            Ok(Simulator::nop_with_options(trace_cpu, wave_options))
+        }
     }
 }
 

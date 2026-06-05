@@ -135,6 +135,10 @@ pub const IE_EA: u8 = 1 << 7;
 pub const IE2_ES2: u8 = 1 << 0;
 pub const IP2_PS2: u8 = 1 << 0;
 
+pub const TCON_IT0: u8 = 1 << 0;
+pub const TCON_IE0: u8 = 1 << 1;
+pub const TCON_IT1: u8 = 1 << 2;
+pub const TCON_IE1: u8 = 1 << 3;
 pub const TCON_TR0: u8 = 1 << 4;
 pub const TCON_TF0: u8 = 1 << 5;
 pub const TCON_TR1: u8 = 1 << 6;

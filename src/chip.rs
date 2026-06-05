@@ -191,7 +191,7 @@ impl Simulator {
             seg_decoder: SegmentDecoder::default(),
             wave: WaveRecorder::new(wave_options),
         };
-        sim.ctx.ports.refresh_inputs(&sim.ctx.board);
+        sim.ctx.ports.sync_inputs(&sim.ctx.board);
         sim.capture_wave_snapshot();
         sim
     }
@@ -223,7 +223,7 @@ impl Simulator {
     pub fn load_persistent_state(&mut self, text: &str) -> Result<()> {
         let state = PersistentState::decode(text)?;
         self.ctx.board.load_persistent_state(&state);
-        self.ctx.ports.refresh_inputs(&self.ctx.board);
+        self.ctx.ports.sync_inputs(&self.ctx.board);
         self.capture_wave_snapshot();
         Ok(())
     }
@@ -251,7 +251,7 @@ impl Simulator {
         self.ctx.board = board;
         port_latches.apply_to_ports(&mut self.ctx.ports);
         xdata_latches.apply_to_xdata(&mut self.ctx.xdata);
-        self.ctx.ports.refresh_inputs(&self.ctx.board);
+        self.ctx.ports.sync_inputs(&self.ctx.board);
         self.capture_wave_snapshot();
         Ok(())
     }
@@ -264,7 +264,7 @@ impl Simulator {
         self.ctx =
             MachineContext::new_with_wave_window(self.code_image.clone(), self.wave.window());
         self.ctx.board.load_retained_state(&retained);
-        self.ctx.ports.refresh_inputs(&self.ctx.board);
+        self.ctx.ports.sync_inputs(&self.ctx.board);
         self.capture_wave_snapshot();
         Ok(())
     }
@@ -914,13 +914,11 @@ impl Simulator {
         let tcon = self.cpu.sfr(SFR_TCON, &self.ctx);
         let scon = self.cpu.sfr(SFR_SCON, &self.ctx);
         let s2con = self.cpu.sfr(SFR_S2CON, &self.ctx);
-        let p3 = self.cpu.sfr(SFR_P3, &self.ctx);
-
         for high_priority in [true, false] {
             for candidate in [
                 PendingInterrupt {
                     source: InterruptSource::External0,
-                    tcon_clear_mask: 0,
+                    tcon_clear_mask: TCON_IE0,
                 },
                 PendingInterrupt {
                     source: InterruptSource::Timer0,
@@ -928,7 +926,7 @@ impl Simulator {
                 },
                 PendingInterrupt {
                     source: InterruptSource::External1,
-                    tcon_clear_mask: 0,
+                    tcon_clear_mask: TCON_IE1,
                 },
                 PendingInterrupt {
                     source: InterruptSource::Timer1,
@@ -944,9 +942,9 @@ impl Simulator {
                 },
             ] {
                 let (enable_mask, pending, priority_high) = match candidate.source {
-                    InterruptSource::External0 => (IE_EX0, p3 & P3_INT0 == 0, ip & IE_EX0 != 0),
+                    InterruptSource::External0 => (IE_EX0, tcon & TCON_IE0 != 0, ip & IE_EX0 != 0),
                     InterruptSource::Timer0 => (IE_ET0, tcon & TCON_TF0 != 0, ip & IE_ET0 != 0),
-                    InterruptSource::External1 => (IE_EX1, p3 & P3_INT1 == 0, ip & IE_EX1 != 0),
+                    InterruptSource::External1 => (IE_EX1, tcon & TCON_IE1 != 0, ip & IE_EX1 != 0),
                     InterruptSource::Timer1 => (IE_ET1, tcon & TCON_TF1 != 0, ip & IE_ET1 != 0),
                     InterruptSource::Serial => (
                         IE_ES,
@@ -1561,10 +1559,43 @@ impl MachinePorts {
         board.read_port(3, self.port_latch[3], &self.port_latch)
     }
 
-    fn refresh_inputs(&mut self, board: &BoardModel) {
+    fn sync_inputs(&mut self, board: &BoardModel) {
         for index in 0..self.port_input.len() {
             self.port_input[index] =
                 board.read_port(index, self.port_latch[index], &self.port_latch);
+        }
+    }
+
+    fn refresh_inputs(&mut self, board: &BoardModel) {
+        let prev_p3 = self.port_input[3];
+        self.sync_inputs(board);
+        self.update_external_interrupt_flags(prev_p3, self.port_input[3]);
+    }
+
+    fn update_external_interrupt_flags(&mut self, prev_p3: u8, next_p3: u8) {
+        let tcon = self
+            .timers
+            .read(&self.generic, SFR_TCON)
+            .expect("TCON should be readable");
+        let mut next_tcon = tcon;
+        next_tcon = apply_external_interrupt_flag(
+            next_tcon,
+            TCON_IT0,
+            TCON_IE0,
+            P3_INT0,
+            prev_p3,
+            next_p3,
+        );
+        next_tcon = apply_external_interrupt_flag(
+            next_tcon,
+            TCON_IT1,
+            TCON_IE1,
+            P3_INT1,
+            prev_p3,
+            next_p3,
+        );
+        if next_tcon != tcon {
+            let _ = self.timers.write(&mut self.generic, SFR_TCON, next_tcon);
         }
     }
 
@@ -1752,7 +1783,7 @@ impl PortMapper for InterruptPollMaskPorts<'_> {
         match addr {
             SFR_SCON => value & !(SCON_RI | SCON_TI),
             SFR_S2CON => value & !(S2CON_RI | S2CON_TI),
-            SFR_TCON => value & !(TCON_TF0 | TCON_TF1),
+            SFR_TCON => value & !(TCON_IE0 | TCON_IE1 | TCON_TF0 | TCON_TF1),
             SFR_P3 => value | P3_INT0 | P3_INT1,
             _ => value,
         }
@@ -2644,6 +2675,33 @@ fn set_bit_level(value: u8, bit: u8, high: bool) -> u8 {
     }
 }
 
+fn apply_external_interrupt_flag(
+    tcon: u8,
+    trigger_select_mask: u8,
+    request_flag_mask: u8,
+    pin_mask: u8,
+    prev_p3: u8,
+    next_p3: u8,
+) -> u8 {
+    let prev_high = prev_p3 & pin_mask != 0;
+    let next_high = next_p3 & pin_mask != 0;
+    if prev_high == next_high {
+        return tcon;
+    }
+
+    let edge_triggered = if tcon & trigger_select_mask != 0 {
+        prev_high && !next_high
+    } else {
+        true
+    };
+
+    if edge_triggered {
+        tcon | request_flag_mask
+    } else {
+        tcon
+    }
+}
+
 fn parse_display_number(text: &str) -> Result<DisplayNumber> {
     let value = extract_unique_numeric_token(text, true)?;
     if value.contains('.') {
@@ -2954,6 +3012,69 @@ mod tests {
         sim.step_once().expect("run timer1 vector instruction");
 
         assert_eq!(sim.ctx.ports.port_latch[1] & 0x01, 0x00);
+    }
+
+    #[test]
+    fn ext0_interrupt_uses_ie0_and_falling_edge_mode() {
+        let mut sim = Simulator::nop(false);
+        sim.key_mode(KeyMode::Button);
+        sim.cpu
+            .register_set(Register::IE, u16::from(super::IE_EA | super::IE_EX0));
+        sim.cpu
+            .sfr_set(super::SFR_TCON, super::TCON_IT0, &mut sim.ctx);
+
+        sim.set_key("S5", true).expect("press S5 to pull INT0 low");
+        assert_eq!(
+            sim.cpu.sfr(super::SFR_TCON, &sim.ctx) & super::TCON_IE0,
+            super::TCON_IE0
+        );
+
+        sim.step_once().expect("enter ext0 interrupt");
+
+        assert_eq!(sim.cpu.pc, 0x0003);
+        assert_eq!(sim.cpu.sfr(super::SFR_TCON, &sim.ctx) & super::TCON_IE0, 0);
+
+        sim.set_key("S5", false)
+            .expect("release S5 should raise INT0");
+        assert_eq!(
+            sim.cpu.sfr(super::SFR_TCON, &sim.ctx) & super::TCON_IE0,
+            0,
+            "IT0=1 should ignore the rising edge"
+        );
+    }
+
+    #[test]
+    fn ext1_interrupt_uses_ie1_and_both_edge_mode_when_it1_is_clear() {
+        let mut code = vec![0x00; 0x14];
+        code[0x13] = 0x32;
+        let mut sim = Simulator::from_code_with_options(
+            code,
+            false,
+            crate::wave::WaveCaptureOptions::default(),
+        );
+
+        sim.key_mode(KeyMode::Button);
+        sim.cpu
+            .register_set(Register::IE, u16::from(super::IE_EA | super::IE_EX1));
+
+        sim.set_key("S4", true).expect("press S4 to pull INT1 low");
+        assert_eq!(
+            sim.cpu.sfr(super::SFR_TCON, &sim.ctx) & super::TCON_IE1,
+            super::TCON_IE1
+        );
+
+        sim.step_once().expect("enter ext1 interrupt");
+        assert_eq!(sim.cpu.pc, 0x0013);
+        assert_eq!(sim.cpu.sfr(super::SFR_TCON, &sim.ctx) & super::TCON_IE1, 0);
+
+        sim.step_once().expect("execute ext1 RETI");
+        sim.set_key("S4", false)
+            .expect("release S4 should raise INT1");
+        assert_eq!(
+            sim.cpu.sfr(super::SFR_TCON, &sim.ctx) & super::TCON_IE1,
+            super::TCON_IE1,
+            "IT1=0 should accept the rising edge too"
+        );
     }
 
     #[test]
