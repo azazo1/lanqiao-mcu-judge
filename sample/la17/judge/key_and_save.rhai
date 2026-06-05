@@ -8,11 +8,11 @@ fn double_click(key) {
 }
 
 fn hold_save() {
-    set_key(S8, true);
-    set_key(S9, true);
+    set_key(S12, true);
+    set_key(S13, true);
     run_ms(2200);
-    set_key(S8, false);
-    set_key(S9, false);
+    set_key(S12, false);
+    set_key(S13, false);
     run_ms(180);
 }
 
@@ -44,15 +44,15 @@ run_ms(320);
 
 assert_eq(display_text(30), "23-08-09", "默认 24h 时间显示");
 
-double_click(S6);
-assert_eq(display_text(30), "11-08-09", "S6 双击后切到 12h");
+double_click(S12);
+assert_eq(display_text(30), "11-08-09", "S12 双击后切到 12h");
 
 set_rtc(0, 8, 9);
 reset(POWER_RESET);
 run_ms(320);
 assert_eq(display_text(30), "12-08-09", "00 点切到 12h 后显示 12");
 
-double_click(S6);
+double_click(S12);
 assert_eq(display_text(30), "00-08-09", "双击后切回 24h");
 
 set_rtc(12, 8, 9);
@@ -60,7 +60,7 @@ reset(POWER_RESET);
 run_ms(320);
 assert_eq(display_text(30), "12-08-09", "24h 下 12 点显示");
 
-double_click(S6);
+double_click(S12);
 assert_eq(display_text(30), "12-08-09", "12 点切到 12h 后仍显示 12");
 
 set_rtc(23, 8, 9);
@@ -81,41 +81,41 @@ set_temperature_c(25.9375);
 run_ms(260);
 assert_eq(display_text(30), "25.500-0", "默认精度 0");
 
-tap_key(S7, 80);
+tap_key(S8, 80);
 run_ms(200);
-assert_eq(display_text(30), "25.750-1", "S7 后精度 1");
-
-tap_key(S7, 80);
-run_ms(200);
-assert_eq(display_text(30), "25.875-2", "再次 S7 后精度 2");
-
-tap_key(S7, 80);
-run_ms(200);
-assert_eq(display_text(30), "25.937-3", "再次 S7 后精度 3");
-
-tap_key(S7, 80);
-run_ms(200);
-assert_eq(display_text(30), "25.500-0", "S7 后精度从 3 回绕到 0");
+assert_eq(display_text(30), "25.750-1", "S8 后精度 1");
 
 tap_key(S8, 80);
 run_ms(200);
-assert_eq(display_text(30), "25.937-3", "S8 后精度从 0 回绕到 3");
+assert_eq(display_text(30), "25.875-2", "再次 S8 后精度 2");
+
+tap_key(S8, 80);
+run_ms(200);
+assert_eq(display_text(30), "25.937-3", "再次 S8 后精度 3");
+
+tap_key(S8, 80);
+run_ms(200);
+assert_eq(display_text(30), "25.500-0", "S8 后精度从 3 回绕到 0");
+
+tap_key(S9, 80);
+run_ms(200);
+assert_eq(display_text(30), "25.937-3", "S9 后精度从 0 回绕到 3");
 
 goto_light_page();
 tap_key(S5, 80);
 run_ms(120);
 assert_eq(display_text(30), "0-032", "默认自动光控 DAC 子页面");
 
-tap_key(S7, 80);
+tap_key(S8, 80);
 run_ms(200);
-assert_eq(display_text(30), "0-032", "自动光控下 S7 不应改写 DAC");
+assert_eq(display_text(30), "0-032", "自动光控下 S8 不应改写 DAC");
 assert_eq(da_value(), 32, "自动光控下 DAC 保持自动结果");
 
-double_click(S6);
+double_click(S12);
 assert_eq(display_text(30), "1-096", "双击后切到手动光控");
 assert_eq(da_value(), 96, "手动光控初始 DAC");
 
-tap_key(S7, 80);
+tap_key(S8, 80);
 run_ms(200);
 assert_eq(display_text(30), "1-104", "手动 DAC 加 8");
 assert_eq(da_value(), 104, "DAC 应同步更新为 104");

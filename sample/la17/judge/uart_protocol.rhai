@@ -54,6 +54,22 @@ uart_write("$Q|CFG;");
 run_ms(220);
 assert_eq(uart_take(), "$CFG|CLK:24|TP:3|LM:1|SV:340|DAC:000;", "DAC 下界和模式更新结果");
 
+uart_write("$SET|TP:0;");
+run_ms(220);
+assert_eq(uart_take(), "$OK|SET;", "单字段更新温度精度");
+
+uart_write("$Q|CFG;");
+run_ms(220);
+assert_eq(uart_take(), "$CFG|CLK:24|TP:0|LM:1|SV:340|DAC:000;", "精度更新后其他字段保持不变");
+
+uart_write("$SET|SV:379;");
+run_ms(220);
+assert_eq(uart_take(), "$OK|SET;", "单字段更新音速到上界");
+
+uart_write("$Q|CFG;");
+run_ms(220);
+assert_eq(uart_take(), "$CFG|CLK:24|TP:0|LM:1|SV:379|DAC:000;", "音速上界更新结果");
+
 uart_write("$RTC|DATE:26-12-31|TIME:23:58:50;");
 run_ms(220);
 assert_eq(uart_take(), "$OK|RTC;", "RTC 设置帧");
@@ -68,19 +84,35 @@ run_ms(120);
 goto_temp_page();
 set_temperature_c(-5.125);
 run_ms(260);
-assert_eq(display_text(30), "-5.125-3", "TP=3 下的负温显示");
+assert_eq(display_text(30), "-5.000-0", "TP=0 下的负温显示");
 
 uart_write("$Q|ENV;");
 run_ms(220);
 assert_eq(
     uart_take(),
-    "$ENV|TMP:-5.125|L:000|VR:000|DIST:000|FREQ:0000;",
+    "$ENV|TMP:-5.000|L:000|VR:000|DIST:000|FREQ:0000;",
     "查询环境量"
 );
+
+uart_write("$SET|DAC:256;");
+run_ms(220);
+assert_eq(uart_take(), "$ERR|VALUE;", "DAC 超上界");
+
+uart_write("$SET|SV:319;");
+run_ms(220);
+assert_eq(uart_take(), "$ERR|VALUE;", "音速低于下界");
 
 uart_write("$SET|SV:400;");
 run_ms(220);
 assert_eq(uart_take(), "$ERR|VALUE;", "非法配置值");
+
+uart_write("$SET|LM:2;");
+run_ms(220);
+assert_eq(uart_take(), "$ERR|VALUE;", "模式字段非法值");
+
+uart_write("$SET|TP:4;");
+run_ms(220);
+assert_eq(uart_take(), "$ERR|VALUE;", "精度字段非法值");
 
 uart_write("$SET|ABC:1;");
 run_ms(220);
@@ -89,7 +121,22 @@ assert_eq(uart_take(), "$ERR|VALUE;", "非法字段");
 uart_write("$RTC|DATE:26-02-30|TIME:12:00:00;");
 run_ms(220);
 assert_eq(uart_take(), "$ERR|VALUE;", "非法日期");
-assert_eq(display_text(30), "-5.125-3", "非法 RTC 输入后当前页面显示不应被改坏");
+assert_eq(display_text(30), "-5.000-0", "非法 RTC 日期后当前页面显示不应被改坏");
+
+uart_write("$RTC|DATE:26-12-31|TIME:24:00:00;");
+run_ms(220);
+assert_eq(uart_take(), "$ERR|VALUE;", "非法小时");
+assert_eq(display_text(30), "-5.000-0", "非法 RTC 小时后当前页面显示不应被改坏");
+
+uart_write("$RTC|DATE:26-12-31|TIME:23:60:00;");
+run_ms(220);
+assert_eq(uart_take(), "$ERR|VALUE;", "非法分钟");
+assert_eq(display_text(30), "-5.000-0", "非法 RTC 分钟后当前页面显示不应被改坏");
+
+uart_write("$RTC|DATE:26-12-31|TIME:23:59:60;");
+run_ms(220);
+assert_eq(uart_take(), "$ERR|VALUE;", "非法秒钟");
+assert_eq(display_text(30), "-5.000-0", "非法 RTC 秒钟后当前页面显示不应被改坏");
 
 uart_write("SET|CLK:12;");
 run_ms(220);

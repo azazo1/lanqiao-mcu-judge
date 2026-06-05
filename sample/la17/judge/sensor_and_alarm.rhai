@@ -87,11 +87,29 @@ set_frequency_hz(1200);
 run_ms(1300);
 assert_dist_freq_page(34, 36, 1190, 1210, "默认音速下的液位风机页");
 
+uart_write("$SET|SV:320;");
+run_ms(260);
+assert_eq(uart_take(), "$OK|SET;", "串口修改音速到下界");
+run_ms(260);
+assert_dist_freq_page(32, 34, 1190, 1210, "下界音速下的距离显示");
+
 uart_write("$SET|SV:360;");
 run_ms(260);
 assert_eq(uart_take(), "$OK|SET;", "串口修改音速");
 run_ms(260);
 assert_dist_freq_page(36, 38, 1190, 1210, "音速提高后的距离显示");
+
+uart_write("$SET|SV:379;");
+run_ms(260);
+assert_eq(uart_take(), "$OK|SET;", "串口修改音速到上界");
+run_ms(260);
+assert_dist_freq_page(38, 40, 1190, 1210, "上界音速下的距离显示");
+
+set_distance_cm(16);
+run_ms(320);
+let dist_safe_low = watch_led_stats(L7, 300);
+assert_eq(dist_safe_low.changes, 0, "距离等于 16 时不应告警");
+assert(!led_on(L7), "距离等于 16 时 L7 应熄灭");
 
 set_distance_cm(15);
 run_ms(320);
@@ -99,11 +117,27 @@ let dist_edge_low = watch_led_stats(L7, 300);
 assert_eq(dist_edge_low.changes, 0, "距离等于 15 时不应告警");
 assert(!led_on(L7), "距离等于 15 时 L7 应熄灭");
 
+set_distance_cm(14);
+run_ms(320);
+let dist_alarm_low = watch_led_stats(L7, 1200);
+assert_in(dist_alarm_low.changes, 3..=6, "距离等于 14 时应告警闪烁");
+
+set_distance_cm(69);
+run_ms(320);
+let dist_safe_high = watch_led_stats(L7, 300);
+assert_eq(dist_safe_high.changes, 0, "距离等于 69 时不应告警");
+assert(!led_on(L7), "距离等于 69 时 L7 应熄灭");
+
 set_distance_cm(70);
 run_ms(320);
 let dist_edge_high = watch_led_stats(L7, 300);
 assert_eq(dist_edge_high.changes, 0, "距离等于 70 时不应告警");
 assert(!led_on(L7), "距离等于 70 时 L7 应熄灭");
+
+set_distance_cm(71);
+run_ms(320);
+let dist_alarm_high = watch_led_stats(L7, 1200);
+assert_in(dist_alarm_high.changes, 3..=6, "距离等于 71 时应告警闪烁");
 
 set_distance_cm(10);
 run_ms(320);
@@ -127,14 +161,36 @@ let freq_clear = watch_led_stats(L8, 300);
 assert_eq(freq_clear.changes, 0, "频率恢复正常后 L8 不再闪烁");
 assert(!led_on(L8), "频率恢复正常后 L8 应熄灭");
 
+set_frequency_hz(999);
+run_ms(1300);
+let freq_alarm_low = watch_led_stats(L8, 700);
+assert_in(freq_alarm_low.changes, 4..=7, "频率等于 999 时应告警闪烁");
+
 set_frequency_hz(1000);
 run_ms(1300);
 let freq_edge_low = watch_led_stats(L8, 300);
 assert_eq(freq_edge_low.changes, 0, "频率等于 1000 时不应告警");
 assert(!led_on(L8), "频率等于 1000 时 L8 应熄灭");
 
+set_frequency_hz(1001);
+run_ms(1300);
+let freq_safe_low = watch_led_stats(L8, 300);
+assert_eq(freq_safe_low.changes, 0, "频率等于 1001 时不应告警");
+assert(!led_on(L8), "频率等于 1001 时 L8 应熄灭");
+
+set_frequency_hz(1999);
+run_ms(1300);
+let freq_safe_high = watch_led_stats(L8, 300);
+assert_eq(freq_safe_high.changes, 0, "频率等于 1999 时不应告警");
+assert(!led_on(L8), "频率等于 1999 时 L8 应熄灭");
+
 set_frequency_hz(2000);
 run_ms(1300);
 let freq_edge_high = watch_led_stats(L8, 300);
 assert_eq(freq_edge_high.changes, 0, "频率等于 2000 时不应告警");
 assert(!led_on(L8), "频率等于 2000 时 L8 应熄灭");
+
+set_frequency_hz(2001);
+run_ms(1300);
+let freq_alarm_high = watch_led_stats(L8, 700);
+assert_in(freq_alarm_high.changes, 4..=7, "频率等于 2001 时应告警闪烁");
