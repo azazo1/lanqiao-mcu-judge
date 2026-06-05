@@ -739,6 +739,7 @@ const QUICK_PRESET_DEFS = [
   { id: "seg", label: "SEG", queries: ["seg", "display"] },
   { id: "adc_dac", label: "ADC / DAC", queries: ["adc", "dac", "ain"], includeQueries: ["iic", "i2c", "cpu", "seg", "display", "p2"] },
   { id: "onewire", label: "1-Wire", queries: ["onewire", "1-wire"], includeQueries: ["cpu", "seg", "display"] },
+  { id: "ds1302", label: "DS1302 / RTC", queries: ["ds1302", "rtc"], includeQueries: ["cpu", "seg", "display", "p1", "p2"] },
   { id: "cpu", label: "CPU / IRQ", queries: ["cpu", "interrupt"] },
   { id: "pins", label: "Pins", queries: ["pins", "pin"] },
   { id: "none", label: "None", mode: "none" },
@@ -1345,6 +1346,8 @@ function presetSortKey(presetId, signal, fallbackIndex) {
       return adcDacPresetSortKey(signal, fallbackIndex);
     case "onewire":
       return oneWirePresetSortKey(signal, fallbackIndex);
+    case "ds1302":
+      return ds1302PresetSortKey(signal, fallbackIndex);
     case "seg":
       return segPresetSortKey(signal, fallbackIndex);
     case "led":
@@ -1482,6 +1485,31 @@ function oneWirePresetSortKey(signal, fallbackIndex) {
   return [10, fallbackIndex];
 }
 
+function ds1302PresetSortKey(signal, fallbackIndex) {
+  if (isProtocolEventSignal(signal, ["ds1302", "rtc"])) {
+    return [0, fallbackIndex];
+  }
+  if (isProtocolWaveSignal(signal, ["ds1302", "rtc"])) {
+    return [1, ds1302LineRank(signal), fallbackIndex];
+  }
+  if (isCpuEventSignal(signal)) {
+    return [2, fallbackIndex];
+  }
+  if (isDisplayTextSignal(signal)) {
+    return [3, displayDetailRank(signal), fallbackIndex];
+  }
+  if (isDisplaySignal(signal)) {
+    return [4, displayDetailRank(signal), fallbackIndex];
+  }
+  if (isPortByteSignal(signal) && signalMatchesAnyQuery(signal, ["p1", "p2"])) {
+    return [5, portOrderRank(signal), portCategoryRank(signal), fallbackIndex];
+  }
+  if (isRawPortSignal(signal) && signalMatchesAnyQuery(signal, ["p1", "p2"])) {
+    return [6, portOrderRank(signal), portCategoryRank(signal), portBitRank(signal), fallbackIndex];
+  }
+  return [10, fallbackIndex];
+}
+
 function segPresetSortKey(signal, fallbackIndex) {
   if (isDisplayTextSignal(signal)) {
     return [0, displayDetailRank(signal), fallbackIndex];
@@ -1581,6 +1609,20 @@ function i2cLineRank(signal) {
   ];
   const index = ranks.indexOf(label);
   return index >= 0 ? index : 99;
+}
+
+function ds1302LineRank(signal) {
+  const label = signal.label.toLowerCase();
+  if (label === "ce") {
+    return 0;
+  }
+  if (label === "clk") {
+    return 1;
+  }
+  if (label === "io") {
+    return 2;
+  }
+  return 9;
 }
 
 function displayDetailRank(signal) {
