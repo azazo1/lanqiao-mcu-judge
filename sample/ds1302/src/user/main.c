@@ -76,10 +76,13 @@ u8 is_leap(uint year) {
 u8 valid_date_alt() {
 	u8 max_d = 28, y = date_buf_alt[0], m = date_buf_alt[1], d = date_buf_alt[2];
 	
-	if (y == 0 || d == 0) {
+	if (date_buf_alt[3] == 0 || date_buf_alt[3] > 7) {
 		return 0;
 	}
-	if (y > 12 || d > 31) {
+	if (m == 0 || d == 0) {
+		return 0;
+	}
+	if (m > 12 || d > 31) {
 		return 0;
 	}
 	
@@ -161,7 +164,7 @@ void key_proc() {
 				}
 			} else {
 				u8 rem = rtc_get_rem();
-				if (time_buf_alt[set_idx] == 1) {
+				if (time_buf_alt[set_idx] == 0) {
 					time_buf_alt[set_idx] = rem - 1;
 				} else {
 					time_buf_alt[set_idx] -= 1;
@@ -182,7 +185,7 @@ void key_proc() {
 			} else {
 				u8 rem = rtc_get_rem();
 				if (time_buf_alt[set_idx] == rem - 1) {
-					time_buf_alt[set_idx] = 1;
+					time_buf_alt[set_idx] = 0;
 				} else {
 					time_buf_alt[set_idx]++;
 				}

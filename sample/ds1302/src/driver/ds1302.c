@@ -119,7 +119,7 @@ void rtc_set_12h(bit t12) { // to 12 mode
 		pm = (ch & 0x20) ? 1 : 0;
 		th = ((ch & 0x10) >> 4) * 10 + (ch & 0x0f);
 		if (pm) {
-			th += 12;
+			if (th != 12) th += 12;
 		} else if (th == 12) {
 			th = 0;
 		}
