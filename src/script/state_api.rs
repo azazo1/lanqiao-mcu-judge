@@ -13,152 +13,8 @@ use crate::{
 
 use super::{runtime_error, script_duration_ns, script_int};
 
-pub(super) fn register_wait_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
-    let sim_bool_target = Arc::clone(sim);
-    engine.register_fn(
-        "wait_until",
-        move |target: RunToTarget, expected: bool| -> Result<i64, Box<EvalAltResult>> {
-            let mut sim = sim_bool_target
-                .lock()
-                .map_err(|_| runtime_error("仿真器锁已损坏"))?;
-            let elapsed_ns = sim
-                .wait_until_bool_state_with_timeout(BoolStateTarget::Signal(target), expected, None)
-                .map_err(|err| runtime_error(err.to_string()))?;
-            script_int(elapsed_ns, "wait_until 返回值超出脚本整数范围")
-        },
-    );
-
-    let sim_bool_target_timeout = Arc::clone(sim);
-    engine.register_fn(
-        "wait_until",
-        move |target: RunToTarget,
-              expected: bool,
-              timeout_ns: i64|
-              -> Result<i64, Box<EvalAltResult>> {
-            let timeout_ns = Some(script_duration_ns(timeout_ns, "timeout_ns")?);
-            let mut sim = sim_bool_target_timeout
-                .lock()
-                .map_err(|_| runtime_error("仿真器锁已损坏"))?;
-            let elapsed_ns = sim
-                .wait_until_bool_state_with_timeout(
-                    BoolStateTarget::Signal(target),
-                    expected,
-                    timeout_ns,
-                )
-                .map_err(|err| runtime_error(err.to_string()))?;
-            script_int(elapsed_ns, "wait_until 返回值超出脚本整数范围")
-        },
-    );
-
-    let sim_name_bool = Arc::clone(sim);
-    engine.register_fn(
-        "wait_until",
-        move |target: ImmutableString, expected: bool| -> Result<i64, Box<EvalAltResult>> {
-            let target = BoolStateTarget::parse(target.as_str())
-                .map_err(|err| runtime_error(err.to_string()))?;
-            let mut sim = sim_name_bool
-                .lock()
-                .map_err(|_| runtime_error("仿真器锁已损坏"))?;
-            let elapsed_ns = sim
-                .wait_until_bool_state_with_timeout(target, expected, None)
-                .map_err(|err| runtime_error(err.to_string()))?;
-            script_int(elapsed_ns, "wait_until 返回值超出脚本整数范围")
-        },
-    );
-
-    let sim_name_bool_timeout = Arc::clone(sim);
-    engine.register_fn(
-        "wait_until",
-        move |target: ImmutableString,
-              expected: bool,
-              timeout_ns: i64|
-              -> Result<i64, Box<EvalAltResult>> {
-            let target = BoolStateTarget::parse(target.as_str())
-                .map_err(|err| runtime_error(err.to_string()))?;
-            let timeout_ns = Some(script_duration_ns(timeout_ns, "timeout_ns")?);
-            let mut sim = sim_name_bool_timeout
-                .lock()
-                .map_err(|_| runtime_error("仿真器锁已损坏"))?;
-            let elapsed_ns = sim
-                .wait_until_bool_state_with_timeout(target, expected, timeout_ns)
-                .map_err(|err| runtime_error(err.to_string()))?;
-            script_int(elapsed_ns, "wait_until 返回值超出脚本整数范围")
-        },
-    );
-
-    let sim_name_int = Arc::clone(sim);
-    engine.register_fn(
-        "wait_until",
-        move |target: ImmutableString, expected: i64| -> Result<i64, Box<EvalAltResult>> {
-            let target = IntStateTarget::parse(target.as_str())
-                .map_err(|err| runtime_error(err.to_string()))?;
-            let mut sim = sim_name_int
-                .lock()
-                .map_err(|_| runtime_error("仿真器锁已损坏"))?;
-            let elapsed_ns = sim
-                .wait_until_int_state_with_timeout(target, expected, None)
-                .map_err(|err| runtime_error(err.to_string()))?;
-            script_int(elapsed_ns, "wait_until 返回值超出脚本整数范围")
-        },
-    );
-
-    let sim_name_int_timeout = Arc::clone(sim);
-    engine.register_fn(
-        "wait_until",
-        move |target: ImmutableString,
-              expected: i64,
-              timeout_ns: i64|
-              -> Result<i64, Box<EvalAltResult>> {
-            let target = IntStateTarget::parse(target.as_str())
-                .map_err(|err| runtime_error(err.to_string()))?;
-            let timeout_ns = Some(script_duration_ns(timeout_ns, "timeout_ns")?);
-            let mut sim = sim_name_int_timeout
-                .lock()
-                .map_err(|_| runtime_error("仿真器锁已损坏"))?;
-            let elapsed_ns = sim
-                .wait_until_int_state_with_timeout(target, expected, timeout_ns)
-                .map_err(|err| runtime_error(err.to_string()))?;
-            script_int(elapsed_ns, "wait_until 返回值超出脚本整数范围")
-        },
-    );
-
-    let sim_name_text = Arc::clone(sim);
-    engine.register_fn(
-        "wait_until",
-        move |target: ImmutableString,
-              expected: ImmutableString|
-              -> Result<i64, Box<EvalAltResult>> {
-            let target = TextStateTarget::parse(target.as_str())
-                .map_err(|err| runtime_error(err.to_string()))?;
-            let mut sim = sim_name_text
-                .lock()
-                .map_err(|_| runtime_error("仿真器锁已损坏"))?;
-            let elapsed_ns = sim
-                .wait_until_text_state_with_timeout(target, expected.as_str(), None)
-                .map_err(|err| runtime_error(err.to_string()))?;
-            script_int(elapsed_ns, "wait_until 返回值超出脚本整数范围")
-        },
-    );
-
-    let sim_name_text_timeout = Arc::clone(sim);
-    engine.register_fn(
-        "wait_until",
-        move |target: ImmutableString,
-              expected: ImmutableString,
-              timeout_ns: i64|
-              -> Result<i64, Box<EvalAltResult>> {
-            let target = TextStateTarget::parse(target.as_str())
-                .map_err(|err| runtime_error(err.to_string()))?;
-            let timeout_ns = Some(script_duration_ns(timeout_ns, "timeout_ns")?);
-            let mut sim = sim_name_text_timeout
-                .lock()
-                .map_err(|_| runtime_error("仿真器锁已损坏"))?;
-            let elapsed_ns = sim
-                .wait_until_text_state_with_timeout(target, expected.as_str(), timeout_ns)
-                .map_err(|err| runtime_error(err.to_string()))?;
-            script_int(elapsed_ns, "wait_until 返回值超出脚本整数范围")
-        },
-    );
+pub(super) fn register_state_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
+    register_run_to_state_api(engine, "run_to_state", sim);
 
     let sim_event = Arc::clone(sim);
     engine.register_fn(
@@ -190,6 +46,154 @@ pub(super) fn register_wait_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>
                 .run_to_event_with_timeout(track, timeout_ns)
                 .map_err(|err| runtime_error(err.to_string()))?;
             observed_event_map(event)
+        },
+    );
+}
+
+fn register_run_to_state_api(engine: &mut Engine, fn_name: &str, sim: &Arc<Mutex<Simulator>>) {
+    let sim_bool_target = Arc::clone(sim);
+    engine.register_fn(
+        fn_name,
+        move |target: RunToTarget, expected: bool| -> Result<i64, Box<EvalAltResult>> {
+            let mut sim = sim_bool_target
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?;
+            let elapsed_ns = sim
+                .run_to_bool_state_with_timeout(BoolStateTarget::Signal(target), expected, None)
+                .map_err(|err| runtime_error(err.to_string()))?;
+            script_int(elapsed_ns, "run_to_state 返回值超出脚本整数范围")
+        },
+    );
+
+    let sim_bool_target_timeout = Arc::clone(sim);
+    engine.register_fn(
+        fn_name,
+        move |target: RunToTarget,
+              expected: bool,
+              timeout_ns: i64|
+              -> Result<i64, Box<EvalAltResult>> {
+            let timeout_ns = Some(script_duration_ns(timeout_ns, "timeout_ns")?);
+            let mut sim = sim_bool_target_timeout
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?;
+            let elapsed_ns = sim
+                .run_to_bool_state_with_timeout(
+                    BoolStateTarget::Signal(target),
+                    expected,
+                    timeout_ns,
+                )
+                .map_err(|err| runtime_error(err.to_string()))?;
+            script_int(elapsed_ns, "run_to_state 返回值超出脚本整数范围")
+        },
+    );
+
+    let sim_name_bool = Arc::clone(sim);
+    engine.register_fn(
+        fn_name,
+        move |target: ImmutableString, expected: bool| -> Result<i64, Box<EvalAltResult>> {
+            let target = BoolStateTarget::parse(target.as_str())
+                .map_err(|err| runtime_error(err.to_string()))?;
+            let mut sim = sim_name_bool
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?;
+            let elapsed_ns = sim
+                .run_to_bool_state_with_timeout(target, expected, None)
+                .map_err(|err| runtime_error(err.to_string()))?;
+            script_int(elapsed_ns, "run_to_state 返回值超出脚本整数范围")
+        },
+    );
+
+    let sim_name_bool_timeout = Arc::clone(sim);
+    engine.register_fn(
+        fn_name,
+        move |target: ImmutableString,
+              expected: bool,
+              timeout_ns: i64|
+              -> Result<i64, Box<EvalAltResult>> {
+            let target = BoolStateTarget::parse(target.as_str())
+                .map_err(|err| runtime_error(err.to_string()))?;
+            let timeout_ns = Some(script_duration_ns(timeout_ns, "timeout_ns")?);
+            let mut sim = sim_name_bool_timeout
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?;
+            let elapsed_ns = sim
+                .run_to_bool_state_with_timeout(target, expected, timeout_ns)
+                .map_err(|err| runtime_error(err.to_string()))?;
+            script_int(elapsed_ns, "run_to_state 返回值超出脚本整数范围")
+        },
+    );
+
+    let sim_name_int = Arc::clone(sim);
+    engine.register_fn(
+        fn_name,
+        move |target: ImmutableString, expected: i64| -> Result<i64, Box<EvalAltResult>> {
+            let target = IntStateTarget::parse(target.as_str())
+                .map_err(|err| runtime_error(err.to_string()))?;
+            let mut sim = sim_name_int
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?;
+            let elapsed_ns = sim
+                .run_to_int_state_with_timeout(target, expected, None)
+                .map_err(|err| runtime_error(err.to_string()))?;
+            script_int(elapsed_ns, "run_to_state 返回值超出脚本整数范围")
+        },
+    );
+
+    let sim_name_int_timeout = Arc::clone(sim);
+    engine.register_fn(
+        fn_name,
+        move |target: ImmutableString,
+              expected: i64,
+              timeout_ns: i64|
+              -> Result<i64, Box<EvalAltResult>> {
+            let target = IntStateTarget::parse(target.as_str())
+                .map_err(|err| runtime_error(err.to_string()))?;
+            let timeout_ns = Some(script_duration_ns(timeout_ns, "timeout_ns")?);
+            let mut sim = sim_name_int_timeout
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?;
+            let elapsed_ns = sim
+                .run_to_int_state_with_timeout(target, expected, timeout_ns)
+                .map_err(|err| runtime_error(err.to_string()))?;
+            script_int(elapsed_ns, "run_to_state 返回值超出脚本整数范围")
+        },
+    );
+
+    let sim_name_text = Arc::clone(sim);
+    engine.register_fn(
+        fn_name,
+        move |target: ImmutableString,
+              expected: ImmutableString|
+              -> Result<i64, Box<EvalAltResult>> {
+            let target = TextStateTarget::parse(target.as_str())
+                .map_err(|err| runtime_error(err.to_string()))?;
+            let mut sim = sim_name_text
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?;
+            let elapsed_ns = sim
+                .run_to_text_state_with_timeout(target, expected.as_str(), None)
+                .map_err(|err| runtime_error(err.to_string()))?;
+            script_int(elapsed_ns, "run_to_state 返回值超出脚本整数范围")
+        },
+    );
+
+    let sim_name_text_timeout = Arc::clone(sim);
+    engine.register_fn(
+        fn_name,
+        move |target: ImmutableString,
+              expected: ImmutableString,
+              timeout_ns: i64|
+              -> Result<i64, Box<EvalAltResult>> {
+            let target = TextStateTarget::parse(target.as_str())
+                .map_err(|err| runtime_error(err.to_string()))?;
+            let timeout_ns = Some(script_duration_ns(timeout_ns, "timeout_ns")?);
+            let mut sim = sim_name_text_timeout
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?;
+            let elapsed_ns = sim
+                .run_to_text_state_with_timeout(target, expected.as_str(), timeout_ns)
+                .map_err(|err| runtime_error(err.to_string()))?;
+            script_int(elapsed_ns, "run_to_state 返回值超出脚本整数范围")
         },
     );
 }
@@ -236,26 +240,29 @@ mod tests {
     }
 
     #[test]
-    fn rhai_wait_until_supports_bool_state_targets() {
+    fn rhai_run_to_state_supports_bool_state_targets() {
         let sim = Simulator::nop(false);
         let script = r#"
-            let dt_latch = wait_until("board.effective.ctrl", 0x70, 1_000);
+            let dt_latch = run_to_state("board.effective.ctrl", 0x70, 1_000);
             assert_eq(dt_latch, 0, "上电控制锁存器应直接处于默认值");
+
+            let dt_latch_alias = run_to_state("board.effective.ctrl", 0x70, 1_000);
+            assert_eq(dt_latch_alias, 0, "重复调用 run_to_state 结果应一致");
 
             set_frequency_hz(2000);
             jumper_on(NET_SIG, SIG_OUT);
 
-            let dt0 = wait_until("pin.p3.4", true, 2_000_000);
+            let dt0 = run_to_state("pin.p3.4", true, 2_000_000);
             assert_in(dt0, 0..=2_000_000, "SIG_OUT 应在超时内拉高");
 
-            let dt1 = wait_until("SIG_OUT", false, 2_000_000);
+            let dt1 = run_to_state("SIG_OUT", false, 2_000_000);
             assert_in(dt1, 0..=2_000_000, "SIG_OUT 应在超时内再次翻到低电平");
         "#;
-        eval_source(sim, "test:wait_until_bool_targets", script).expect("run bool wait script");
+        eval_source(sim, "test:run_to_state_bool_targets", script).expect("run bool state script");
     }
 
     #[test]
-    fn rhai_wait_until_supports_seg_text_and_pattern_targets() {
+    fn rhai_run_to_state_supports_seg_text_and_pattern_targets() {
         let sim = Simulator::from_hex_path_with_options(
             &sample_hex_path("key_seg"),
             false,
@@ -263,37 +270,37 @@ mod tests {
         )
         .expect("load key_seg sample");
         let script = r#"
-            let dt0 = wait_until("seg.text", "       0", 300_000_000);
+            let dt0 = run_to_state("seg.text", "       0", 300_000_000);
             assert_in(dt0, 0..=300_000_000, "上电后整屏文本应显示 0");
 
-            let dt1 = wait_until("seg.d8.visible", true, 20_000_000);
+            let dt1 = run_to_state("seg.d8.visible", true, 20_000_000);
             assert_in(dt1, 0..=20_000_000, "上电后 D8 应处于可见状态");
 
-            let dt2 = wait_until("seg.d8.text", "0", 20_000_000);
+            let dt2 = run_to_state("seg.d8.text", "0", 20_000_000);
             assert_in(dt2, 0..=20_000_000, "上电后 D8 文本应显示 0");
 
             // S4: 按下后最低位应切到 1.
             set_key(S4, true);
 
-            let dt3 = wait_until("seg.d8.visible", true, 100_000_000);
+            let dt3 = run_to_state("seg.d8.visible", true, 100_000_000);
             assert_in(dt3, 0..=100_000_000, "S4 按下后 D8 应回到可见状态");
 
-            let dt4 = wait_until("seg.text", "       1", 300_000_000);
+            let dt4 = run_to_state("seg.text", "       1", 300_000_000);
             assert_in(dt4, 0..=300_000_000, "S4 按下后整屏文本应显示 1");
 
-            let dt5 = wait_until("seg.d8.text", "1", 20_000_000);
+            let dt5 = run_to_state("seg.d8.text", "1", 20_000_000);
             assert_in(dt5, 0..=20_000_000, "S4 按下后 D8 文本应显示 1");
 
             // S4: 释放后显示应恢复为 0.
             set_key(S4, false);
 
-            let dt6 = wait_until("seg.d8.visible", true, 100_000_000);
+            let dt6 = run_to_state("seg.d8.visible", true, 100_000_000);
             assert_in(dt6, 0..=100_000_000, "S4 释放后 D8 应回到可见状态");
 
-            let dt7 = wait_until("seg.text", "       0", 300_000_000);
+            let dt7 = run_to_state("seg.text", "       0", 300_000_000);
             assert_in(dt7, 0..=300_000_000, "S4 释放后整屏文本应恢复 0");
         "#;
-        eval_source(sim, "test:wait_until_seg_targets", script).expect("run seg wait script");
+        eval_source(sim, "test:run_to_state_seg_targets", script).expect("run seg state script");
     }
 
     #[test]
@@ -309,6 +316,6 @@ mod tests {
             assert_eq(event.detail, "bits=8", "UART1 事件细节");
             assert_in(event.elapsed_ns, 0..=20_000_000, "UART1 事件应在超时内出现");
         "#;
-        eval_source(sim, "test:run_to_event_tracks", script).expect("run event wait script");
+        eval_source(sim, "test:run_to_event_tracks", script).expect("run event script");
     }
 }

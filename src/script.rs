@@ -1,7 +1,7 @@
 pub(crate) mod event_track;
 pub(crate) mod run_target;
+mod state_api;
 pub(crate) mod state_target;
-mod wait_api;
 
 use std::{
     io::{self, BufRead, IsTerminal, Read, Write},
@@ -592,7 +592,7 @@ fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
     );
 
     register_run_to_api(engine, sim);
-    wait_api::register_wait_api(engine, sim);
+    state_api::register_state_api(engine, sim);
 
     let sim_export_persistent = Arc::clone(sim);
     engine.register_fn(

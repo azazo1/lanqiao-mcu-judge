@@ -722,7 +722,7 @@ impl Simulator {
         }
     }
 
-    fn wait_until_value_with_timeout<T, F>(
+    fn run_to_state_value_with_timeout<T, F>(
         &mut self,
         mut read: F,
         expected: T,
@@ -741,7 +741,7 @@ impl Simulator {
             if let Some(timeout_ns) = timeout_ns
                 && elapsed_ns >= timeout_ns
             {
-                bail!("wait_until 等待超时: timeout_ns={timeout_ns}");
+                bail!("run_to_state 等待超时: timeout_ns={timeout_ns}");
             }
             self.step_once()?;
             let elapsed_ns = self.ctx.board.sim_time_ns.saturating_sub(start);
@@ -749,51 +749,51 @@ impl Simulator {
                 if let Some(timeout_ns) = timeout_ns
                     && elapsed_ns > timeout_ns
                 {
-                    bail!("wait_until 等待超时: timeout_ns={timeout_ns}");
+                    bail!("run_to_state 等待超时: timeout_ns={timeout_ns}");
                 }
                 return Ok(elapsed_ns);
             }
             if let Some(timeout_ns) = timeout_ns
                 && elapsed_ns >= timeout_ns
             {
-                bail!("wait_until 等待超时: timeout_ns={timeout_ns}");
+                bail!("run_to_state 等待超时: timeout_ns={timeout_ns}");
             }
         }
     }
 
-    pub(crate) fn wait_until_bool_state_with_timeout(
+    pub(crate) fn run_to_bool_state_with_timeout(
         &mut self,
         target: BoolStateTarget,
         expected: bool,
         timeout_ns: Option<u64>,
     ) -> Result<u64> {
-        self.wait_until_value_with_timeout(
+        self.run_to_state_value_with_timeout(
             |sim| Ok(sim.read_bool_state_target(target)),
             expected,
             timeout_ns,
         )
     }
 
-    pub(crate) fn wait_until_int_state_with_timeout(
+    pub(crate) fn run_to_int_state_with_timeout(
         &mut self,
         target: IntStateTarget,
         expected: i64,
         timeout_ns: Option<u64>,
     ) -> Result<u64> {
-        self.wait_until_value_with_timeout(
+        self.run_to_state_value_with_timeout(
             |sim| sim.read_int_state_target(target),
             expected,
             timeout_ns,
         )
     }
 
-    pub(crate) fn wait_until_text_state_with_timeout(
+    pub(crate) fn run_to_text_state_with_timeout(
         &mut self,
         target: TextStateTarget,
         expected: &str,
         timeout_ns: Option<u64>,
     ) -> Result<u64> {
-        self.wait_until_value_with_timeout(
+        self.run_to_state_value_with_timeout(
             |sim| sim.read_text_state_target(target),
             expected.to_owned(),
             timeout_ns,

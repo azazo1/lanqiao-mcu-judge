@@ -9,6 +9,12 @@ fn tap_once(key) {
     tap_key(key, 80);
 }
 
+fn assert_visible_digit(digit, timeout_ns, label) {
+    let target = "seg.d" + digit + ".visible";
+    let dt = run_to_state(target, true, timeout_ns);
+    assert_in(dt, 0..=timeout_ns, label + " 可见相位");
+}
+
 fn assert_time_text(text, hour, minute, second, label) {
     assert_regex(text, "^  \\d{2}\\.\\d{2}\\.\\d{2}$", label + " 时间格式");
     assert_eq(parse_int(text[2..4]), hour, label + " 小时");
@@ -19,7 +25,9 @@ fn assert_time_text(text, hour, minute, second, label) {
 }
 
 fn assert_time_screen(hour, minute, second, label) {
-    assert_time_text(display_text(30), hour, minute, second, label);
+    assert_visible_digit(8, 300_000_000, label + " 采样");
+    let text = display_text();
+    assert_time_text(text, hour, minute, second, label);
 }
 
 fn assert_mode_switch(hour24, expected12, minute, second, label) {
