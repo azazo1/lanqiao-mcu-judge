@@ -26,14 +26,23 @@ fn assert_visible_digit(digit, timeout_ns, label) {
     assert_in(dt, 0..=timeout_ns, label + " 可见相位");
 }
 
-fn assert_next_visible_digit(digit, timeout_ns, label) {
-    let target = "seg.d" + digit + ".visible";
+fn wait_seg_change_and_settle(timeout_ns, label) {
+    let event = run_to_event("seg.change", timeout_ns);
+    assert_in(event.elapsed_ns, 0..=timeout_ns, label + " 首次段码变化时延");
+    run_ms(20);
+    return event.elapsed_ns + 20_000_000;
+}
+
+fn assert_setting_field_visible(start_digit, timeout_ns, label) {
+    let end_digit = start_digit + 1;
+    let target = "seg.d" + end_digit + ".visible";
     let dt_off = run_to_state(target, false, timeout_ns);
-    assert_in(dt_off, 0..=timeout_ns, label + " 离开当前相位");
+    assert_in(dt_off, 0..=timeout_ns, label + " 进入隐藏相位");
     let remain_ns = timeout_ns - dt_off;
-    assert(remain_ns >= 0, label + " 下一次采样预算应非负");
+    assert(remain_ns >= 0, label + " 重新显示预算应非负");
     let dt_on = run_to_state(target, true, remain_ns);
-    assert_in(dt_on, 0..=remain_ns, label + " 进入下一次可见相位");
+    assert_in(dt_on, 0..=remain_ns, label + " 重新显示");
+    run_ms(20);
 }
 
 fn assert_time_text(text, hour, minute, second, label) {
@@ -46,38 +55,43 @@ fn assert_time_text(text, hour, minute, second, label) {
 }
 
 fn assert_time_screen(hour, minute, second, label) {
-    assert_visible_digit(8, 300_000_000, label + " 采样");
+    let expected = time_text(hour, minute, second);
+    let current = display_text();
+    if current != expected {
+        wait_seg_change_and_settle(300_000_000, label + " 显示同步");
+    }
     let text = display_text();
-    assert_eq(text, time_text(hour, minute, second), label + " 可见文本");
+    assert_eq(text, expected, label + " 可见文本");
     assert_time_text(text, hour, minute, second, label);
 }
 
 fn assert_setting_time_screen(visible_digit, hour, minute, second, label) {
-    assert_visible_digit(visible_digit, 1_200_000_000, label + " 采样");
+    let expected = time_text(hour, minute, second);
+    let current = display_text();
+    if current != expected {
+        let spent_ns = wait_seg_change_and_settle(1_200_000_000, label + " 显示同步");
+        let remain_ns = 1_200_000_000 - spent_ns;
+        assert(remain_ns >= 0, label + " 可见相位预算应非负");
+        assert_visible_digit(visible_digit + 1, remain_ns, label + " 可见相位");
+        run_ms(20);
+    } else {
+        assert_setting_field_visible(visible_digit, 1_200_000_000, label + " 选中字段");
+    }
     let text = display_text();
-    assert_eq(text, time_text(hour, minute, second), label + " 可见文本");
+    assert_eq(text, expected, label + " 可见文本");
     assert_time_text(text, hour, minute, second, label);
 }
 
 fn assert_time_resume(hour, minute, old_second, new_second, min_elapsed_ns, max_elapsed_ns, label) {
-    let start_ns = sim_time_ns();
-    while true {
-        let elapsed_ns = sim_time_ns() - start_ns;
-        let remain_ns = max_elapsed_ns - elapsed_ns;
-        assert(remain_ns > 0, label + " 应在超时前恢复计时");
-        assert_next_visible_digit(8, remain_ns, label + " 下一次采样");
-        let text = display_text();
-        assert_regex(text, "^  \\d{2}\\.\\d{2}\\.\\d{2}$", label + " 时间格式");
-        assert_eq(parse_int(text[2..4]), hour, label + " 小时");
-        assert_eq(parse_int(text[5..7]), minute, label + " 分钟");
-        let second = parse_int(text[8..10]);
-        if second == new_second {
-            let total_elapsed_ns = sim_time_ns() - start_ns;
-            assert_in(total_elapsed_ns, min_elapsed_ns..=max_elapsed_ns, label + " 恢复计时时长");
-            return;
-        }
-        assert_eq(second, old_second, label + " 下一秒出现前的秒值");
-    }
+    let event = run_to_event("seg.change", max_elapsed_ns);
+    assert_in(event.elapsed_ns, min_elapsed_ns..=max_elapsed_ns, label + " 恢复计时时长");
+    run_ms(20);
+    let text = display_text();
+    assert_regex(text, "^  \\d{2}\\.\\d{2}\\.\\d{2}$", label + " 时间格式");
+    assert_eq(parse_int(text[2..4]), hour, label + " 小时");
+    assert_eq(parse_int(text[5..7]), minute, label + " 分钟");
+    assert_eq(parse_int(text[8..10]), new_second, label + " 恢复后的秒值");
+    assert(new_second != old_second, label + " 恢复后的秒值应已推进");
 }
 
 // 场景 1. 进入设置态后, 时间应冻结在进入时的快照.

@@ -9,10 +9,21 @@ fn tap_once(key) {
     tap_key(key, 80);
 }
 
-fn assert_visible_digit(digit, timeout_ns, label) {
-    let target = "seg.d" + digit + ".visible";
-    let dt = run_to_state(target, true, timeout_ns);
-    assert_in(dt, 0..=timeout_ns, label + " 可见相位");
+fn two_digits(value) {
+    if value < 10 {
+        return "0" + value;
+    }
+    return "" + value;
+}
+
+fn wait_seg_change_and_settle(timeout_ns, label) {
+    let event = run_to_event("seg.change", timeout_ns);
+    assert_in(event.elapsed_ns, 0..=timeout_ns, label + " 首次段码变化时延");
+    run_ms(20);
+}
+
+fn time_text(hour, minute, second) {
+    return "  " + two_digits(hour) + "." + two_digits(minute) + "." + two_digits(second);
 }
 
 fn assert_time_text(text, hour, minute, second, label) {
@@ -25,7 +36,11 @@ fn assert_time_text(text, hour, minute, second, label) {
 }
 
 fn assert_time_screen(hour, minute, second, label) {
-    assert_visible_digit(8, 300_000_000, label + " 采样");
+    let expected = time_text(hour, minute, second);
+    let current = display_text();
+    if current != expected {
+        wait_seg_change_and_settle(300_000_000, label + " 显示同步");
+    }
     let text = display_text();
     assert_time_text(text, hour, minute, second, label);
 }

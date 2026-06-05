@@ -38,6 +38,25 @@ fn assert_visible_digit(digit, timeout_ns, label) {
     assert_in(dt, 0..=timeout_ns, label + " 可见相位");
 }
 
+fn wait_seg_change_and_settle(timeout_ns, label) {
+    let event = run_to_event("seg.change", timeout_ns);
+    assert_in(event.elapsed_ns, 0..=timeout_ns, label + " 首次段码变化时延");
+    run_ms(20);
+    return event.elapsed_ns + 20_000_000;
+}
+
+fn assert_setting_field_visible(start_digit, timeout_ns, label) {
+    let end_digit = start_digit + 1;
+    let target = "seg.d" + end_digit + ".visible";
+    let dt_off = run_to_state(target, false, timeout_ns);
+    assert_in(dt_off, 0..=timeout_ns, label + " 进入隐藏相位");
+    let remain_ns = timeout_ns - dt_off;
+    assert(remain_ns >= 0, label + " 重新显示预算应非负");
+    let dt_on = run_to_state(target, true, remain_ns);
+    assert_in(dt_on, 0..=remain_ns, label + " 重新显示");
+    run_ms(20);
+}
+
 fn assert_date_text(text, year, month, date, day, label) {
     assert_regex(text, "^\\d{2}\\.\\d{2}\\.\\d{2}\\.\\d{2}$", label + " 日期格式");
     assert_eq(parse_int(text[0..2]), year, label + " 年");
@@ -57,30 +76,58 @@ fn assert_time_text(text, hour, minute, second, label) {
 }
 
 fn assert_time_screen(hour, minute, second, label) {
-    assert_visible_digit(8, 300_000_000, label + " 采样");
+    let expected = time_text(hour, minute, second);
+    let current = display_text();
+    if current != expected {
+        wait_seg_change_and_settle(300_000_000, label + " 显示同步");
+    }
     let text = display_text();
-    assert_eq(text, time_text(hour, minute, second), label + " 可见文本");
+    assert_eq(text, expected, label + " 可见文本");
     assert_time_text(text, hour, minute, second, label);
 }
 
 fn assert_setting_time_screen(visible_digit, hour, minute, second, label) {
-    assert_visible_digit(visible_digit, 1_200_000_000, label + " 采样");
+    let expected = time_text(hour, minute, second);
+    let current = display_text();
+    if current != expected {
+        let spent_ns = wait_seg_change_and_settle(1_200_000_000, label + " 显示同步");
+        let remain_ns = 1_200_000_000 - spent_ns;
+        assert(remain_ns >= 0, label + " 可见相位预算应非负");
+        assert_visible_digit(visible_digit + 1, remain_ns, label + " 可见相位");
+        run_ms(20);
+    } else {
+        assert_setting_field_visible(visible_digit, 1_200_000_000, label + " 选中字段");
+    }
     let text = display_text();
-    assert_eq(text, time_text(hour, minute, second), label + " 可见文本");
+    assert_eq(text, expected, label + " 可见文本");
     assert_time_text(text, hour, minute, second, label);
 }
 
 fn assert_date_screen(year, month, date, day, label) {
-    assert_visible_digit(8, 300_000_000, label + " 采样");
+    let expected = date_text(year, month, date, day);
+    let current = display_text();
+    if current != expected {
+        wait_seg_change_and_settle(300_000_000, label + " 显示同步");
+    }
     let text = display_text();
-    assert_eq(text, date_text(year, month, date, day), label + " 可见文本");
+    assert_eq(text, expected, label + " 可见文本");
     assert_date_text(text, year, month, date, day, label);
 }
 
 fn assert_setting_date_screen(visible_digit, year, month, date, day, label) {
-    assert_visible_digit(visible_digit, 1_200_000_000, label + " 采样");
+    let expected = date_text(year, month, date, day);
+    let current = display_text();
+    if current != expected {
+        let spent_ns = wait_seg_change_and_settle(1_200_000_000, label + " 显示同步");
+        let remain_ns = 1_200_000_000 - spent_ns;
+        assert(remain_ns >= 0, label + " 可见相位预算应非负");
+        assert_visible_digit(visible_digit + 1, remain_ns, label + " 可见相位");
+        run_ms(20);
+    } else {
+        assert_setting_field_visible(visible_digit, 1_200_000_000, label + " 选中字段");
+    }
     let text = display_text();
-    assert_eq(text, date_text(year, month, date, day), label + " 可见文本");
+    assert_eq(text, expected, label + " 可见文本");
     assert_date_text(text, year, month, date, day, label);
 }
 
@@ -134,9 +181,15 @@ assert_setting_date_screen(5, 24, 2, 3, 5, "日期减到 03");
 // S8 x2: 日期从 3 减到 1.
 tap_many(S8, 2);
 assert_setting_date_screen(5, 24, 2, 1, 5, "日期减到 01");
-// S8 x2: 日期从 1 回绕到 30.
-tap_many(S8, 2);
-assert_setting_date_screen(5, 24, 2, 30, 5, "日期回绕到 30");
+// S8: 日期从 01 减到 00.
+tap_once(S8);
+assert_setting_date_screen(5, 24, 2, 0, 5, "日期减到 00");
+// S8: 日期从 00 回绕到 31.
+tap_once(S8);
+assert_setting_date_screen(5, 24, 2, 31, 5, "日期从 00 回绕到 31");
+// S8: 日期从 31 减到 30.
+tap_once(S8);
+assert_setting_date_screen(5, 24, 2, 30, 5, "日期减到 30");
 // S8: 日期从 30 减到 29.
 tap_once(S8);
 assert_setting_date_screen(5, 24, 2, 29, 5, "日期减到 29");
@@ -164,18 +217,18 @@ assert_setting_date_screen(1, 20, 6, 5, 5, "年份减到 20");
 // S8 x10: 年份从 20 减到 10.
 tap_many(S8, 10);
 assert_setting_date_screen(1, 10, 6, 5, 5, "年份减到 10");
-// S8 x9: 年份从 10 减到 01.
-tap_many(S8, 9);
-assert_setting_date_screen(1, 1, 6, 5, 5, "年份减到 01");
-// S8: 年份从 01 回绕到 99.
+// S8 x10: 年份从 10 减到 00.
+tap_many(S8, 10);
+assert_setting_date_screen(1, 0, 6, 5, 5, "年份减到 00");
+// S8: 年份从 00 回绕到 99.
 tap_once(S8);
-assert_setting_date_screen(1, 99, 6, 5, 5, "年份从 01 回绕到 99");
-// S9: 年份从 99 回绕到 01.
+assert_setting_date_screen(1, 99, 6, 5, 5, "年份从 00 回绕到 99");
+// S9: 年份从 99 回绕到 00.
 tap_once(S9);
-assert_setting_date_screen(1, 1, 6, 5, 5, "年份从 99 回绕到 01");
+assert_setting_date_screen(1, 0, 6, 5, 5, "年份从 99 回绕到 00");
 // S4: 保存年份边界结果.
 tap_once(S4);
-assert_date_screen(1, 6, 5, 5, "保存年份边界结果");
+assert_date_screen(0, 6, 5, 5, "保存年份边界结果");
 
 // 场景 4. 月份字段应支持下边界和上边界回绕.
 boot();
@@ -194,12 +247,18 @@ assert_setting_date_screen(3, 26, 3, 5, 5, "月份减到 03");
 // S8 x2: 月份从 03 减到 01.
 tap_many(S8, 2);
 assert_setting_date_screen(3, 26, 1, 5, 5, "月份减到 01");
-// S8: 月份从 01 回绕到 12.
+// S8: 月份从 01 减到 00.
 tap_once(S8);
-assert_setting_date_screen(3, 26, 12, 5, 5, "月份从 01 回绕到 12");
-// S9: 月份从 12 回绕到 01.
+assert_setting_date_screen(3, 26, 0, 5, 5, "月份减到 00");
+// S8: 月份从 00 回绕到 12.
+tap_once(S8);
+assert_setting_date_screen(3, 26, 12, 5, 5, "月份从 00 回绕到 12");
+// S9: 月份从 12 回绕到 00.
 tap_once(S9);
-assert_setting_date_screen(3, 26, 1, 5, 5, "月份从 12 回绕到 01");
+assert_setting_date_screen(3, 26, 0, 5, 5, "月份从 12 回绕到 00");
+// S9: 月份从 00 加到 01.
+tap_once(S9);
+assert_setting_date_screen(3, 26, 1, 5, 5, "月份从 00 加到 01");
 // S4: 保存月份边界结果.
 tap_once(S4);
 assert_date_screen(26, 1, 5, 5, "保存月份边界结果");
@@ -224,12 +283,18 @@ assert_setting_date_screen(5, 26, 6, 3, 5, "日期减到 03");
 // S8 x2: 日期从 03 减到 01.
 tap_many(S8, 2);
 assert_setting_date_screen(5, 26, 6, 1, 5, "日期减到 01");
-// S8: 日期从 01 回绕到 31.
+// S8: 日期从 01 减到 00.
 tap_once(S8);
-assert_setting_date_screen(5, 26, 6, 31, 5, "日期从 01 回绕到 31");
-// S9: 日期从 31 回绕到 01.
+assert_setting_date_screen(5, 26, 6, 0, 5, "日期减到 00");
+// S8: 日期从 00 回绕到 31.
+tap_once(S8);
+assert_setting_date_screen(5, 26, 6, 31, 5, "日期从 00 回绕到 31");
+// S9: 日期从 31 回绕到 00.
 tap_once(S9);
-assert_setting_date_screen(5, 26, 6, 1, 5, "日期从 31 回绕到 01");
+assert_setting_date_screen(5, 26, 6, 0, 5, "日期从 31 回绕到 00");
+// S9: 日期从 00 加到 01.
+tap_once(S9);
+assert_setting_date_screen(5, 26, 6, 1, 5, "日期从 00 加到 01");
 // S4: 保存日期边界结果.
 tap_once(S4);
 assert_date_screen(26, 6, 1, 5, "保存日期边界结果");
@@ -257,12 +322,18 @@ assert_setting_date_screen(7, 26, 6, 5, 3, "星期减到 03");
 // S8 x2: 星期从 03 减到 01.
 tap_many(S8, 2);
 assert_setting_date_screen(7, 26, 6, 5, 1, "星期减到 01");
-// S8: 星期从 01 回绕到 07.
+// S8: 星期从 01 减到 00.
 tap_once(S8);
-assert_setting_date_screen(7, 26, 6, 5, 7, "星期从 01 回绕到 07");
-// S9: 星期从 07 回绕到 01.
+assert_setting_date_screen(7, 26, 6, 5, 0, "星期减到 00");
+// S8: 星期从 00 回绕到 07.
+tap_once(S8);
+assert_setting_date_screen(7, 26, 6, 5, 7, "星期从 00 回绕到 07");
+// S9: 星期从 07 回绕到 00.
 tap_once(S9);
-assert_setting_date_screen(7, 26, 6, 5, 1, "星期从 07 回绕到 01");
+assert_setting_date_screen(7, 26, 6, 5, 0, "星期从 07 回绕到 00");
+// S9: 星期从 00 加到 01.
+tap_once(S9);
+assert_setting_date_screen(7, 26, 6, 5, 1, "星期从 00 加到 01");
 // S4: 保存星期边界结果.
 tap_once(S4);
 assert_date_screen(26, 6, 5, 1, "保存星期边界结果");

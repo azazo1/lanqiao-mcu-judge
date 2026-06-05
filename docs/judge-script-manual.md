@@ -230,9 +230,17 @@ add_marker(25_000_000, "sample_point");
 对扫描显示要区分两类场景:
 
 - 如果题目里的某一位会闪烁, 优先用 `run_to_state("seg.dN.visible", true, ...)` 或 `run_to_state("seg.dN.visible", false, ...)` 抓可见/隐藏相位, 然后在对应时刻读取显示并断言.
-- 如果是按键, 串口, 传感器或其他输入动作之后, 想观察数码管开始响应的时刻, 可以用 `run_to_event("seg.change", ...)` 或 `run_to_event("seg.dN.change", ...)` 抓第一次有效段码变化.
+- 如果是按键, 串口, 传感器或其他输入动作之后, 想观察数码管开始响应的时刻, 可以先用 `run_to_event("seg.change", ...)` 抓第一次有效段码变化.
 
-要注意, `seg.change` 和 `seg.dN.change` 捕获到的是 "某一位发生了有效变化" 这件事本身, 不保证在该时刻整屏已经全部刷新完成. 动态扫描下, 你可能先观察到其中一位变化, 其余位还在后续扫描周期里继续加载. 因此它们更适合测响应起点和变化顺序, 不适合直接当作 "完整目标字符串已经稳定出现" 的等待器. 如果后续断言依赖整屏最终显示, 应在事件命中后再结合 `seg.dN.visible`, 业务刷新节拍, 或其他底层状态继续等待.
+要注意, `seg.change` 和 `seg.dN.change` 捕获到的是 "某一位发生了有效变化" 这件事本身, 不保证在该时刻整屏已经全部刷新完成. 动态扫描下, 你可能先观察到其中一位变化, 其余位还在后续扫描周期里继续加载. 实际写脚本时, 更稳妥的做法通常是:
+
+1. 先用 `run_to_event("seg.change", ...)` 抓到第一次有效变化.
+2. 再补一个很短的 `run_ms(10)` 到 `run_ms(20)` 余量, 留给同一轮显示扫描把剩余位加载完成.
+3. 最后再读取 `display_text()`, `seg.dN.text`, `seg.dN.raw` 做断言.
+
+这样不会把脚本绑死在某一位必须发生变化上. 例如显示从 `10` 变到 `20` 时, 真正变化的可能只有十位, 如果你硬等 `seg.d2.change` 之类的特定位变化, 反而可能把正确实现误判成超时. `seg.dN.change` 更适合你明确知道哪一位一定会变, 并且确实想测这一位本身的响应时刻时再使用.
+
+如果是闪烁字段重新显示, 尤其是一个字段横跨两位或更多位时, 也可以在 `run_to_state("seg.dN.visible", true, ...)` 命中后补一个很短的 `run_ms(10)` 到 `run_ms(20)` 余量, 再读取整屏. 原因是 `visible` 只说明目标位已经重新点亮, 其余同字段位可能还在这一轮动态扫描里陆续刷新.
 
 `run_to(...)`, `run_to_state(...)`, `run_to_event(...)` 带 `timeout_ns` 时, 超时语义是直接报运行时错误, 不会返回一个特殊错误值给脚本继续判断. 在 judge 脚本里, 这通常就意味着当前评测脚本直接失败. 当前实现按 "`elapsed <= timeout_ns` 成功, `elapsed > timeout_ns` 失败" 处理, 也就是恰好在 `timeout_ns` 时刻命中仍算成功. 因此如果题目要求某个显示或外设必须在 `100ms` 内响应, 而你只关心 "是否超过 100ms", 那么最直接的写法就是把 `timeout_ns` 直接写成 `100_000_000`.
 
@@ -240,7 +248,8 @@ add_marker(25_000_000, "sample_point");
 
 ```rhai
 tap_key(S4, 80);
-run_to_event("seg.d8.change", 100_000_000);
+run_to_event("seg.change", 100_000_000);
+run_ms(20);
 
 tap_key(S5, 80);
 run_to_state("seg.d3.visible", true, 100_000_000);
@@ -258,8 +267,9 @@ run_to_state("seg.d3.visible", true, 100_000_000);
 
 ```rhai
 tap_key(S4, 80);
-let event = run_to_event("seg.d8.change", 120_000_000);
-assert_in(event.elapsed_ns, 0..=100_000_000, "D8 响应时间不能超过 100ms");
+let event = run_to_event("seg.change", 120_000_000);
+assert_in(event.elapsed_ns, 0..=100_000_000, "显示开始响应不能超过 100ms");
+run_ms(20);
 
 tap_key(S5, 80);
 let ready_ns = run_to_state("seg.d3.visible", true, 120_000_000);
