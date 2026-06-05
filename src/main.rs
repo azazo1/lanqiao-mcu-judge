@@ -1,5 +1,6 @@
 mod app;
 mod chip;
+mod event;
 mod hex;
 mod ids;
 mod jumper;

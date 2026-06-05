@@ -1,4 +1,4 @@
-use std::{cell::Cell, collections::VecDeque, fmt::Write as _, fs, path::Path, rc::Rc};
+use std::{cell::Cell, collections::VecDeque, fmt::Write as _, fs, path::Path, rc::Rc, sync::Arc};
 
 use anyhow::{Context, Result, bail};
 use i8051::{
@@ -35,6 +35,13 @@ const WAVE_KEY_ORDER: [KeyId; 16] = [
 ];
 
 use crate::{
+    event::{
+        gate::{EventGate, SharedEventGate},
+        i2c::I2cEventDecoder,
+        seg::SegEventDetector,
+        track::EventTrack,
+        tracker::EventTracker,
+    },
     hex::load_ihex,
     ids::{KeyId, KeyMode, LedId, ResetMode, SignalId, VoltageChannel},
     jumper::{BoardJumpers, LineDrive, resolve_line},
@@ -44,7 +51,6 @@ use crate::{
     },
     persistent_state::PersistentState,
     script::{
-        event_track::EventTrack,
         run_target::{RunToEdge, RunToTarget},
         state_target::{BoardLatchSource, BoolStateTarget, IntStateTarget, TextStateTarget},
     },
@@ -69,7 +75,10 @@ pub struct Simulator {
     active_interrupts: Vec<InterruptSource>,
     seg_decoder: SegmentDecoder,
     wave: WaveRecorder,
-    script_events: ScriptEventTracker,
+    event_gate: SharedEventGate,
+    i2c_event_decoder: I2cEventDecoder,
+    seg_event_detector: SegEventDetector,
+    script_event_tracker: EventTracker,
 }
 
 #[derive(Debug, Clone)]
@@ -153,40 +162,6 @@ pub(crate) struct ObservedEvent {
     pub(crate) detail: Option<String>,
 }
 
-#[derive(Debug, Clone)]
-struct ScriptEventTracker {
-    counts: [u64; EventTrack::COUNT],
-    last_notes: [Option<WaveEventNote>; EventTrack::COUNT],
-}
-
-impl Default for ScriptEventTracker {
-    fn default() -> Self {
-        Self {
-            counts: [0; EventTrack::COUNT],
-            last_notes: std::array::from_fn(|_| None),
-        }
-    }
-}
-
-impl ScriptEventTracker {
-    fn record(&mut self, note: WaveEventNote) {
-        let Some(track) = EventTrack::from_track_id(note.track_id) else {
-            return;
-        };
-        let index = track.index();
-        self.counts[index] = self.counts[index].saturating_add(1);
-        self.last_notes[index] = Some(note);
-    }
-
-    fn count(&self, track: EventTrack) -> u64 {
-        self.counts[track.index()]
-    }
-
-    fn last_note(&self, track: EventTrack) -> Option<&WaveEventNote> {
-        self.last_notes[track.index()].as_ref()
-    }
-}
-
 impl LedWatchStats {
     pub(crate) fn change_frequency_hz(self) -> Result<f64> {
         if self.observed_time_ns == 0 {
@@ -228,7 +203,8 @@ impl Simulator {
         wave_options: WaveCaptureOptions,
     ) -> Self {
         let wave_window = wave_options.window();
-        let ctx = MachineContext::new_with_wave_window(code.clone(), wave_window);
+        let event_gate = EventGate::shared(wave_window);
+        let ctx = MachineContext::new_with_event_gate(code.clone(), Arc::clone(&event_gate));
         let mut sim = Self {
             cpu: Cpu::new(),
             ctx,
@@ -238,7 +214,10 @@ impl Simulator {
             active_interrupts: Vec::new(),
             seg_decoder: SegmentDecoder::default(),
             wave: WaveRecorder::new(wave_options),
-            script_events: ScriptEventTracker::default(),
+            event_gate,
+            i2c_event_decoder: I2cEventDecoder::default(),
+            seg_event_detector: SegEventDetector::default(),
+            script_event_tracker: EventTracker::default(),
         };
         sim.ctx.ports.sync_inputs(&sim.ctx.board);
         sim.capture_wave_snapshot();
@@ -295,8 +274,12 @@ impl Simulator {
         self.cpu = Cpu::new();
         self.interrupt_poll_blocked_instructions = 0;
         self.active_interrupts.clear();
-        self.ctx =
-            MachineContext::new_with_wave_window(self.code_image.clone(), self.wave.window());
+        self.i2c_event_decoder.reset();
+        self.seg_event_detector.reset();
+        self.ctx = MachineContext::new_with_event_gate(
+            self.code_image.clone(),
+            Arc::clone(&self.event_gate),
+        );
         self.ctx.board = board;
         port_latches.apply_to_ports(&mut self.ctx.ports);
         xdata_latches.apply_to_xdata(&mut self.ctx.xdata);
@@ -310,8 +293,12 @@ impl Simulator {
         self.cpu = Cpu::new();
         self.interrupt_poll_blocked_instructions = 0;
         self.active_interrupts.clear();
-        self.ctx =
-            MachineContext::new_with_wave_window(self.code_image.clone(), self.wave.window());
+        self.i2c_event_decoder.reset();
+        self.seg_event_detector.reset();
+        self.ctx = MachineContext::new_with_event_gate(
+            self.code_image.clone(),
+            Arc::clone(&self.event_gate),
+        );
         self.ctx.board.load_retained_state(&retained);
         self.ctx.ports.sync_inputs(&self.ctx.board);
         self.capture_wave_snapshot();
@@ -805,13 +792,14 @@ impl Simulator {
         track: EventTrack,
         timeout_ns: Option<u64>,
     ) -> Result<ObservedEvent> {
+        let _track_guard = self.event_gate.enable_script_track(track);
         let start = self.ctx.board.sim_time_ns;
-        let start_count = self.script_events.count(track);
+        let start_count = self.script_event_tracker.count(track);
         loop {
             let elapsed_ns = self.ctx.board.sim_time_ns.saturating_sub(start);
-            if self.script_events.count(track) > start_count {
+            if self.script_event_tracker.count(track) > start_count {
                 let note = self
-                    .script_events
+                    .script_event_tracker
                     .last_note(track)
                     .cloned()
                     .ok_or_else(|| anyhow::anyhow!("事件轨状态损坏: {}", track.track_id()))?;
@@ -1223,7 +1211,9 @@ impl Simulator {
             .tick_protocols(&self.ctx.ports, &board_latches, &board_latch_versions);
         self.ctx.ports.refresh_inputs(&self.ctx.board);
         self.capture_wave_snapshot();
-        self.drain_wave_events();
+        self.observe_i2c_events();
+        self.observe_seg_events();
+        self.drain_event_notes();
         Ok(())
     }
 
@@ -1277,7 +1267,29 @@ impl Simulator {
     fn capture_control_snapshot(&mut self) {
         self.ctx.ports.refresh_inputs(&self.ctx.board);
         self.capture_wave_snapshot();
-        self.drain_wave_events();
+        self.observe_i2c_events();
+        self.observe_seg_events();
+        self.drain_event_notes();
+    }
+
+    fn current_i2c_lines(&self) -> (bool, bool, bool, bool) {
+        let (i2c_slave_scl_low, i2c_slave_sda_low) = self
+            .ctx
+            .board
+            .i2c
+            .slave_drives_low(&self.ctx.board.pcf8591, &self.ctx.board.at24c02);
+        let (i2c_bus_scl, i2c_bus_sda) = self.ctx.board.i2c.line_levels(
+            self.ctx.ports.port_latch[2] & (1 << 0) != 0,
+            self.ctx.ports.port_latch[2] & (1 << 1) != 0,
+            i2c_slave_scl_low,
+            i2c_slave_sda_low,
+        );
+        (
+            i2c_slave_scl_low,
+            i2c_slave_sda_low,
+            i2c_bus_scl,
+            i2c_bus_sda,
+        )
     }
 
     fn capture_wave_snapshot(&mut self) {
@@ -1290,17 +1302,8 @@ impl Simulator {
         let adc_channel_voltage_v = self.ctx.board.analog.channel_voltage(adc_channel);
 
         let effective_board_latches = self.ctx.effective_board_latches();
-        let (i2c_slave_scl_low, i2c_slave_sda_low) = self
-            .ctx
-            .board
-            .i2c
-            .slave_drives_low(&self.ctx.board.pcf8591, &self.ctx.board.at24c02);
-        let (i2c_bus_scl, i2c_bus_sda) = self.ctx.board.i2c.line_levels(
-            self.ctx.ports.port_latch[2] & (1 << 0) != 0,
-            self.ctx.ports.port_latch[2] & (1 << 1) != 0,
-            i2c_slave_scl_low,
-            i2c_slave_sda_low,
-        );
+        let (i2c_slave_scl_low, i2c_slave_sda_low, i2c_bus_scl, i2c_bus_sda) =
+            self.current_i2c_lines();
 
         let mut seg_chars = [' '; 8];
         let seg_text = self.ctx.board.outputs.display_text(&self.seg_decoder);
@@ -1369,26 +1372,99 @@ impl Simulator {
         self.wave.observe_snapshot(snapshot);
     }
 
-    fn drain_wave_events(&mut self) {
-        for note in self.ctx.board.ds18b20.take_wave_events() {
+    fn observe_i2c_events(&mut self) {
+        let time_ns = self.ctx.board.sim_time_ns;
+        if !self.event_gate.need_direct_event(EventTrack::I2c, time_ns) {
+            self.i2c_event_decoder.reset();
+            return;
+        }
+
+        let (_, _, i2c_bus_scl, i2c_bus_sda) = self.current_i2c_lines();
+        for note in self
+            .i2c_event_decoder
+            .observe(time_ns, i2c_bus_scl, i2c_bus_sda)
+        {
             self.record_observed_event(note);
         }
-        for note in self.ctx.board.pcf8591.take_wave_events() {
+    }
+
+    fn observe_seg_events(&mut self) {
+        let time_ns = self.ctx.board.sim_time_ns;
+        let mut need_seg_events = self
+            .event_gate
+            .need_direct_event(EventTrack::SegChange, time_ns);
+        if !need_seg_events {
+            for digit in 1..=8 {
+                let Some(track) = EventTrack::seg_digit(digit) else {
+                    continue;
+                };
+                if self.event_gate.need_direct_event(track, time_ns) {
+                    need_seg_events = true;
+                    break;
+                }
+            }
+        }
+        if !need_seg_events {
+            self.seg_event_detector.reset();
+            return;
+        }
+
+        let Some(change_set) = self
+            .seg_event_detector
+            .observe(self.ctx.board.outputs.digits)
+        else {
+            return;
+        };
+        if change_set.changed()
+            && self
+                .event_gate
+                .need_direct_event(EventTrack::SegChange, time_ns)
+        {
+            self.record_observed_event(WaveEventNote::new(
+                time_ns,
+                EventTrack::SegChange.track_id(),
+                "CHANGE",
+            ));
+        }
+        for digit in 1..=8 {
+            let Some(track) = EventTrack::seg_digit(digit) else {
+                continue;
+            };
+            if change_set.digit_changed(digit - 1)
+                && self.event_gate.need_direct_event(track, time_ns)
+            {
+                self.record_observed_event(WaveEventNote::new(
+                    time_ns,
+                    track.track_id(),
+                    format!("D{digit} change"),
+                ));
+            }
+        }
+    }
+
+    fn drain_event_notes(&mut self) {
+        for note in self.ctx.board.ds18b20.take_event_notes() {
             self.record_observed_event(note);
         }
-        for note in self.ctx.board.ds1302.take_wave_events() {
+        for note in self.ctx.board.pcf8591.take_event_notes() {
             self.record_observed_event(note);
         }
-        for note in self.ctx.ports.uart1.take_wave_events() {
+        for note in self.ctx.board.ds1302.take_event_notes() {
             self.record_observed_event(note);
         }
-        for note in self.ctx.ports.uart2.take_wave_events() {
+        for note in self.ctx.ports.uart1.take_event_notes() {
+            self.record_observed_event(note);
+        }
+        for note in self.ctx.ports.uart2.take_event_notes() {
             self.record_observed_event(note);
         }
     }
 
     fn note_interrupt_event(&mut self, pending: PendingInterrupt) {
         let time_ns = self.ctx.board.sim_time_ns;
+        if !self.event_gate.need_direct_event(EventTrack::Cpu, time_ns) {
+            return;
+        }
         let label = match pending.source {
             InterruptSource::External0 => "INT0 enter",
             InterruptSource::Timer0 => "T0 enter",
@@ -1407,9 +1483,22 @@ impl Simulator {
     }
 
     fn record_observed_event(&mut self, note: WaveEventNote) {
-        self.script_events.record(note.clone());
-        if self.wave.enabled() {
-            self.wave.record_event_note(note);
+        let script_track = EventTrack::from_track_id(note.track_id)
+            .filter(|track| self.event_gate.need_script_track(*track));
+        let need_wave = self.event_gate.need_wave_event(note.time_ns);
+
+        match (script_track, need_wave) {
+            (Some(_), true) => {
+                self.script_event_tracker.record(note.clone());
+                self.wave.record_event_note(note);
+            }
+            (Some(_), false) => {
+                self.script_event_tracker.record(note);
+            }
+            (None, true) => {
+                self.wave.record_event_note(note);
+            }
+            (None, false) => {}
         }
     }
 }
@@ -1506,14 +1595,17 @@ impl MachineContext {
         Self::new_with_wave_window(code, WaveCaptureWindow::from_enabled(wave_enabled))
     }
 
-    fn new_with_wave_window(code: Vec<u8>, _wave_window: WaveCaptureWindow) -> Self {
-        let event_window = WaveCaptureWindow::from_enabled(true);
-        let mut board = BoardModel::new_with_wave_window(event_window);
+    fn new_with_wave_window(code: Vec<u8>, wave_window: WaveCaptureWindow) -> Self {
+        Self::new_with_event_gate(code, EventGate::shared(wave_window))
+    }
+
+    fn new_with_event_gate(code: Vec<u8>, event_gate: SharedEventGate) -> Self {
+        let mut board = BoardModel::new_with_event_gate(Arc::clone(&event_gate));
         board
             .outputs
             .sample_from_latches(&BOARD_POWER_ON_LATCHES, &[0; 4]);
         Self {
-            ports: MachinePorts::new_with_wave_window(event_window),
+            ports: MachinePorts::new_with_event_gate(event_gate),
             xdata: BoardXdata::default(),
             code: CodeMemory { code },
             board,
@@ -1704,6 +1796,10 @@ impl MachinePorts {
     }
 
     fn new_with_wave_window(wave_window: WaveCaptureWindow) -> Self {
+        Self::new_with_event_gate(EventGate::shared(wave_window))
+    }
+
+    fn new_with_event_gate(event_gate: SharedEventGate) -> Self {
         let mut generic = [0_u8; 128];
         let mut port_latch = [0xFF_u8; 6];
         port_latch[5] = 0x3F;
@@ -1721,8 +1817,18 @@ impl MachinePorts {
             board_latch_versions: [0; 4],
             latch_used: false,
             timers: TimerBlock::default(),
-            uart1: Uart::new(UART1_SFR_SCON, UART1_SFR_SBUF, wave_window),
-            uart2: Uart::new(UART2_SFR_S2CON, UART2_SFR_S2BUF, wave_window),
+            uart1: Uart::new(
+                UART1_SFR_SCON,
+                UART1_SFR_SBUF,
+                EventTrack::Uart1,
+                Arc::clone(&event_gate),
+            ),
+            uart2: Uart::new(
+                UART2_SFR_S2CON,
+                UART2_SFR_S2BUF,
+                EventTrack::Uart2,
+                event_gate,
+            ),
         }
     }
 
@@ -2230,6 +2336,7 @@ impl UartFrame {
 struct Uart {
     scon_addr: u8,
     sbuf_addr: u8,
+    event_track: EventTrack,
     control: u8,
     interrupt_requested: bool,
     interrupt_reassert_countdown: Option<u8>,
@@ -2242,15 +2349,21 @@ struct Uart {
     config: UartConfig,
     tx_line_high: bool,
     rx_line_high: bool,
-    wave_window: WaveCaptureWindow,
-    wave_events: Option<Vec<WaveEventNote>>,
+    event_gate: SharedEventGate,
+    event_notes: Vec<WaveEventNote>,
 }
 
 impl Uart {
-    fn new(scon_addr: u8, sbuf_addr: u8, wave_window: WaveCaptureWindow) -> Self {
+    fn new(
+        scon_addr: u8,
+        sbuf_addr: u8,
+        event_track: EventTrack,
+        event_gate: SharedEventGate,
+    ) -> Self {
         Self {
             scon_addr,
             sbuf_addr,
+            event_track,
             control: 0,
             interrupt_requested: false,
             interrupt_reassert_countdown: None,
@@ -2263,8 +2376,8 @@ impl Uart {
             config: UartConfig::default(),
             tx_line_high: true,
             rx_line_high: true,
-            wave_window,
-            wave_events: wave_window.enabled().then(Vec::new),
+            event_gate,
+            event_notes: Vec::new(),
         }
     }
 
@@ -2300,12 +2413,8 @@ impl Uart {
             self.tx_frame = Some(UartFrame::new(symbol, self.config));
             self.tx_line_high = false;
             let data_bits = self.config.data_bits;
-            let track_id = if self.scon_addr == UART2_SFR_S2CON {
-                crate::wave::TRACK_EVENT_UART2
-            } else {
-                crate::wave::TRACK_EVENT_UART1
-            };
-            self.push_wave_event(start_time_ns, || {
+            let track_id = self.event_track.track_id();
+            self.push_event_note(start_time_ns, || {
                 WaveEventNote::with_detail(
                     start_time_ns,
                     track_id,
@@ -2340,12 +2449,8 @@ impl Uart {
             self.rx_frame = Some(UartFrame::new(symbol, self.config));
             self.rx_line_high = false;
             let data_bits = self.config.data_bits;
-            let track_id = if self.scon_addr == UART2_SFR_S2CON {
-                crate::wave::TRACK_EVENT_UART2
-            } else {
-                crate::wave::TRACK_EVENT_UART1
-            };
-            self.push_wave_event(start_time_ns, || {
+            let track_id = self.event_track.track_id();
+            self.push_event_note(start_time_ns, || {
                 WaveEventNote::with_detail(
                     start_time_ns,
                     track_id,
@@ -2404,11 +2509,8 @@ impl Uart {
         Ok(())
     }
 
-    fn take_wave_events(&mut self) -> Vec<WaveEventNote> {
-        match self.wave_events.as_mut() {
-            Some(events) => std::mem::take(events),
-            None => Vec::new(),
-        }
+    fn take_event_notes(&mut self) -> Vec<WaveEventNote> {
+        std::mem::take(&mut self.event_notes)
     }
 
     fn tx_line_high(&self) -> bool {
@@ -2475,14 +2577,12 @@ impl Uart {
             .join(" ")
     }
 
-    fn push_wave_event<F>(&mut self, time_ns: u64, build: F)
+    fn push_event_note<F>(&mut self, time_ns: u64, build: F)
     where
         F: FnOnce() -> WaveEventNote,
     {
-        if self.wave_window.includes(time_ns)
-            && let Some(events) = self.wave_events.as_mut()
-        {
-            events.push(build());
+        if self.event_gate.need_direct_event(self.event_track, time_ns) {
+            self.event_notes.push(build());
         }
     }
 
@@ -2598,16 +2698,20 @@ impl BoardModel {
     }
 
     fn new_with_wave_window(wave_window: WaveCaptureWindow) -> Self {
+        Self::new_with_event_gate(EventGate::shared(wave_window))
+    }
+
+    fn new_with_event_gate(event_gate: SharedEventGate) -> Self {
         Self {
             cpu_cycles: 0,
             sim_time_ns: 0,
             sim_time_ns_remainder: 0,
             system_cycle_remainder: 0,
             outputs: Outputs::default(),
-            ds18b20: Ds18b20::new_with_wave_window(wave_window),
-            ds1302: Ds1302::new_with_wave_window(wave_window),
+            ds18b20: Ds18b20::new_with_event_gate(Arc::clone(&event_gate)),
+            ds1302: Ds1302::new_with_event_gate(Arc::clone(&event_gate)),
             i2c: I2cBus,
-            pcf8591: Pcf8591::new_with_wave_window(wave_window),
+            pcf8591: Pcf8591::new_with_event_gate(event_gate),
             at24c02: At24c02::default(),
             ne555: Ne555::default(),
             ultrasonic: UltrasonicDevice::default(),
@@ -2993,8 +3097,10 @@ mod tests {
     use i8051::{Cpu, Register};
 
     use crate::{
+        event::track::EventTrack,
         ids::{KeyId, KeyMode, LedId, ResetMode, SignalId},
         peripherals::I2cSlaveDevice,
+        wave::WaveCaptureOptions,
     };
 
     use super::{DisplayNumber, Simulator};
@@ -3189,16 +3295,24 @@ mod tests {
         code[0x1C] = 0x90;
         code[0x1D] = 0x32;
 
+        let event_gate =
+            super::EventGate::shared(crate::wave::WaveCaptureWindow::from_enabled(true));
         let mut sim = super::Simulator {
             cpu: Cpu::new(),
-            ctx: super::MachineContext::new(code.clone()),
+            ctx: super::MachineContext::new_with_event_gate(
+                code.clone(),
+                std::sync::Arc::clone(&event_gate),
+            ),
             code_image: code,
             trace_cpu: false,
             interrupt_poll_blocked_instructions: 0,
             active_interrupts: Vec::new(),
             seg_decoder: super::SegmentDecoder::default(),
             wave: crate::wave::WaveRecorder::new(crate::wave::WaveCaptureOptions::default()),
-            script_events: super::ScriptEventTracker::default(),
+            event_gate,
+            i2c_event_decoder: super::I2cEventDecoder::default(),
+            seg_event_detector: super::SegEventDetector::default(),
+            script_event_tracker: super::EventTracker::default(),
         };
         sim.cpu
             .register_set(Register::IE, u16::from(super::IE_EA | super::IE_ET1));
@@ -3604,13 +3718,14 @@ mod tests {
         let mut uart = super::Uart::new(
             super::UART1_SFR_SCON,
             super::UART1_SFR_SBUF,
-            super::WaveCaptureWindow::from_enabled(false),
+            super::EventTrack::Uart1,
+            super::EventGate::shared(super::WaveCaptureWindow::from_enabled(false)),
         );
 
         uart.write(super::UART1_SFR_SBUF, 0x55);
         let _ = uart.tick_ns(0, 1);
 
-        assert!(uart.take_wave_events().is_empty());
+        assert!(uart.take_event_notes().is_empty());
     }
 
     #[test]
@@ -3621,6 +3736,86 @@ mod tests {
     #[test]
     fn uart_event_label_escapes_control_ascii_hint() {
         assert_eq!(super::uart_event_label("TX", b'\n'.into()), r"TX 0x0A '\n'");
+    }
+
+    #[test]
+    fn seg_change_event_tracks_ignore_refresh_without_effective_change() {
+        let mut sim = Simulator::from_hex_path(
+            &sample_path("sample/key_seg/prj/Objects/key_seg.hex"),
+            false,
+        )
+        .expect("load key_seg");
+
+        sim.run_ms(150).expect("run key_seg to idle");
+        assert_eq!(sim.display_text(), "       0");
+        assert_eq!(sim.script_event_tracker.count(EventTrack::SegChange), 0);
+        assert_eq!(sim.script_event_tracker.count(EventTrack::SegDigit8), 0);
+
+        sim.set_key("S4", true).expect("press S4 to increment D8");
+        let event = sim
+            .run_to_event_with_timeout(EventTrack::SegDigit8, Some(200_000_000))
+            .expect("wait D8 effective segment change");
+        assert_eq!(event.track_id, EventTrack::SegDigit8.track_id());
+        assert_eq!(event.label, "D8 change");
+        assert!(event.elapsed_ns <= 200_000_000);
+        assert_eq!(sim.display_text(), "       1");
+        assert_eq!(sim.script_event_tracker.count(EventTrack::SegDigit8), 1);
+
+        let err = sim
+            .run_to_event_with_timeout(EventTrack::SegDigit8, Some(20_000_000))
+            .expect_err("stable refresh should not produce another D8 change");
+        assert!(
+            err.to_string().contains("run_to_event 等待超时"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn seg_change_events_flow_to_wave_without_touching_script_tracker() {
+        let mut sim = Simulator::from_hex_path_with_options(
+            &sample_path("sample/key_seg/prj/Objects/key_seg.hex"),
+            false,
+            WaveCaptureOptions {
+                json_path: Some(std::env::temp_dir().join("seg-change-test.json")),
+                ..WaveCaptureOptions::default()
+            },
+        )
+        .expect("load key_seg");
+
+        sim.run_ms(150).expect("run key_seg to idle");
+        let before_seg_change = sim
+            .wave
+            .event_records()
+            .into_iter()
+            .filter(|(track_id, _, _, _)| *track_id == EventTrack::SegChange.track_id())
+            .count();
+        let before_d8_change = sim
+            .wave
+            .event_records()
+            .into_iter()
+            .filter(|(track_id, _, _, _)| *track_id == EventTrack::SegDigit8.track_id())
+            .count();
+        assert_eq!(sim.script_event_tracker.count(EventTrack::SegChange), 0);
+        assert_eq!(sim.script_event_tracker.count(EventTrack::SegDigit8), 0);
+
+        sim.set_key("S4", true)
+            .expect("press S4 to request a new D8 value");
+        sim.run_ms(150)
+            .expect("run until the display finishes changing");
+
+        let after_events = sim.wave.event_records();
+        let after_seg_change = after_events
+            .iter()
+            .filter(|(track_id, _, _, _)| *track_id == EventTrack::SegChange.track_id())
+            .count();
+        let after_d8_change = after_events
+            .iter()
+            .filter(|(track_id, _, _, _)| *track_id == EventTrack::SegDigit8.track_id())
+            .count();
+        assert!(after_seg_change > before_seg_change);
+        assert!(after_d8_change > before_d8_change);
+        assert_eq!(sim.script_event_tracker.count(EventTrack::SegChange), 0);
+        assert_eq!(sim.script_event_tracker.count(EventTrack::SegDigit8), 0);
     }
 
     #[test]

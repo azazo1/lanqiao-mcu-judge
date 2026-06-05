@@ -1,6 +1,12 @@
 use std::mem;
 
-use crate::wave::{TRACK_EVENT_ADC_DAC, WaveCaptureWindow, WaveEventNote};
+use crate::{
+    event::{
+        gate::{EventGate, SharedEventGate},
+        track::EventTrack,
+    },
+    wave::{WaveCaptureWindow, WaveEventNote},
+};
 
 use super::{
     analog::AnalogInputs,
@@ -15,8 +21,8 @@ pub(crate) struct Pcf8591 {
     selected_channel: u8,
     expecting_control: bool,
     frontend: I2cSlaveFrontend,
-    wave_window: WaveCaptureWindow,
-    wave_events: Option<Vec<WaveEventNote>>,
+    event_gate: SharedEventGate,
+    event_notes: Vec<WaveEventNote>,
 }
 
 impl Default for Pcf8591 {
@@ -27,10 +33,17 @@ impl Default for Pcf8591 {
 
 impl Pcf8591 {
     pub(crate) fn new(wave_enabled: bool) -> Self {
-        Self::new_with_wave_window(WaveCaptureWindow::from_enabled(wave_enabled))
+        Self::new_with_event_gate(EventGate::shared(WaveCaptureWindow::from_enabled(
+            wave_enabled,
+        )))
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn new_with_wave_window(wave_window: WaveCaptureWindow) -> Self {
+        Self::new_with_event_gate(EventGate::shared(wave_window))
+    }
+
+    pub(crate) fn new_with_event_gate(event_gate: SharedEventGate) -> Self {
         Self {
             control: 0,
             dac_value: 0,
@@ -38,8 +51,8 @@ impl Pcf8591 {
             selected_channel: 0,
             expecting_control: false,
             frontend: I2cSlaveFrontend::default(),
-            wave_window,
-            wave_events: wave_window.enabled().then(Vec::new),
+            event_gate,
+            event_notes: Vec::new(),
         }
     }
 
@@ -90,11 +103,8 @@ impl Pcf8591 {
         self.frontend.settle_lines(sda_high);
     }
 
-    pub(crate) fn take_wave_events(&mut self) -> Vec<WaveEventNote> {
-        match self.wave_events.as_mut() {
-            Some(events) => mem::take(events),
-            None => Vec::new(),
-        }
+    pub(crate) fn take_event_notes(&mut self) -> Vec<WaveEventNote> {
+        mem::take(&mut self.event_notes)
     }
 
     #[cfg(test)]
@@ -181,12 +191,13 @@ impl Pcf8591 {
         L: FnOnce() -> String,
         D: FnOnce() -> String,
     {
-        if self.wave_window.includes(time_ns)
-            && let Some(events) = self.wave_events.as_mut()
+        if self
+            .event_gate
+            .need_direct_event(EventTrack::AdcDac, time_ns)
         {
-            events.push(WaveEventNote::with_detail(
+            self.event_notes.push(WaveEventNote::with_detail(
                 time_ns,
-                TRACK_EVENT_ADC_DAC,
+                EventTrack::AdcDac.track_id(),
                 label(),
                 detail(),
             ));
@@ -312,7 +323,7 @@ mod tests {
         assert!(<Pcf8591 as I2cSlaveDevice>::on_write_byte(
             &mut pcf, 0, 0x40, &analog
         ));
-        assert!(pcf.take_wave_events().is_empty());
+        assert!(pcf.take_event_notes().is_empty());
     }
 
     #[test]
@@ -323,12 +334,12 @@ mod tests {
         assert!(<Pcf8591 as I2cSlaveDevice>::on_write_byte(
             &mut pcf, 50, 0x40, &analog
         ));
-        assert!(pcf.take_wave_events().is_empty());
+        assert!(pcf.take_event_notes().is_empty());
 
         assert!(<Pcf8591 as I2cSlaveDevice>::on_write_byte(
             &mut pcf, 150, 0x41, &analog
         ));
-        let events = pcf.take_wave_events();
+        let events = pcf.take_event_notes();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].time_ns, 150);
     }

@@ -16,6 +16,21 @@ pub(crate) const TRACK_EVENT_UART1: &str = "event.uart1";
 pub(crate) const TRACK_EVENT_UART2: &str = "event.uart2";
 pub(crate) const TRACK_EVENT_ADC_DAC: &str = "event.adc_dac";
 pub(crate) const TRACK_EVENT_DS1302: &str = "event.ds1302";
+pub(crate) const TRACK_EVENT_SEG_CHANGE: &str = "event.seg.change";
+
+pub(crate) fn seg_digit_change_track_id(digit: usize) -> &'static str {
+    match digit {
+        1 => "event.seg.d1.change",
+        2 => "event.seg.d2.change",
+        3 => "event.seg.d3.change",
+        4 => "event.seg.d4.change",
+        5 => "event.seg.d5.change",
+        6 => "event.seg.d6.change",
+        7 => "event.seg.d7.change",
+        8 => "event.seg.d8.change",
+        _ => "event.seg.change",
+    }
+}
 
 const WAVE_VIEWER_TEMPLATE: &str = include_str!("../assets/wave_viewer.html");
 const MSGPACK_BROWSER_LIB: &str = include_str!("../assets/msgpack.min.js");
@@ -485,103 +500,6 @@ fn signal_aliases(id: &str, label: &str, category: &str, group: &str) -> Vec<Str
     aliases
 }
 
-#[derive(Debug, Default, Clone)]
-struct I2cEventDecoder {
-    initialized: bool,
-    prev_scl: bool,
-    prev_sda: bool,
-    active: bool,
-    bit_count: u8,
-    shift: u8,
-    waiting_ack: bool,
-    expecting_address: bool,
-    reading: bool,
-    last_byte: u8,
-}
-
-impl I2cEventDecoder {
-    fn observe(&mut self, time_ns: u64, scl_high: bool, sda_high: bool) -> Vec<WaveEventNote> {
-        let mut events = Vec::new();
-        if !self.initialized {
-            self.initialized = true;
-            self.prev_scl = scl_high;
-            self.prev_sda = sda_high;
-            return events;
-        }
-
-        let start = self.prev_sda && !sda_high && self.prev_scl && scl_high;
-        let stop = !self.prev_sda && sda_high && self.prev_scl && scl_high;
-
-        if start {
-            let label = if self.active {
-                "REPEATED START"
-            } else {
-                "START"
-            };
-            events.push(WaveEventNote::new(time_ns, TRACK_EVENT_I2C, label));
-            self.active = true;
-            self.bit_count = 0;
-            self.shift = 0;
-            self.waiting_ack = false;
-            self.expecting_address = true;
-        }
-
-        if self.active && !self.prev_scl && scl_high {
-            if self.waiting_ack {
-                let ack = !sda_high;
-                let label = if ack { "ACK" } else { "NACK" };
-                events.push(WaveEventNote::new(time_ns, TRACK_EVENT_I2C, label));
-                self.waiting_ack = false;
-                if self.expecting_address {
-                    self.reading = self.last_byte & 0x01 != 0;
-                    self.expecting_address = false;
-                }
-            } else {
-                self.shift = (self.shift << 1) | u8::from(sda_high);
-                self.bit_count += 1;
-                if self.bit_count == 8 {
-                    let byte = self.shift;
-                    let note = if self.expecting_address {
-                        WaveEventNote::with_detail(
-                            time_ns,
-                            TRACK_EVENT_I2C,
-                            format!(
-                                "ADDR 0x{:02X} {}",
-                                byte,
-                                if byte & 0x01 != 0 { "R" } else { "W" }
-                            ),
-                            format!("raw=0x{byte:02X}"),
-                        )
-                    } else if self.reading {
-                        WaveEventNote::new(time_ns, TRACK_EVENT_I2C, format!("RX 0x{byte:02X}"))
-                    } else {
-                        WaveEventNote::new(time_ns, TRACK_EVENT_I2C, format!("TX 0x{byte:02X}"))
-                    };
-                    events.push(note);
-                    self.last_byte = byte;
-                    self.shift = 0;
-                    self.bit_count = 0;
-                    self.waiting_ack = true;
-                }
-            }
-        }
-
-        if stop && self.active {
-            events.push(WaveEventNote::new(time_ns, TRACK_EVENT_I2C, "STOP"));
-            self.active = false;
-            self.bit_count = 0;
-            self.shift = 0;
-            self.waiting_ack = false;
-            self.expecting_address = false;
-            self.reading = false;
-        }
-
-        self.prev_scl = scl_high;
-        self.prev_sda = sda_high;
-        events
-    }
-}
-
 pub(crate) struct WaveRecorder {
     options: WaveCaptureOptions,
     window: WaveCaptureWindow,
@@ -590,7 +508,6 @@ pub(crate) struct WaveRecorder {
     signal_slots: WaveSignalSlots,
     events: Vec<EventRecord>,
     markers: Vec<MarkerRecord>,
-    i2c_decoder: I2cEventDecoder,
     last_snapshot: Option<WaveSnapshot>,
     observed_start_ns: Option<u64>,
     observed_end_ns: Option<u64>,
@@ -607,7 +524,6 @@ impl WaveRecorder {
             signal_slots: WaveSignalSlots::default(),
             events: Vec::new(),
             markers: Vec::new(),
-            i2c_decoder: I2cEventDecoder::default(),
             last_snapshot: None,
             observed_start_ns: None,
             observed_end_ns: None,
@@ -624,10 +540,6 @@ impl WaveRecorder {
         self.window.includes(time_ns)
     }
 
-    pub(crate) fn window(&self) -> WaveCaptureWindow {
-        self.window
-    }
-
     #[cfg(test)]
     pub(crate) fn new_with_window(window: WaveCaptureWindow) -> Self {
         let mut recorder = Self {
@@ -638,7 +550,6 @@ impl WaveRecorder {
             signal_slots: WaveSignalSlots::default(),
             events: Vec::new(),
             markers: Vec::new(),
-            i2c_decoder: I2cEventDecoder::default(),
             last_snapshot: None,
             observed_start_ns: None,
             observed_end_ns: None,
@@ -951,18 +862,6 @@ impl WaveRecorder {
             );
         }
 
-        if prev.is_none_or(|last| {
-            last.i2c_bus_scl != snapshot.i2c_bus_scl || last.i2c_bus_sda != snapshot.i2c_bus_sda
-        }) {
-            for note in self.i2c_decoder.observe(
-                snapshot.time_ns,
-                snapshot.i2c_bus_scl,
-                snapshot.i2c_bus_sda,
-            ) {
-                self.record_event_note(note);
-            }
-        }
-
         self.last_snapshot = Some(snapshot);
     }
 
@@ -1001,6 +900,21 @@ impl WaveRecorder {
         self.markers
             .iter()
             .map(|marker| (marker.time_ns, marker.label.clone()))
+            .collect()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn event_records(&self) -> Vec<(&'static str, u64, String, Option<String>)> {
+        self.events
+            .iter()
+            .map(|event| {
+                (
+                    event.track_id,
+                    event.time_ns,
+                    event.label.clone(),
+                    event.detail.clone(),
+                )
+            })
             .collect()
     }
 
@@ -1350,6 +1264,28 @@ impl WaveRecorder {
                 "seg_raw",
                 SignalKind::Integer,
                 "hex8",
+                None,
+                false,
+            );
+        }
+        self.register_signal(
+            TRACK_EVENT_SEG_CHANGE,
+            "display change events",
+            "display",
+            "seg_events",
+            SignalKind::Event,
+            "event",
+            None,
+            true,
+        );
+        for digit in 1..=8 {
+            self.register_signal(
+                seg_digit_change_track_id(digit),
+                format!("D{digit} change events"),
+                "display",
+                "seg_digit_events",
+                SignalKind::Event,
+                "event",
                 None,
                 false,
             );
@@ -1847,8 +1783,8 @@ mod tests {
     use serde::Deserialize;
 
     use super::{
-        I2cEventDecoder, TRACK_EVENT_I2C, WaveCaptureWindow, WaveEventNote, WaveMarkerNote,
-        WaveRecorder, signal_aliases,
+        TRACK_EVENT_I2C, WaveCaptureWindow, WaveEventNote, WaveMarkerNote, WaveRecorder,
+        signal_aliases,
     };
 
     #[derive(Debug, Deserialize)]
@@ -1873,99 +1809,6 @@ mod tests {
 
     #[derive(Debug, Deserialize)]
     struct DecodedMsgpackMarker(u64, Option<String>);
-
-    #[test]
-    fn i2c_decoder_marks_start_bytes_ack_and_stop() {
-        let mut decoder = I2cEventDecoder::default();
-        let mut events = Vec::new();
-
-        let states = [
-            (0, true, true),
-            (10, true, false),
-            (20, false, false),
-            (30, false, true),
-            (40, true, true),
-            (50, false, true),
-            (60, false, false),
-            (70, true, false),
-            (80, false, false),
-            (90, false, true),
-            (100, true, true),
-            (110, false, true),
-            (120, false, false),
-            (130, true, false),
-            (140, false, false),
-            (150, false, false),
-            (160, true, false),
-            (170, false, false),
-            (180, false, false),
-            (190, true, false),
-            (200, false, false),
-            (210, false, false),
-            (220, true, false),
-            (230, false, false),
-            (240, false, false),
-            (250, true, false),
-            (260, false, false),
-            (270, true, false),
-            (280, false, false),
-            (290, false, false),
-            (300, true, false),
-            (310, false, false),
-            (320, false, false),
-            (330, true, false),
-            (340, false, false),
-            (350, false, false),
-            (360, true, false),
-            (370, false, false),
-            (380, false, false),
-            (390, true, false),
-            (400, false, false),
-            (410, false, false),
-            (420, true, false),
-            (430, false, false),
-            (440, true, false),
-            (450, false, false),
-            (460, false, false),
-            (470, true, false),
-            (480, false, false),
-            (490, false, false),
-            (500, false, false),
-            (510, true, false),
-            (520, false, false),
-            (530, false, false),
-            (540, true, false),
-            (550, false, false),
-            (560, false, false),
-            (570, true, false),
-            (580, false, false),
-            (590, false, false),
-            (600, true, false),
-            (610, false, false),
-            (620, false, false),
-            (630, true, false),
-            (640, false, false),
-            (650, false, false),
-            (660, true, false),
-            (670, false, false),
-            (680, true, false),
-            (690, true, true),
-        ];
-
-        for (time_ns, scl, sda) in states {
-            events.extend(decoder.observe(time_ns, scl, sda));
-        }
-
-        let labels = events
-            .iter()
-            .filter(|event| event.track_id == TRACK_EVENT_I2C)
-            .map(|event| event.label.clone())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            labels,
-            vec!["START", "ADDR 0xA0 W", "ACK", "TX 0x00", "ACK", "STOP"]
-        );
-    }
 
     #[test]
     fn signal_aliases_include_iic_variants() {

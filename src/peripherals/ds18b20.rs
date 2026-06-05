@@ -3,8 +3,12 @@ use std::collections::VecDeque;
 use anyhow::{Result, bail};
 
 use crate::chip::NS_PER_MICROSECOND;
+use crate::event::{
+    gate::{EventGate, SharedEventGate},
+    track::EventTrack,
+};
 use crate::persistent_state::Ds18b20PersistentState;
-use crate::wave::{TRACK_EVENT_ONEWIRE, WaveCaptureWindow, WaveEventNote};
+use crate::wave::{WaveCaptureWindow, WaveEventNote};
 
 const RESET_PULSE_MIN_NS: u64 = 400 * NS_PER_MICROSECOND;
 const PRESENCE_PULSE_NS: u64 = 120 * NS_PER_MICROSECOND;
@@ -44,8 +48,8 @@ pub(crate) struct Ds18b20 {
     eeprom_th: u8,
     eeprom_tl: u8,
     eeprom_config: u8,
-    wave_window: WaveCaptureWindow,
-    wave_events: Option<Vec<WaveEventNote>>,
+    event_gate: SharedEventGate,
+    event_notes: Vec<WaveEventNote>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -91,10 +95,12 @@ impl Default for Ds18b20 {
 
 impl Ds18b20 {
     pub(crate) fn new(wave_enabled: bool) -> Self {
-        Self::new_with_wave_window(WaveCaptureWindow::from_enabled(wave_enabled))
+        Self::new_with_event_gate(EventGate::shared(WaveCaptureWindow::from_enabled(
+            wave_enabled,
+        )))
     }
 
-    pub(crate) fn new_with_wave_window(wave_window: WaveCaptureWindow) -> Self {
+    pub(crate) fn new_with_event_gate(event_gate: SharedEventGate) -> Self {
         Self {
             drive_low: false,
             temperature_c: 0.0,
@@ -118,8 +124,8 @@ impl Ds18b20 {
             eeprom_th: DEFAULT_TH,
             eeprom_tl: DEFAULT_TL,
             eeprom_config: DEFAULT_CONFIG,
-            wave_window,
-            wave_events: wave_window.enabled().then(Vec::new),
+            event_gate,
+            event_notes: Vec::new(),
         }
     }
 
@@ -216,11 +222,8 @@ impl Ds18b20 {
         self.update_alarm_flag();
     }
 
-    pub(crate) fn take_wave_events(&mut self) -> Vec<WaveEventNote> {
-        match self.wave_events.as_mut() {
-            Some(events) => std::mem::take(events),
-            None => Vec::new(),
-        }
+    pub(crate) fn take_event_notes(&mut self) -> Vec<WaveEventNote> {
+        std::mem::take(&mut self.event_notes)
     }
 
     fn handle_reset(&mut self, time_ns: u64) {
@@ -232,10 +235,10 @@ impl Ds18b20 {
         self.tx_bits.clear();
         self.status_response = StatusResponse::None;
         let presence_until = time_ns.saturating_add(PRESENCE_PULSE_NS);
-        self.push_wave_event(time_ns, || {
+        self.push_event_note(time_ns, || {
             WaveEventNote::with_detail(
                 time_ns,
-                TRACK_EVENT_ONEWIRE,
+                EventTrack::Onewire.track_id(),
                 "RESET",
                 format!("presence_until={presence_until}ns"),
             )
@@ -276,8 +279,12 @@ impl Ds18b20 {
     }
 
     fn handle_input_byte(&mut self, value: u8, time_ns: u64) {
-        self.push_wave_event(time_ns, || {
-            WaveEventNote::new(time_ns, TRACK_EVENT_ONEWIRE, format!("RX 0x{value:02X}"))
+        self.push_event_note(time_ns, || {
+            WaveEventNote::new(
+                time_ns,
+                EventTrack::Onewire.track_id(),
+                format!("RX 0x{value:02X}"),
+            )
         });
         match self.bus_state {
             BusState::AwaitRomCommand => self.handle_rom_command(value, time_ns),
@@ -308,10 +315,10 @@ impl Ds18b20 {
     }
 
     fn handle_rom_command(&mut self, value: u8, time_ns: u64) {
-        self.push_wave_event(time_ns, || {
+        self.push_event_note(time_ns, || {
             WaveEventNote::new(
                 time_ns,
-                TRACK_EVENT_ONEWIRE,
+                EventTrack::Onewire.track_id(),
                 format!("ROM {}", rom_command_name(value)),
             )
         });
@@ -353,10 +360,10 @@ impl Ds18b20 {
     }
 
     fn handle_function_command(&mut self, value: u8, time_ns: u64) {
-        self.push_wave_event(time_ns, || {
+        self.push_event_note(time_ns, || {
             WaveEventNote::new(
                 time_ns,
-                TRACK_EVENT_ONEWIRE,
+                EventTrack::Onewire.track_id(),
                 format!("FUNC {}", function_command_name(value)),
             )
         });
@@ -492,7 +499,7 @@ impl Ds18b20 {
     fn load_tx_bytes(&mut self, time_ns: u64, bytes: &[u8]) {
         self.tx_bits.clear();
         if !bytes.is_empty() {
-            self.push_wave_event(time_ns, || {
+            self.push_event_note(time_ns, || {
                 let detail = bytes
                     .iter()
                     .map(|byte| format!("{byte:02X}"))
@@ -500,7 +507,7 @@ impl Ds18b20 {
                     .join(" ");
                 WaveEventNote::with_detail(
                     time_ns,
-                    TRACK_EVENT_ONEWIRE,
+                    EventTrack::Onewire.track_id(),
                     format!("TX {} bytes", bytes.len()),
                     detail,
                 )
@@ -530,10 +537,10 @@ impl Ds18b20 {
         if self.convert_busy_until.is_none() {
             let done_at = time_ns.saturating_add(self.conversion_time_ns());
             self.convert_busy_until = Some(done_at);
-            self.push_wave_event(time_ns, || {
+            self.push_event_note(time_ns, || {
                 WaveEventNote::with_detail(
                     time_ns,
-                    TRACK_EVENT_ONEWIRE,
+                    EventTrack::Onewire.track_id(),
                     "CONVERT T",
                     format!("done_at={done_at}ns"),
                 )
@@ -541,14 +548,15 @@ impl Ds18b20 {
         }
     }
 
-    fn push_wave_event<F>(&mut self, time_ns: u64, build: F)
+    fn push_event_note<F>(&mut self, time_ns: u64, build: F)
     where
         F: FnOnce() -> WaveEventNote,
     {
-        if self.wave_window.includes(time_ns)
-            && let Some(events) = self.wave_events.as_mut()
+        if self
+            .event_gate
+            .need_direct_event(EventTrack::Onewire, time_ns)
         {
-            events.push(build());
+            self.event_notes.push(build());
         }
     }
 
@@ -808,7 +816,7 @@ mod tests {
         harness.reset();
         harness.write_byte(0x33);
 
-        assert!(harness.dev.take_wave_events().is_empty());
+        assert!(harness.dev.take_event_notes().is_empty());
     }
 
     #[test]

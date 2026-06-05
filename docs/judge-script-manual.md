@@ -209,6 +209,8 @@ add_marker(25_000_000, "sample_point");
 
 `run_to_event(track, timeout_ns)` 则会额外增加超时限制.
 
+`run_to_event(...)` 的职责也应当保持轻量, 只负责等待某类事件真正发生, 不要把复杂语义塞进等待条件里. 更推荐的写法是: 先等事件出现, 再立刻读取当前状态并做普通断言. 这样如果固件显示错了, 你能直接看到错误现场, 而不是只拿到一个超时.
+
 常见 track 例子:
 
 - `event.cpu`
@@ -218,7 +220,14 @@ add_marker(25_000_000, "sample_point");
 - `event.uart2`
 - `event.adc_dac`
 - `event.ds1302`
+- `event.seg.change`
+- `event.seg.d1.change` 到 `event.seg.d8.change`
 - `uart1`, `uart2`, `rtc` 这类简写也可以
+- `seg.change`, `seg.d1.change` 到 `seg.d8.change` 这类简写也可以
+
+其中 `seg.change` 表示整屏数码管状态发生了一次有效变化, `seg.dN.change` 表示第 `N` 位数码管状态发生了一次有效变化. 这里的 "有效变化" 是按底层段码和可见状态判断的, 不是按 `display_text()` 提取后的字符串判断. 因此同样的扫描刷新不会重复触发, 只有这一位的 `seen` / `segments` 真正变化时才会产生事件.
+
+对于扫描显示或闪烁字段, 推荐优先用 `run_to_event("seg.change", ...)` 或 `run_to_event("seg.dN.change", ...)` 抓到显示刚刚变化的那个时刻, 然后立刻读取 `display_text()`, `seg.dN.text`, `seg.dN.raw` 等状态做断言. 不要把它写成 "一直等到某个完整字符串出现" 的等待器.
 
 回调应当返回布尔值. 在 judge 编写约定里, `run_to(predicate)` 只适合最基础的条件判断, 可以把它理解成一个轻量轮询器, 而不是通用断言容器. 常见写法例如:
 

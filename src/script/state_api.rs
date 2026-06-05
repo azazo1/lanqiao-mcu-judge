@@ -4,8 +4,8 @@ use rhai::{Engine, EvalAltResult, ImmutableString, Map};
 
 use crate::{
     chip::{ObservedEvent, Simulator},
+    event::track::EventTrack,
     script::{
-        event_track::EventTrack,
         run_target::RunToTarget,
         state_target::{BoolStateTarget, IntStateTarget, TextStateTarget},
     },
@@ -317,5 +317,38 @@ mod tests {
             assert_in(event.elapsed_ns, 0..=20_000_000, "UART1 事件应在超时内出现");
         "#;
         eval_source(sim, "test:run_to_event_tracks", script).expect("run event script");
+    }
+
+    #[test]
+    fn rhai_run_to_event_supports_seg_change_tracks() {
+        let sim = Simulator::from_hex_path_with_options(
+            &sample_hex_path("key_seg"),
+            false,
+            WaveCaptureOptions::default(),
+        )
+        .expect("load key_seg sample");
+        let script = r#"
+            run_ms(220);
+
+            // S4: 按下后最低位应从 0 切到 1, 这里先等整屏有效变化事件.
+            set_key(S4, true);
+            let seg_event = run_to_event("seg.change", 200_000_000);
+            assert_eq(seg_event.track, "event.seg.change", "seg.change 应返回规范轨道 id");
+            assert_eq(seg_event.label, "CHANGE", "整屏变化事件标签");
+            assert_in(seg_event.elapsed_ns, 0..=200_000_000, "整屏变化事件应在超时内出现");
+
+            // S4: 释放后最低位应从 1 回到 0, 这里验证按位变化轨也能直接等待.
+            set_key(S4, false);
+            let digit_event = run_to_event("event.seg.d8.change", 200_000_000);
+            assert_eq(
+                digit_event.track,
+                "event.seg.d8.change",
+                "seg.d8.change 应返回规范轨道 id"
+            );
+            assert_eq(digit_event.label, "D8 change", "D8 变化事件标签");
+            assert_in(digit_event.elapsed_ns, 0..=200_000_000, "D8 变化事件应在超时内出现");
+        "#;
+        eval_source(sim, "test:run_to_event_seg_change_tracks", script)
+            .expect("run seg change event script");
     }
 }
