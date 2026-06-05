@@ -5,3 +5,4 @@
 /sample/*/prj/*.uvgui.*
 /outputs/
 /profile.json.gz
+/sample/*.zip
