@@ -14,6 +14,7 @@ pub(crate) const NS_PER_MILLISECOND: u64 = 1_000_000;
 pub(crate) const NS_PER_MICROSECOND: u64 = 1_000;
 const BOARD_POWER_ON_LATCHES: [u8; 4] = [0x00, 0x70, 0x00, 0x00];
 const INTERRUPT_ENTRY_TICKS: u32 = 3;
+const UART_INTERRUPT_REASSERT_INSTRUCTIONS: u8 = 2;
 const WAVE_KEY_ORDER: [KeyId; 16] = [
     KeyId::S4,
     KeyId::S5,
@@ -61,6 +62,7 @@ pub struct Simulator {
     code_image: Vec<u8>,
     trace_cpu: bool,
     interrupt_poll_blocked_instructions: u8,
+    active_interrupts: Vec<InterruptSource>,
     seg_decoder: SegmentDecoder,
     wave: WaveRecorder,
 }
@@ -85,6 +87,7 @@ enum InterruptSource {
     External1,
     Timer1,
     Serial,
+    Serial2,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -100,9 +103,32 @@ impl PendingInterrupt {
             InterruptSource::Timer0 => CpuInterrupt::Timer0,
             InterruptSource::External1 => CpuInterrupt::External1,
             InterruptSource::Timer1 => CpuInterrupt::Timer1,
-            InterruptSource::Serial => CpuInterrupt::Serial,
+            InterruptSource::Serial | InterruptSource::Serial2 => CpuInterrupt::Serial,
         }
     }
+
+    fn vector_addr(self) -> Option<u16> {
+        match self.source {
+            InterruptSource::Serial2 => Some(0x0043),
+            _ => None,
+        }
+    }
+}
+
+fn enter_cpu_interrupt(cpu: &mut Cpu, pending: PendingInterrupt) -> bool {
+    if !matches!(pending.source, InterruptSource::Serial2) {
+        return cpu.interrupt(pending.cpu_interrupt());
+    }
+
+    let ie = cpu.register(Register::IE) as u8;
+    if ie & IE_ES != 0 {
+        return cpu.interrupt(CpuInterrupt::Serial);
+    }
+
+    cpu.register_set(Register::IE, u16::from(ie | IE_ES));
+    let entered = cpu.interrupt(CpuInterrupt::Serial);
+    cpu.register_set(Register::IE, u16::from(ie));
+    entered
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -161,6 +187,7 @@ impl Simulator {
             code_image: code,
             trace_cpu,
             interrupt_poll_blocked_instructions: 0,
+            active_interrupts: Vec::new(),
             seg_decoder: SegmentDecoder::default(),
             wave: WaveRecorder::new(wave_options),
         };
@@ -218,6 +245,7 @@ impl Simulator {
         let xdata_latches = LatchedBoardState::from_xdata(&self.ctx.xdata);
         self.cpu = Cpu::new();
         self.interrupt_poll_blocked_instructions = 0;
+        self.active_interrupts.clear();
         self.ctx =
             MachineContext::new_with_wave_window(self.code_image.clone(), self.wave.window());
         self.ctx.board = board;
@@ -232,6 +260,7 @@ impl Simulator {
         let retained = self.ctx.board.retained_state();
         self.cpu = Cpu::new();
         self.interrupt_poll_blocked_instructions = 0;
+        self.active_interrupts.clear();
         self.ctx =
             MachineContext::new_with_wave_window(self.code_image.clone(), self.wave.window());
         self.ctx.board.load_retained_state(&retained);
@@ -444,13 +473,72 @@ impl Simulator {
         self.ctx.board.at24c02.byte(addr)
     }
 
-    pub fn uart_write(&mut self, bytes: &[u8]) {
-        self.ctx.ports.uart1.feed_rx(bytes);
+    pub fn configure_uart1(&mut self, config: UartConfig) -> Result<()> {
+        self.ctx.ports.uart1.configure(config)?;
         self.capture_control_snapshot();
+        Ok(())
     }
 
-    pub fn uart_take_string(&mut self) -> String {
+    pub fn configure_uart2(&mut self, config: UartConfig) -> Result<()> {
+        self.ctx.ports.uart2.configure(config)?;
+        self.capture_control_snapshot();
+        Ok(())
+    }
+
+    pub fn uart1_write(&mut self, bytes: &[u8]) -> Result<()> {
+        self.ctx.ports.uart1.feed_rx_bytes(bytes)?;
+        self.capture_control_snapshot();
+        Ok(())
+    }
+
+    pub fn uart2_write(&mut self, bytes: &[u8]) -> Result<()> {
+        self.ctx.ports.uart2.feed_rx_bytes(bytes)?;
+        self.capture_control_snapshot();
+        Ok(())
+    }
+
+    pub fn uart_write(&mut self, bytes: &[u8]) -> Result<()> {
+        self.uart1_write(bytes)
+    }
+
+    pub fn uart1_write_raw(&mut self, symbols: &[u16]) -> Result<()> {
+        self.ctx.ports.uart1.feed_rx_raw(symbols)?;
+        self.capture_control_snapshot();
+        Ok(())
+    }
+
+    pub fn uart2_write_raw(&mut self, symbols: &[u16]) -> Result<()> {
+        self.ctx.ports.uart2.feed_rx_raw(symbols)?;
+        self.capture_control_snapshot();
+        Ok(())
+    }
+
+    pub fn uart_write_raw(&mut self, symbols: &[u16]) -> Result<()> {
+        self.uart1_write_raw(symbols)
+    }
+
+    pub fn uart1_take_string(&mut self) -> Result<String> {
         self.ctx.ports.uart1.take_tx_string()
+    }
+
+    pub fn uart2_take_string(&mut self) -> Result<String> {
+        self.ctx.ports.uart2.take_tx_string()
+    }
+
+    pub fn uart_take_string(&mut self) -> Result<String> {
+        self.uart1_take_string()
+    }
+
+    pub fn uart1_take_raw(&mut self) -> Vec<u16> {
+        self.ctx.ports.uart1.take_tx_raw()
+    }
+
+    pub fn uart2_take_raw(&mut self) -> Vec<u16> {
+        self.ctx.ports.uart2.take_tx_raw()
+    }
+
+    pub fn uart_take_raw(&mut self) -> Vec<u16> {
+        self.uart1_take_raw()
     }
 
     pub fn relay_on(&self) -> bool {
@@ -770,15 +858,18 @@ impl Simulator {
             let instruction = self.cpu.decode_pc(&self.ctx);
             trace!("{instruction:#}");
         }
-        if interrupt_poll_blocked {
+        {
             let mut ctx = InterruptPollMaskContext::new(&mut self.ctx);
             let _ = self.cpu.step(&mut ctx);
-            self.interrupt_poll_blocked_instructions -= 1;
-        } else {
-            let _ = self.cpu.step(&mut self.ctx);
+            if interrupt_poll_blocked {
+                self.interrupt_poll_blocked_instructions -= 1;
+            }
         }
         if opcode == 0x32 {
             self.interrupt_poll_blocked_instructions = 1;
+            self.handle_reti();
+        } else {
+            self.advance_uart_interrupt_reasserts();
         }
         self.tick_devices(ticks)
     }
@@ -787,8 +878,13 @@ impl Simulator {
         let Some(pending) = self.pending_interrupt() else {
             return Ok(false);
         };
-        if !self.cpu.interrupt(pending.cpu_interrupt()) {
+        if !enter_cpu_interrupt(&mut self.cpu, pending) {
             return Ok(false);
+        }
+        self.ack_interrupt_source(pending.source);
+        self.active_interrupts.push(pending.source);
+        if let Some(vector_addr) = pending.vector_addr() {
+            self.cpu.pc = vector_addr;
         }
         self.note_interrupt_event(pending);
         if pending.tcon_clear_mask != 0 {
@@ -813,8 +909,11 @@ impl Simulator {
         }
 
         let ip = self.cpu.register(Register::IP) as u8;
+        let ie2 = self.cpu.sfr(SFR_IE2, &self.ctx);
+        let ip2 = self.cpu.sfr(SFR_IP2, &self.ctx);
         let tcon = self.cpu.sfr(SFR_TCON, &self.ctx);
         let scon = self.cpu.sfr(SFR_SCON, &self.ctx);
+        let s2con = self.cpu.sfr(SFR_S2CON, &self.ctx);
         let p3 = self.cpu.sfr(SFR_P3, &self.ctx);
 
         for high_priority in [true, false] {
@@ -839,17 +938,34 @@ impl Simulator {
                     source: InterruptSource::Serial,
                     tcon_clear_mask: 0,
                 },
+                PendingInterrupt {
+                    source: InterruptSource::Serial2,
+                    tcon_clear_mask: 0,
+                },
             ] {
                 let (enable_mask, pending, priority_high) = match candidate.source {
                     InterruptSource::External0 => (IE_EX0, p3 & P3_INT0 == 0, ip & IE_EX0 != 0),
                     InterruptSource::Timer0 => (IE_ET0, tcon & TCON_TF0 != 0, ip & IE_ET0 != 0),
                     InterruptSource::External1 => (IE_EX1, p3 & P3_INT1 == 0, ip & IE_EX1 != 0),
                     InterruptSource::Timer1 => (IE_ET1, tcon & TCON_TF1 != 0, ip & IE_ET1 != 0),
-                    InterruptSource::Serial => {
-                        (IE_ES, scon & (SCON_RI | SCON_TI) != 0, ip & IE_ES != 0)
-                    }
+                    InterruptSource::Serial => (
+                        IE_ES,
+                        self.ctx.ports.uart1.interrupt_requested()
+                            && scon & (SCON_RI | SCON_TI) != 0,
+                        ip & IE_ES != 0,
+                    ),
+                    InterruptSource::Serial2 => (
+                        IE2_ES2,
+                        self.ctx.ports.uart2.interrupt_requested()
+                            && s2con & (S2CON_RI | S2CON_TI) != 0,
+                        ip2 & IP2_PS2 != 0,
+                    ),
                 };
-                if ie & enable_mask == 0 || !pending || priority_high != high_priority {
+                let enabled = match candidate.source {
+                    InterruptSource::Serial2 => ie2 & enable_mask != 0,
+                    _ => ie & enable_mask != 0,
+                };
+                if !enabled || !pending || priority_high != high_priority {
                     continue;
                 }
                 return Some(candidate);
@@ -878,13 +994,7 @@ impl Simulator {
             .tick_ultrasonic(&mut self.ctx.board, elapsed_ns);
         self.ctx.ports.tick_pca(system_cycles)?;
         self.ctx.ports.uart1.tick_ns(start_time_ns, elapsed_ns);
-        let responses = self.ctx.ports.uart2.tick_ns(start_time_ns, elapsed_ns);
-        for response in responses {
-            self.ctx.board.ultrasonic.push_response(response);
-        }
-        if let Some(response) = self.ctx.board.ultrasonic.pop_response() {
-            self.ctx.ports.uart2.feed_rx(&[response]);
-        }
+        self.ctx.ports.uart2.tick_ns(start_time_ns, elapsed_ns);
         let board_latches = self.ctx.effective_board_latches();
         let board_latch_versions = self.ctx.effective_board_latch_versions();
         self.ctx
@@ -894,6 +1004,44 @@ impl Simulator {
         self.capture_wave_snapshot();
         self.drain_wave_events();
         Ok(())
+    }
+
+    fn ack_interrupt_source(&mut self, source: InterruptSource) {
+        match source {
+            InterruptSource::Serial => self.ctx.ports.uart1.ack_interrupt(),
+            InterruptSource::Serial2 => self.ctx.ports.uart2.ack_interrupt(),
+            InterruptSource::External0
+            | InterruptSource::Timer0
+            | InterruptSource::External1
+            | InterruptSource::Timer1 => {}
+        }
+    }
+
+    fn handle_reti(&mut self) {
+        match self.active_interrupts.pop() {
+            Some(InterruptSource::Serial) => self
+                .ctx
+                .ports
+                .uart1
+                .arm_interrupt_reassert(UART_INTERRUPT_REASSERT_INSTRUCTIONS),
+            Some(InterruptSource::Serial2) => self
+                .ctx
+                .ports
+                .uart2
+                .arm_interrupt_reassert(UART_INTERRUPT_REASSERT_INSTRUCTIONS),
+            Some(
+                InterruptSource::External0
+                | InterruptSource::Timer0
+                | InterruptSource::External1
+                | InterruptSource::Timer1,
+            )
+            | None => {}
+        }
+    }
+
+    fn advance_uart_interrupt_reasserts(&mut self) {
+        self.ctx.ports.uart1.advance_interrupt_reassert();
+        self.ctx.ports.uart2.advance_interrupt_reassert();
     }
 
     fn current_opcode(&self) -> u8 {
@@ -1032,6 +1180,7 @@ impl Simulator {
             InterruptSource::External1 => "INT1 enter",
             InterruptSource::Timer1 => "T1 enter",
             InterruptSource::Serial => "UART enter",
+            InterruptSource::Serial2 => "UART2 enter",
         };
         let note = WaveEventNote::with_detail(
             time_ns,
@@ -1069,18 +1218,16 @@ fn approximate_instruction_ticks(op: u8) -> u32 {
     }
 }
 
-fn uart_frame_ns(baud_rate: u32) -> u64 {
-    ((NS_PER_SECOND as f64 * 10.0) / f64::from(baud_rate))
-        .round()
-        .clamp(1.0, u64::MAX as f64) as u64
+fn uart_event_char(symbol: u16) -> Option<String> {
+    let byte = u8::try_from(symbol).ok()?;
+    Some(std::ascii::escape_default(byte).map(char::from).collect())
 }
 
-fn uart_event_char(byte: u8) -> String {
-    std::ascii::escape_default(byte).map(char::from).collect()
-}
-
-fn uart_event_label(direction: &str, byte: u8) -> String {
-    format!("{direction} 0x{byte:02X} '{}'", uart_event_char(byte))
+fn uart_event_label(direction: &str, symbol: u16) -> String {
+    match uart_event_char(symbol) {
+        Some(ch) => format!("{direction} 0x{symbol:02X} '{ch}'"),
+        None => format!("{direction} 0x{symbol:03X}"),
+    }
 }
 
 struct MachineContext {
@@ -1351,18 +1498,8 @@ impl MachinePorts {
             board_latch_versions: [0; 4],
             latch_used: false,
             timers: TimerBlock::default(),
-            uart1: Uart::new(
-                UART1_SFR_SCON,
-                UART1_SFR_SBUF,
-                uart_frame_ns(9_600),
-                wave_window,
-            ),
-            uart2: Uart::new(
-                UART2_SFR_S2CON,
-                UART2_SFR_S2BUF,
-                uart_frame_ns(9_600),
-                wave_window,
-            ),
+            uart1: Uart::new(UART1_SFR_SCON, UART1_SFR_SBUF, wave_window),
+            uart2: Uart::new(UART2_SFR_S2CON, UART2_SFR_S2BUF, wave_window),
         }
     }
 
@@ -1495,6 +1632,11 @@ impl PortMapper for MachinePorts {
         if let Some(index) = Self::port_index(addr) {
             return self.port_latch[index];
         }
+        match addr {
+            UART1_SFR_SCON | UART1_SFR_SBUF => return self.uart1.read(addr),
+            UART2_SFR_S2CON | UART2_SFR_S2BUF => return self.uart2.read(addr),
+            _ => {}
+        }
         if TimerBlock::handles(addr) {
             return self.timers.read(&self.generic, addr).unwrap_or(0);
         }
@@ -1609,6 +1751,7 @@ impl PortMapper for InterruptPollMaskPorts<'_> {
         }
         match addr {
             SFR_SCON => value & !(SCON_RI | SCON_TI),
+            SFR_S2CON => value & !(S2CON_RI | S2CON_TI),
             SFR_TCON => value & !(TCON_TF0 | TCON_TF1),
             SFR_P3 => value | P3_INT0 | P3_INT1,
             _ => value,
@@ -1668,42 +1811,173 @@ impl ReadOnlyMemoryMapper for InterruptPollMaskCode<'_> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UartParity {
+    None,
+    Odd,
+    Even,
+    Mark,
+    Space,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UartStopBits {
+    One,
+    OnePointFive,
+    Two,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct UartConfig {
+    pub(crate) data_bits: u8,
+    pub(crate) baud_rate: u32,
+    pub(crate) stop_bits: UartStopBits,
+    pub(crate) parity: UartParity,
+}
+
+impl Default for UartConfig {
+    fn default() -> Self {
+        Self {
+            data_bits: 8,
+            baud_rate: 9_600,
+            stop_bits: UartStopBits::One,
+            parity: UartParity::None,
+        }
+    }
+}
+
+impl UartConfig {
+    pub(crate) fn validate(self) -> Result<()> {
+        if !(5..=9).contains(&self.data_bits) {
+            bail!("串口数据位只支持 5..=9");
+        }
+        if self.baud_rate == 0 {
+            bail!("串口波特率必须 > 0");
+        }
+        Ok(())
+    }
+
+    fn bit_ns(self) -> u64 {
+        ((NS_PER_SECOND as f64) / f64::from(self.baud_rate))
+            .round()
+            .clamp(1.0, u64::MAX as f64) as u64
+    }
+
+    fn stop_ns(self) -> u64 {
+        let bit_ns = self.bit_ns();
+        match self.stop_bits {
+            UartStopBits::One => bit_ns,
+            UartStopBits::OnePointFive => {
+                ((bit_ns as f64) * 1.5).round().clamp(1.0, u64::MAX as f64) as u64
+            }
+            UartStopBits::Two => bit_ns.saturating_mul(2),
+        }
+    }
+
+    fn max_symbol(self) -> u16 {
+        if self.data_bits >= 16 {
+            u16::MAX
+        } else {
+            (1_u16 << self.data_bits) - 1
+        }
+    }
+
+    fn validate_symbol(self, symbol: u16) -> Result<()> {
+        let max_symbol = self.max_symbol();
+        if symbol > max_symbol {
+            bail!(
+                "串口符号 0x{symbol:X} 超出当前数据位宽, data_bits={}, max=0x{max_symbol:X}",
+                self.data_bits
+            );
+        }
+        Ok(())
+    }
+
+    fn parity_bit(self, symbol: u16) -> Option<bool> {
+        match self.parity {
+            UartParity::None => None,
+            UartParity::Mark => Some(true),
+            UartParity::Space => Some(false),
+            UartParity::Odd | UartParity::Even => {
+                let ones = (0..self.data_bits)
+                    .filter(|bit| symbol & (1_u16 << bit) != 0)
+                    .count();
+                let data_is_odd = ones % 2 == 1;
+                Some(match self.parity {
+                    UartParity::Odd => !data_is_odd,
+                    UartParity::Even => data_is_odd,
+                    UartParity::None | UartParity::Mark | UartParity::Space => unreachable!(),
+                })
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct UartFrameSegment {
+    level: bool,
+    duration_ns: u64,
+}
+
 #[derive(Debug)]
 struct UartFrame {
-    byte: u8,
-    bit_index: u8,
-    bit_remaining_ns: u64,
+    symbol: u16,
+    segments: Vec<UartFrameSegment>,
+    segment_index: usize,
+    segment_remaining_ns: u64,
 }
 
 impl UartFrame {
-    fn new(byte: u8, bit_ns: u64) -> Self {
+    fn new(symbol: u16, config: UartConfig) -> Self {
+        let bit_ns = config.bit_ns();
+        let mut segments = Vec::with_capacity(1 + usize::from(config.data_bits) + 2);
+        segments.push(UartFrameSegment {
+            level: false,
+            duration_ns: bit_ns,
+        });
+        for bit in 0..config.data_bits {
+            segments.push(UartFrameSegment {
+                level: symbol & (1_u16 << bit) != 0,
+                duration_ns: bit_ns,
+            });
+        }
+        if let Some(parity_bit) = config.parity_bit(symbol) {
+            segments.push(UartFrameSegment {
+                level: parity_bit,
+                duration_ns: bit_ns,
+            });
+        }
+        segments.push(UartFrameSegment {
+            level: true,
+            duration_ns: config.stop_ns(),
+        });
+
         Self {
-            byte,
-            bit_index: 0,
-            bit_remaining_ns: bit_ns,
+            symbol,
+            segment_remaining_ns: segments[0].duration_ns,
+            segments,
+            segment_index: 0,
         }
     }
 
     fn current_level(&self) -> bool {
-        match self.bit_index {
-            0 => false,
-            1..=8 => self.byte & (1 << (self.bit_index - 1)) != 0,
-            9 => true,
-            _ => true,
-        }
+        self.segments
+            .get(self.segment_index)
+            .map(|segment| segment.level)
+            .unwrap_or(true)
     }
 
-    fn advance(&mut self, elapsed_ns: u64, bit_ns: u64) -> bool {
+    fn advance(&mut self, elapsed_ns: u64) -> bool {
         let mut remaining = elapsed_ns;
-        while remaining >= self.bit_remaining_ns {
-            remaining -= self.bit_remaining_ns;
-            self.bit_index = self.bit_index.saturating_add(1);
-            if self.bit_index >= 10 {
+        while remaining >= self.segment_remaining_ns {
+            remaining -= self.segment_remaining_ns;
+            self.segment_index = self.segment_index.saturating_add(1);
+            if self.segment_index >= self.segments.len() {
                 return true;
             }
-            self.bit_remaining_ns = bit_ns;
+            self.segment_remaining_ns = self.segments[self.segment_index].duration_ns;
         }
-        self.bit_remaining_ns -= remaining;
+        self.segment_remaining_ns -= remaining;
         false
     }
 }
@@ -1713,13 +1987,15 @@ struct Uart {
     scon_addr: u8,
     sbuf_addr: u8,
     control: u8,
+    interrupt_requested: bool,
+    interrupt_reassert_countdown: Option<u8>,
     rx_sbuf: u8,
-    tx_queue: VecDeque<u8>,
-    tx_pending: VecDeque<u8>,
-    rx_queue: VecDeque<u8>,
+    tx_queue: VecDeque<u16>,
+    tx_pending: VecDeque<u16>,
+    rx_queue: VecDeque<u16>,
     tx_frame: Option<UartFrame>,
     rx_frame: Option<UartFrame>,
-    bit_ns: u64,
+    config: UartConfig,
     tx_line_high: bool,
     rx_line_high: bool,
     wave_window: WaveCaptureWindow,
@@ -1727,18 +2003,20 @@ struct Uart {
 }
 
 impl Uart {
-    fn new(scon_addr: u8, sbuf_addr: u8, frame_ns: u64, wave_window: WaveCaptureWindow) -> Self {
+    fn new(scon_addr: u8, sbuf_addr: u8, wave_window: WaveCaptureWindow) -> Self {
         Self {
             scon_addr,
             sbuf_addr,
             control: 0,
+            interrupt_requested: false,
+            interrupt_reassert_countdown: None,
             rx_sbuf: 0,
             tx_queue: VecDeque::new(),
             tx_pending: VecDeque::new(),
             rx_queue: VecDeque::new(),
             tx_frame: None,
             rx_frame: None,
-            bit_ns: (frame_ns / 10).max(1),
+            config: UartConfig::default(),
             tx_line_high: true,
             rx_line_high: true,
             wave_window,
@@ -1756,20 +2034,28 @@ impl Uart {
 
     fn write(&mut self, addr: u8, value: u8) {
         if addr == self.scon_addr {
+            let old_control = self.control;
             self.control = value;
+            self.note_interrupt_flag_edges(old_control, self.control);
         } else if addr == self.sbuf_addr {
-            self.tx_pending.push_back(value);
+            let ninth_bit = if self.config.data_bits >= 9 && self.tb8_set() {
+                1_u16 << 8
+            } else {
+                0
+            };
+            self.tx_pending.push_back(u16::from(value) | ninth_bit);
         }
     }
 
-    fn tick_ns(&mut self, start_time_ns: u64, elapsed_ns: u64) -> Vec<u8> {
+    fn tick_ns(&mut self, start_time_ns: u64, elapsed_ns: u64) -> Vec<u16> {
         let mut sent = Vec::new();
 
         if self.tx_frame.is_none()
-            && let Some(byte) = self.tx_pending.pop_front()
+            && let Some(symbol) = self.tx_pending.pop_front()
         {
-            self.tx_frame = Some(UartFrame::new(byte, self.bit_ns));
+            self.tx_frame = Some(UartFrame::new(symbol, self.config));
             self.tx_line_high = false;
+            let data_bits = self.config.data_bits;
             let track_id = if self.scon_addr == UART2_SFR_S2CON {
                 crate::wave::TRACK_EVENT_UART2
             } else {
@@ -1779,34 +2065,37 @@ impl Uart {
                 WaveEventNote::with_detail(
                     start_time_ns,
                     track_id,
-                    uart_event_label("TX", byte),
-                    format!("char='{}'", uart_event_char(byte)),
+                    uart_event_label("TX", symbol),
+                    format!("bits={data_bits}"),
                 )
             });
         }
 
         if let Some(frame) = self.tx_frame.as_mut() {
-            if frame.advance(elapsed_ns, self.bit_ns) {
-                let byte = frame.byte;
+            if frame.advance(elapsed_ns) {
+                let symbol = frame.symbol;
                 self.tx_frame = None;
                 self.tx_line_high = true;
+                let old_control = self.control;
                 self.control |= if self.scon_addr == UART2_SFR_S2CON {
                     S2CON_TI
                 } else {
                     SCON_TI
                 };
-                self.tx_queue.push_back(byte);
-                sent.push(byte);
+                self.note_interrupt_flag_edges(old_control, self.control);
+                self.tx_queue.push_back(symbol);
+                sent.push(symbol);
             } else {
                 self.tx_line_high = frame.current_level();
             }
         }
 
         if self.rx_frame.is_none()
-            && let Some(byte) = self.rx_queue.pop_front()
+            && let Some(symbol) = self.rx_queue.pop_front()
         {
-            self.rx_frame = Some(UartFrame::new(byte, self.bit_ns));
+            self.rx_frame = Some(UartFrame::new(symbol, self.config));
             self.rx_line_high = false;
+            let data_bits = self.config.data_bits;
             let track_id = if self.scon_addr == UART2_SFR_S2CON {
                 crate::wave::TRACK_EVENT_UART2
             } else {
@@ -1816,15 +2105,15 @@ impl Uart {
                 WaveEventNote::with_detail(
                     start_time_ns,
                     track_id,
-                    uart_event_label("RX", byte),
-                    format!("char='{}'", uart_event_char(byte)),
+                    uart_event_label("RX", symbol),
+                    format!("bits={data_bits}"),
                 )
             });
         }
 
         if let Some(frame) = self.rx_frame.as_mut() {
-            if frame.advance(elapsed_ns, self.bit_ns) {
-                let byte = frame.byte;
+            if frame.advance(elapsed_ns) {
+                let symbol = frame.symbol;
                 self.rx_frame = None;
                 self.rx_line_high = true;
                 let ren_flag = if self.scon_addr == UART2_SFR_S2CON {
@@ -1838,8 +2127,11 @@ impl Uart {
                     SCON_RI
                 };
                 if self.control & ren_flag != 0 {
-                    self.rx_sbuf = byte;
+                    let old_control = self.control;
+                    self.rx_sbuf = symbol as u8;
+                    self.set_rb8(symbol & (1_u16 << 8) != 0);
                     self.control |= ri_flag;
+                    self.note_interrupt_flag_edges(old_control, self.control);
                 }
             } else {
                 self.rx_line_high = frame.current_level();
@@ -1849,8 +2141,23 @@ impl Uart {
         sent
     }
 
-    fn feed_rx(&mut self, bytes: &[u8]) {
-        self.rx_queue.extend(bytes.iter().copied());
+    fn configure(&mut self, config: UartConfig) -> Result<()> {
+        config.validate()?;
+        self.config = config;
+        Ok(())
+    }
+
+    fn feed_rx_bytes(&mut self, bytes: &[u8]) -> Result<()> {
+        let symbols = bytes.iter().copied().map(u16::from).collect::<Vec<_>>();
+        self.feed_rx_raw(&symbols)
+    }
+
+    fn feed_rx_raw(&mut self, symbols: &[u16]) -> Result<()> {
+        for symbol in symbols {
+            self.config.validate_symbol(*symbol)?;
+        }
+        self.rx_queue.extend(symbols.iter().copied());
+        Ok(())
     }
 
     fn take_wave_events(&mut self) -> Vec<WaveEventNote> {
@@ -1888,13 +2195,40 @@ impl Uart {
             != 0
     }
 
-    fn take_tx_string(&mut self) -> String {
-        let bytes = self.tx_queue.drain(..).collect::<Vec<_>>();
-        String::from_utf8_lossy(&bytes).into_owned()
+    fn take_tx_string(&mut self) -> Result<String> {
+        let symbols = self.tx_queue.drain(..).collect::<Vec<_>>();
+        let mut bytes = Vec::with_capacity(symbols.len());
+        for symbol in symbols {
+            let byte = u8::try_from(symbol).map_err(|_| {
+                anyhow::anyhow!("当前串口包含超过 8 位的数据, 请改用 uart*_take_raw()")
+            })?;
+            bytes.push(byte);
+        }
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    fn take_tx_raw(&mut self) -> Vec<u16> {
+        self.tx_queue.drain(..).collect()
     }
 
     fn tx_text(&self) -> String {
-        String::from_utf8_lossy(self.tx_queue.as_slices().0).into_owned()
+        if self
+            .tx_queue
+            .iter()
+            .all(|symbol| *symbol <= u16::from(u8::MAX))
+        {
+            let bytes = self
+                .tx_queue
+                .iter()
+                .map(|symbol| *symbol as u8)
+                .collect::<Vec<_>>();
+            return String::from_utf8_lossy(&bytes).into_owned();
+        }
+        self.tx_queue
+            .iter()
+            .map(|symbol| format!("0x{symbol:X}"))
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     fn push_wave_event<F>(&mut self, time_ns: u64, build: F)
@@ -1905,6 +2239,85 @@ impl Uart {
             && let Some(events) = self.wave_events.as_mut()
         {
             events.push(build());
+        }
+    }
+
+    fn tb8_set(&self) -> bool {
+        self.control
+            & if self.scon_addr == UART2_SFR_S2CON {
+                S2CON_TB8
+            } else {
+                SCON_TB8
+            }
+            != 0
+    }
+
+    fn irq_mask(&self) -> u8 {
+        if self.scon_addr == UART2_SFR_S2CON {
+            S2CON_RI | S2CON_TI
+        } else {
+            SCON_RI | SCON_TI
+        }
+    }
+
+    fn irq_flags_high(&self) -> bool {
+        self.control & self.irq_mask() != 0
+    }
+
+    fn set_rb8(&mut self, high: bool) {
+        let rb8_flag = if self.scon_addr == UART2_SFR_S2CON {
+            S2CON_RB8
+        } else {
+            SCON_RB8
+        };
+        if high {
+            self.control |= rb8_flag;
+        } else {
+            self.control &= !rb8_flag;
+        }
+    }
+
+    fn interrupt_requested(&self) -> bool {
+        self.interrupt_requested
+    }
+
+    fn ack_interrupt(&mut self) {
+        self.interrupt_requested = false;
+        self.interrupt_reassert_countdown = None;
+    }
+
+    fn arm_interrupt_reassert(&mut self, instructions: u8) {
+        if instructions == 0 || !self.irq_flags_high() || self.interrupt_requested {
+            self.interrupt_reassert_countdown = None;
+            return;
+        }
+        self.interrupt_reassert_countdown = Some(instructions);
+    }
+
+    fn advance_interrupt_reassert(&mut self) {
+        let Some(remaining) = self.interrupt_reassert_countdown else {
+            return;
+        };
+        if remaining > 1 {
+            self.interrupt_reassert_countdown = Some(remaining - 1);
+            return;
+        }
+        self.interrupt_reassert_countdown = None;
+        if self.irq_flags_high() && !self.interrupt_requested {
+            self.interrupt_requested = true;
+        }
+    }
+
+    fn note_interrupt_flag_edges(&mut self, old_control: u8, new_control: u8) {
+        let irq_mask = self.irq_mask();
+        let old_flags = old_control & irq_mask;
+        let new_flags = new_control & irq_mask;
+        if new_flags == 0 {
+            self.interrupt_reassert_countdown = None;
+        }
+        if new_flags & !old_flags != 0 {
+            self.interrupt_requested = true;
+            self.interrupt_reassert_countdown = None;
         }
     }
 }
@@ -2511,6 +2924,7 @@ mod tests {
             code_image: code,
             trace_cpu: false,
             interrupt_poll_blocked_instructions: 0,
+            active_interrupts: Vec::new(),
             seg_decoder: super::SegmentDecoder::default(),
             wave: crate::wave::WaveRecorder::new(crate::wave::WaveCaptureOptions::default()),
         };
@@ -2543,20 +2957,18 @@ mod tests {
     }
 
     #[test]
-    fn reti_allows_one_main_instruction_before_reentering_serial_interrupt() {
+    fn serial_interrupt_does_not_reassert_before_ti_can_clear() {
         let mut code = vec![0x00; 0x24];
         code[0x00] = 0x75;
         code[0x01] = 0xA8;
         code[0x02] = super::IE_EA | super::IE_ES;
         code[0x03] = 0xD2;
         code[0x04] = 0x99;
-        code[0x05] = 0x10;
-        code[0x06] = 0x99;
-        code[0x07] = 0x02;
+        code[0x05] = 0x00;
+        code[0x06] = 0xC2;
+        code[0x07] = 0x99;
         code[0x08] = 0x80;
-        code[0x09] = 0xFB;
-        code[0x0A] = 0x80;
-        code[0x0B] = 0xFE;
+        code[0x09] = 0xFE;
         code[0x23] = 0x32;
 
         let mut sim = Simulator::from_code_with_options(
@@ -2576,28 +2988,145 @@ mod tests {
         assert_eq!(sim.interrupt_poll_blocked_instructions, 1);
 
         sim.step_once()
-            .expect("run one main instruction before serial reentry");
+            .expect("run first main instruction before serial reentry");
 
-        assert_eq!(sim.cpu.pc, 0x000A);
+        assert_eq!(sim.cpu.pc, 0x0006);
         assert_eq!(sim.interrupt_poll_blocked_instructions, 0);
+
+        sim.step_once()
+            .expect("clear TI before serial interrupt can reassert");
+
+        assert_eq!(sim.cpu.pc, 0x0008);
         assert_eq!(
             sim.cpu.sfr(super::SFR_SCON, &sim.ctx) & super::SCON_TI,
             0,
-            "TI should be cleared by JBC before serial interrupt can reenter"
+            "TI should still be clear before serial interrupt reentry"
         );
+
+        sim.step_once()
+            .expect("same TI level should stay quiet after it clears");
+        assert_eq!(sim.cpu.pc, 0x0008);
     }
 
     #[test]
-    fn uart_sample_can_clear_ti_and_reply_after_rx_interrupt() {
-        let mut sim =
-            Simulator::from_hex_path(&sample_path("sample/uart/prj/Objects/uart.hex"), false)
-                .expect("load uart sample");
+    fn serial_interrupt_reasserts_if_ti_stays_high_for_two_post_reti_instructions() {
+        let mut code = vec![0x00; 0x26];
+        code[0x00] = 0x75;
+        code[0x01] = 0xA8;
+        code[0x02] = super::IE_EA | super::IE_ES;
+        code[0x03] = 0xD2;
+        code[0x04] = 0x99;
+        code[0x05] = 0x00;
+        code[0x06] = 0x00;
+        code[0x07] = 0xC2;
+        code[0x08] = 0x99;
+        code[0x09] = 0x80;
+        code[0x0A] = 0xFE;
+        code[0x23] = 0x05;
+        code[0x24] = 0x30;
+        code[0x25] = 0x32;
 
-        sim.run_ms(220).expect("wait for uart sample to settle");
-        sim.uart_write(b"42");
-        sim.run_ms(220).expect("wait for uart sample reply");
+        let mut sim = Simulator::from_code_with_options(
+            code,
+            false,
+            crate::wave::WaveCaptureOptions::default(),
+        );
 
-        assert_eq!(sim.uart_take_string(), "43");
+        sim.step_once().expect("enable serial interrupt");
+        sim.step_once().expect("set TI pending");
+        sim.step_once().expect("enter serial interrupt");
+        sim.step_once().expect("increment ISR counter");
+        sim.step_once().expect("execute RETI");
+
+        assert_eq!(sim.cpu.pc, 0x0005);
+        assert_eq!(sim.cpu.internal_ram(0x30), 1);
+
+        sim.step_once()
+            .expect("run first post-RETI instruction with TI still high");
+        assert_eq!(sim.cpu.pc, 0x0006);
+
+        sim.step_once()
+            .expect("run second post-RETI instruction before reassert");
+        assert_eq!(sim.cpu.pc, 0x0007);
+
+        sim.step_once()
+            .expect("reenter serial interrupt before TI clears");
+        assert_eq!(sim.cpu.pc, 0x0023);
+
+        sim.step_once().expect("increment ISR counter again");
+        assert_eq!(sim.cpu.internal_ram(0x30), 2);
+    }
+
+    #[test]
+    fn uart2_interrupt_uses_vector_8_and_reasserts_high_ri_after_delay() {
+        let mut code = vec![0x00; 0x44];
+        code[0x00] = 0x75;
+        code[0x01] = 0xA8;
+        code[0x02] = super::IE_EA;
+        code[0x03] = 0x75;
+        code[0x04] = 0xAF;
+        code[0x05] = super::IE2_ES2;
+        code[0x06] = 0x75;
+        code[0x07] = 0x9A;
+        code[0x08] = super::S2CON_RI;
+        code[0x09] = 0x00;
+        code[0x0A] = 0x00;
+        code[0x0B] = 0x80;
+        code[0x0C] = 0xFE;
+        code[0x43] = 0x32;
+
+        let mut sim = Simulator::from_code_with_options(
+            code,
+            false,
+            crate::wave::WaveCaptureOptions::default(),
+        );
+
+        sim.step_once().expect("enable global interrupts");
+        sim.step_once().expect("enable uart2 interrupt");
+        sim.step_once().expect("set uart2 RI pending");
+        sim.step_once().expect("enter uart2 interrupt");
+
+        assert_eq!(sim.cpu.pc, 0x0043);
+
+        sim.step_once().expect("execute uart2 RETI");
+        assert_eq!(sim.cpu.pc, 0x0009);
+        assert_eq!(sim.interrupt_poll_blocked_instructions, 1);
+
+        sim.step_once()
+            .expect("run one main instruction before uart2 reentry");
+
+        assert_eq!(sim.cpu.pc, 0x000A);
+        assert_eq!(sim.interrupt_poll_blocked_instructions, 0);
+        assert_ne!(
+            sim.cpu.pc, 0x0043,
+            "uart2 interrupt should not reenter before one main instruction executes"
+        );
+
+        sim.step_once()
+            .expect("same uart2 RI level should wait for one more instruction");
+        assert_eq!(sim.cpu.pc, 0x000B);
+
+        sim.step_once()
+            .expect("same uart2 RI level should reenter after delayed reassert");
+        assert_eq!(sim.cpu.pc, 0x0043);
+    }
+
+    #[test]
+    fn uart1_default_text_io_echoes_bytes() {
+        let code = vec![
+            0x75, 0x98, 0x10, 0xE5, 0x98, 0x54, 0x01, 0x60, 0xFA, 0xE5, 0x99, 0x53, 0x98, 0xFE,
+            0xF5, 0x99, 0x80, 0xF1,
+        ];
+        let mut sim = Simulator::from_code_with_options(
+            code,
+            false,
+            crate::wave::WaveCaptureOptions::default(),
+        );
+
+        sim.uart_write(b"42").expect("inject uart1 bytes");
+        sim.run_ms(20).expect("wait for uart1 echo");
+
+        assert_eq!(sim.uart_take_string().expect("take uart1 text"), "42");
     }
 
     #[test]
@@ -2740,7 +3269,6 @@ mod tests {
         let mut uart = super::Uart::new(
             super::UART1_SFR_SCON,
             super::UART1_SFR_SBUF,
-            super::uart_frame_ns(9_600),
             super::WaveCaptureWindow::from_enabled(false),
         );
 
@@ -2752,12 +3280,12 @@ mod tests {
 
     #[test]
     fn uart_event_label_includes_printable_ascii_hint() {
-        assert_eq!(super::uart_event_label("RX", b'4'), "RX 0x34 '4'");
+        assert_eq!(super::uart_event_label("RX", b'4'.into()), "RX 0x34 '4'");
     }
 
     #[test]
     fn uart_event_label_escapes_control_ascii_hint() {
-        assert_eq!(super::uart_event_label("TX", b'\n'), r"TX 0x0A '\n'");
+        assert_eq!(super::uart_event_label("TX", b'\n'.into()), r"TX 0x0A '\n'");
     }
 
     #[test]

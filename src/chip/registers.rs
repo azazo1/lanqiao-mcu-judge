@@ -132,6 +132,8 @@ pub const IE_EX1: u8 = 1 << 2;
 pub const IE_ET1: u8 = 1 << 3;
 pub const IE_ES: u8 = 1 << 4;
 pub const IE_EA: u8 = 1 << 7;
+pub const IE2_ES2: u8 = 1 << 0;
+pub const IP2_PS2: u8 = 1 << 0;
 
 pub const TCON_TR0: u8 = 1 << 4;
 pub const TCON_TF0: u8 = 1 << 5;
@@ -143,10 +145,14 @@ pub const TMOD_C_T0: u8 = 1 << 2;
 pub const TMOD_GATE1: u8 = 1 << 7;
 pub const TMOD_C_T1: u8 = 1 << 6;
 
+pub const SCON_TB8: u8 = 1 << 3;
+pub const SCON_RB8: u8 = 1 << 2;
 pub const SCON_REN: u8 = 1 << 4;
 pub const SCON_TI: u8 = 1 << 1;
 pub const SCON_RI: u8 = 1 << 0;
 
+pub const S2CON_TB8: u8 = 1 << 2;
+pub const S2CON_RB8: u8 = 1 << 3;
 pub const S2CON_REN: u8 = 1 << 4;
 pub const S2CON_TI: u8 = 1 << 1;
 pub const S2CON_RI: u8 = 1 << 0;

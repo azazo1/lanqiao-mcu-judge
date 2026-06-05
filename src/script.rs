@@ -8,8 +8,8 @@ use std::{
 use anyhow::{Context, Result, anyhow, bail};
 use regex::Regex;
 use rhai::{
-    Dynamic, Engine, EvalAltResult, FnPtr, ImmutableString, Map, NativeCallContext, Position,
-    Scope,
+    Array, Dynamic, Engine, EvalAltResult, FnPtr, ImmutableString, Map, NativeCallContext,
+    Position, Scope,
     debugger::{DebuggerCommand, DebuggerEvent},
 };
 use tracing::{debug, trace};
@@ -17,7 +17,7 @@ use tracing::{debug, trace};
 use crate::{
     chip::{
         DisplayNumber, LedWatchStats, NS_PER_MICROSECOND, NS_PER_MILLISECOND, NS_PER_SECOND,
-        Simulator,
+        Simulator, UartConfig, UartParity, UartStopBits,
     },
     ids::{KeyId, KeyMode, LedId, ResetMode, SignalId, VoltageChannel},
     script_target::{RunToEdge, RunToTarget},
@@ -896,15 +896,183 @@ fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
         },
     );
 
-    let sim_uart = Arc::clone(sim);
+    let sim_uart1_config = Arc::clone(sim);
+    engine.register_fn(
+        "uart1_config",
+        move |data_bits: i64,
+              baud_rate: i64,
+              stop_bits: i64,
+              parity: ImmutableString|
+              -> Result<(), Box<EvalAltResult>> {
+            let config =
+                script_uart_config(data_bits, baud_rate, stop_bits as rhai::FLOAT, &parity)?;
+            sim_uart1_config
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .configure_uart1(config)
+                .map_err(|err| runtime_error(err.to_string()))
+        },
+    );
+
+    let sim_uart1_config_float = Arc::clone(sim);
+    engine.register_fn(
+        "uart1_config",
+        move |data_bits: i64,
+              baud_rate: i64,
+              stop_bits: rhai::FLOAT,
+              parity: ImmutableString|
+              -> Result<(), Box<EvalAltResult>> {
+            let config = script_uart_config(data_bits, baud_rate, stop_bits, &parity)?;
+            sim_uart1_config_float
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .configure_uart1(config)
+                .map_err(|err| runtime_error(err.to_string()))
+        },
+    );
+
+    let sim_uart2_config = Arc::clone(sim);
+    engine.register_fn(
+        "uart2_config",
+        move |data_bits: i64,
+              baud_rate: i64,
+              stop_bits: i64,
+              parity: ImmutableString|
+              -> Result<(), Box<EvalAltResult>> {
+            let config =
+                script_uart_config(data_bits, baud_rate, stop_bits as rhai::FLOAT, &parity)?;
+            sim_uart2_config
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .configure_uart2(config)
+                .map_err(|err| runtime_error(err.to_string()))
+        },
+    );
+
+    let sim_uart2_config_float = Arc::clone(sim);
+    engine.register_fn(
+        "uart2_config",
+        move |data_bits: i64,
+              baud_rate: i64,
+              stop_bits: rhai::FLOAT,
+              parity: ImmutableString|
+              -> Result<(), Box<EvalAltResult>> {
+            let config = script_uart_config(data_bits, baud_rate, stop_bits, &parity)?;
+            sim_uart2_config_float
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .configure_uart2(config)
+                .map_err(|err| runtime_error(err.to_string()))
+        },
+    );
+
+    let sim_uart_config_alias = Arc::clone(sim);
+    engine.register_fn(
+        "uart_config",
+        move |data_bits: i64,
+              baud_rate: i64,
+              stop_bits: i64,
+              parity: ImmutableString|
+              -> Result<(), Box<EvalAltResult>> {
+            let config =
+                script_uart_config(data_bits, baud_rate, stop_bits as rhai::FLOAT, &parity)?;
+            sim_uart_config_alias
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .configure_uart1(config)
+                .map_err(|err| runtime_error(err.to_string()))
+        },
+    );
+
+    let sim_uart_config_alias_float = Arc::clone(sim);
+    engine.register_fn(
+        "uart_config",
+        move |data_bits: i64,
+              baud_rate: i64,
+              stop_bits: rhai::FLOAT,
+              parity: ImmutableString|
+              -> Result<(), Box<EvalAltResult>> {
+            let config = script_uart_config(data_bits, baud_rate, stop_bits, &parity)?;
+            sim_uart_config_alias_float
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .configure_uart1(config)
+                .map_err(|err| runtime_error(err.to_string()))
+        },
+    );
+
+    let sim_uart_write = Arc::clone(sim);
     engine.register_fn(
         "uart_write",
         move |text: ImmutableString| -> Result<(), Box<EvalAltResult>> {
-            sim_uart
+            sim_uart_write
                 .lock()
                 .map_err(|_| runtime_error("仿真器锁已损坏"))?
-                .uart_write(text.as_bytes());
-            Ok(())
+                .uart_write(text.as_bytes())
+                .map_err(|err| runtime_error(err.to_string()))
+        },
+    );
+
+    let sim_uart1_write = Arc::clone(sim);
+    engine.register_fn(
+        "uart1_write",
+        move |text: ImmutableString| -> Result<(), Box<EvalAltResult>> {
+            sim_uart1_write
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .uart1_write(text.as_bytes())
+                .map_err(|err| runtime_error(err.to_string()))
+        },
+    );
+
+    let sim_uart2_write = Arc::clone(sim);
+    engine.register_fn(
+        "uart2_write",
+        move |text: ImmutableString| -> Result<(), Box<EvalAltResult>> {
+            sim_uart2_write
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .uart2_write(text.as_bytes())
+                .map_err(|err| runtime_error(err.to_string()))
+        },
+    );
+
+    let sim_uart_write_raw = Arc::clone(sim);
+    engine.register_fn(
+        "uart_write_raw",
+        move |symbols: Array| -> Result<(), Box<EvalAltResult>> {
+            let symbols = script_uart_raw_values(symbols)?;
+            sim_uart_write_raw
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .uart_write_raw(&symbols)
+                .map_err(|err| runtime_error(err.to_string()))
+        },
+    );
+
+    let sim_uart1_write_raw = Arc::clone(sim);
+    engine.register_fn(
+        "uart1_write_raw",
+        move |symbols: Array| -> Result<(), Box<EvalAltResult>> {
+            let symbols = script_uart_raw_values(symbols)?;
+            sim_uart1_write_raw
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .uart1_write_raw(&symbols)
+                .map_err(|err| runtime_error(err.to_string()))
+        },
+    );
+
+    let sim_uart2_write_raw = Arc::clone(sim);
+    engine.register_fn(
+        "uart2_write_raw",
+        move |symbols: Array| -> Result<(), Box<EvalAltResult>> {
+            let symbols = script_uart_raw_values(symbols)?;
+            sim_uart2_write_raw
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .uart2_write_raw(&symbols)
+                .map_err(|err| runtime_error(err.to_string()))
         },
     );
 
@@ -938,8 +1106,71 @@ fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
             let text = sim_uart_take
                 .lock()
                 .map_err(|_| runtime_error("仿真器锁已损坏"))?
-                .uart_take_string();
+                .uart_take_string()
+                .map_err(|err| runtime_error(err.to_string()))?;
             Ok(text.into())
+        },
+    );
+
+    let sim_uart1_take = Arc::clone(sim);
+    engine.register_fn(
+        "uart1_take",
+        move || -> Result<ImmutableString, Box<EvalAltResult>> {
+            let text = sim_uart1_take
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .uart1_take_string()
+                .map_err(|err| runtime_error(err.to_string()))?;
+            Ok(text.into())
+        },
+    );
+
+    let sim_uart2_take = Arc::clone(sim);
+    engine.register_fn(
+        "uart2_take",
+        move || -> Result<ImmutableString, Box<EvalAltResult>> {
+            let text = sim_uart2_take
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .uart2_take_string()
+                .map_err(|err| runtime_error(err.to_string()))?;
+            Ok(text.into())
+        },
+    );
+
+    let sim_uart_take_raw = Arc::clone(sim);
+    engine.register_fn(
+        "uart_take_raw",
+        move || -> Result<Array, Box<EvalAltResult>> {
+            let symbols = sim_uart_take_raw
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .uart_take_raw();
+            Ok(script_uart_raw_array(&symbols))
+        },
+    );
+
+    let sim_uart1_take_raw = Arc::clone(sim);
+    engine.register_fn(
+        "uart1_take_raw",
+        move || -> Result<Array, Box<EvalAltResult>> {
+            let symbols = sim_uart1_take_raw
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .uart1_take_raw();
+            Ok(script_uart_raw_array(&symbols))
+        },
+    );
+
+    let sim_uart2_take_raw = Arc::clone(sim);
+    engine.register_fn(
+        "uart2_take_raw",
+        move || -> Result<Array, Box<EvalAltResult>> {
+            let symbols = sim_uart2_take_raw
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .uart2_take_raw();
+            Ok(script_uart_raw_array(&symbols))
         },
     );
 
@@ -1781,6 +2012,65 @@ fn format_dynamic_value(value: &Dynamic) -> String {
     format!("{value}")
 }
 
+fn script_uart_config(
+    data_bits: i64,
+    baud_rate: i64,
+    stop_bits: rhai::FLOAT,
+    parity: &str,
+) -> Result<UartConfig, Box<EvalAltResult>> {
+    if !stop_bits.is_finite() {
+        return Err(runtime_error("stop_bits 必须是有限数值"));
+    }
+    let data_bits = u8::try_from(data_bits).map_err(|_| runtime_error("data_bits 必须在 5..=9"))?;
+    let baud_rate =
+        u32::try_from(baud_rate).map_err(|_| runtime_error("baud_rate 必须在 1..=4294967295"))?;
+    let stop_bits = match stop_bits {
+        value if (value - 1.0).abs() < 1e-6 => UartStopBits::One,
+        value if (value - 1.5).abs() < 1e-6 => UartStopBits::OnePointFive,
+        value if (value - 2.0).abs() < 1e-6 => UartStopBits::Two,
+        _ => return Err(runtime_error("stop_bits 只支持 1, 1.5, 2")),
+    };
+    let parity = match parity.trim().to_ascii_lowercase().as_str() {
+        "n" | "none" => UartParity::None,
+        "o" | "odd" => UartParity::Odd,
+        "e" | "even" => UartParity::Even,
+        "m" | "mark" => UartParity::Mark,
+        "s" | "space" => UartParity::Space,
+        _ => return Err(runtime_error("parity 只支持 none, odd, even, mark, space")),
+    };
+    let config = UartConfig {
+        data_bits,
+        baud_rate,
+        stop_bits,
+        parity,
+    };
+    config
+        .validate()
+        .map_err(|err| runtime_error(err.to_string()))?;
+    Ok(config)
+}
+
+fn script_uart_raw_values(values: Array) -> Result<Vec<u16>, Box<EvalAltResult>> {
+    values
+        .into_iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let value = value
+                .as_int()
+                .map_err(|_| runtime_error(format!("uart raw 第 {} 项必须是整数", index + 1)))?;
+            u16::try_from(value)
+                .map_err(|_| runtime_error(format!("uart raw 第 {} 项必须在 0..=65535", index + 1)))
+        })
+        .collect()
+}
+
+fn script_uart_raw_array(values: &[u16]) -> Array {
+    values
+        .iter()
+        .map(|value| Dynamic::from(i64::from(*value)))
+        .collect()
+}
+
 fn script_range(start: i64, end: i64) -> Result<(usize, usize), Box<EvalAltResult>> {
     let start = usize::try_from(start).map_err(|_| runtime_error("start 参数必须 >= 0"))?;
     let end = usize::try_from(end).map_err(|_| runtime_error("end 参数必须 >= 0"))?;
@@ -1824,6 +2114,24 @@ mod tests {
         ScriptTraceState, build_engine, build_scope, eval_source, eval_source_with_engine,
     };
     use crate::{chip::Simulator, wave::WaveCaptureOptions};
+
+    fn dual_uart_echo_sim() -> Simulator {
+        let code = vec![
+            0x75, 0x98, 0x10, 0x75, 0x9A, 0x10, 0xE5, 0x98, 0x54, 0x01, 0x60, 0x07, 0xE5, 0x99,
+            0x53, 0x98, 0xFE, 0xF5, 0x99, 0xE5, 0x9A, 0x54, 0x01, 0x60, 0x07, 0xE5, 0x9B, 0x53,
+            0x9A, 0xFE, 0xF5, 0x9B, 0x80, 0xE4,
+        ];
+        Simulator::from_code_with_options(code, false, WaveCaptureOptions::default())
+    }
+
+    fn uart2_ninth_bit_echo_sim() -> Simulator {
+        let code = vec![
+            0x75, 0x9A, 0x10, 0xE5, 0x9A, 0x54, 0x01, 0x60, 0xFA, 0xE5, 0x9A, 0x54, 0x08, 0x60,
+            0x05, 0x43, 0x9A, 0x04, 0x80, 0x03, 0x53, 0x9A, 0xFB, 0xE5, 0x9B, 0x53, 0x9A, 0xFE,
+            0xF5, 0x9B, 0x80, 0xE3,
+        ];
+        Simulator::from_code_with_options(code, false, WaveCaptureOptions::default())
+    }
 
     #[test]
     fn rhai_run_to_supports_signal_constants_and_absolute_time() {
@@ -1884,6 +2192,45 @@ mod tests {
             assert_eq(sim_time_ns(), 0, "power reset should restart simulator time");
         "#;
         eval_source(sim, "test:reset_modes", script).expect("run reset mode script");
+    }
+
+    #[test]
+    fn rhai_uart_api_supports_dual_channels_and_raw_config() {
+        let sim = dual_uart_echo_sim();
+        let script = r#"
+            uart1_config(8, 9600, 1, "none");
+            uart2_config(8, 19200, 1.5, "even");
+
+            uart_write("A");
+            uart1_write("B");
+            uart2_write("Z");
+
+            run_ms(40);
+
+            assert_eq(uart_take(), "AB", "uart alias should drain uart1 text queue");
+            assert_eq(uart1_take(), "", "uart1 queue should already be empty");
+            assert_eq(uart2_take(), "Z", "uart2 text queue");
+            assert_eq(uart2_take(), "", "uart2 queue should be empty after take");
+        "#;
+
+        eval_source(sim, "test:dual_uart_api", script).expect("run dual uart script");
+    }
+
+    #[test]
+    fn rhai_uart2_raw_api_preserves_ninth_bit() {
+        let sim = uart2_ninth_bit_echo_sim();
+        let script = r#"
+            uart2_config(9, 19200, 1, "none");
+            uart2_write_raw([0x141, 0x156]);
+            run_ms(40);
+
+            let raw = uart2_take_raw();
+            assert_eq(len(raw), 2, "uart2 raw queue length");
+            assert_eq(raw[0], 0x141, "uart2 first 9-bit symbol");
+            assert_eq(raw[1], 0x156, "uart2 second 9-bit symbol");
+        "#;
+
+        eval_source(sim, "test:uart2_raw_api", script).expect("run uart2 raw script");
     }
 
     #[test]

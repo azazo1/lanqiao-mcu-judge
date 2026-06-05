@@ -1,11 +1,8 @@
-use std::collections::VecDeque;
-
 use crate::chip::NS_PER_MICROSECOND;
 
 #[derive(Debug)]
 pub(crate) struct UltrasonicDevice {
     pub(crate) distance_cm: f32,
-    pending_rx: VecDeque<u8>,
     tx_prev_high: bool,
     waiting_for_trigger_release: bool,
     rx_high: bool,
@@ -16,7 +13,6 @@ impl Default for UltrasonicDevice {
     fn default() -> Self {
         Self {
             distance_cm: 0.0,
-            pending_rx: VecDeque::new(),
             tx_prev_high: false,
             waiting_for_trigger_release: false,
             rx_high: true,
@@ -26,20 +22,6 @@ impl Default for UltrasonicDevice {
 }
 
 impl UltrasonicDevice {
-    pub(crate) fn push_response(&mut self, tx: u8) {
-        if tx == 0x55 {
-            let distance_mm = (self.distance_cm.max(0.0) * 10.0).round() as u16;
-            self.pending_rx.push_back((distance_mm >> 8) as u8);
-            self.pending_rx.push_back((distance_mm & 0xFF) as u8);
-        } else if tx == 0x50 {
-            self.pending_rx.push_back(25_u8);
-        }
-    }
-
-    pub(crate) fn pop_response(&mut self) -> Option<u8> {
-        self.pending_rx.pop_front()
-    }
-
     pub(crate) fn sample_trigger(&mut self, tx_high: bool) {
         if tx_high && !self.tx_prev_high {
             self.waiting_for_trigger_release = true;

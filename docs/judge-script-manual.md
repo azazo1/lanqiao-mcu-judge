@@ -338,7 +338,12 @@ let dt_s = run_to_s(2);
 - `set_frequency_hz(2200)`
 - `set_voltage(AIN3, 2.3)`
 - `set_voltage("AIN1", 2.3)`
+- `uart_config(8, 9600, 1, "none")`
 - `uart_write("(F,?)")`
+- `uart1_write("(F,?)")`
+- `uart2_write("(F,?)")`
+- `uart1_write_raw([0x055, 0x141])`
+- `uart2_write_raw([0x055, 0x141])`
 - `jumper_on(NET_SIG, SIG_OUT)`
 - `jumper_off(NET_SIG, SIG_OUT)`
 - `jumper_installed(NET_SIG, SIG_OUT)`
@@ -366,6 +371,11 @@ let dt_s = run_to_s(2);
 - `display_number(start, end, window_ms)`
 - `snapshot_text()`
 - `uart_take()`
+- `uart_take_raw()`
+- `uart1_take()`
+- `uart1_take_raw()`
+- `uart2_take()`
+- `uart2_take_raw()`
 - `da_value()`
 - `eeprom_byte(addr)`
 - `relay_on()`
@@ -410,7 +420,17 @@ let dt_s = run_to_s(2);
 
 `eeprom_byte(addr)` 返回当前 `AT24C02` 指定地址中的原始字节, 范围是 `0..=255`. 对需要验证 EEPROM 块扫描, 指针回绕, 持久化恢复的题目, 可以直接读取指定地址, 不必只靠数码管结果反推内部状态.
 
-`uart_take()` 返回当前已经发出的串口文本, 并清空内部发送队列. 如果要确认某次串口输出已经被完整消费, 可以连续调用两次, 第二次应返回空字符串.
+`uart_config(...)` 是 `uart1_config(...)` 的兼容别名. 当前默认串口格式是 `8` 位数据, `9600` 波特率, `1` 位停止位, `none` 校验位. `uart1_config(...)` 和 `uart2_config(...)` 可分别修改两路串口的外部收发格式, 参数顺序为 `data_bits, baud_rate, stop_bits, parity`.
+
+`stop_bits` 目前支持 `1`, `1.5`, `2`. `parity` 目前支持 `none`, `odd`, `even`, `mark`, `space`, 也接受单字母缩写 `n/o/e/m/s`.
+
+`uart_write()` 是 `uart1_write()` 的兼容别名, 会把文本字节注入 `UART1` 的接收端. `uart2_write()` 则会把文本字节注入 `UART2` 的接收端.
+
+`uart1_write_raw(...)` 和 `uart2_write_raw(...)` 用于注入原始符号数组, 每项范围是 `0..=65535`. 当你需要验证 `9` 位数据, 或者不方便直接当文本处理时, 优先使用 `*_raw` 版本.
+
+`uart_take()` 是 `uart1_take()` 的兼容别名, 返回当前已经从 `UART1` 发出的串口文本, 并清空内部发送队列. `uart2_take()` 对 `UART2` 做同样的事情. 如果要确认某次串口输出已经被完整消费, 可以连续调用两次, 第二次应返回空字符串.
+
+`uart_take_raw()`, `uart1_take_raw()`, `uart2_take_raw()` 会返回对应串口当前已经发出的原始符号数组, 并清空内部发送队列. 当串口配置为 `9` 位数据, 或者发送内容不适合直接按文本解释时, 请优先使用 `*_take_raw()`.
 
 串口题常见写法:
 
@@ -422,6 +442,36 @@ assert_eq(uart_take(), "", "读取后串口缓冲应为空");
 let text = display_text(30);
 assert_eq(text[0..3], "   ", "前 3 位保持空白");
 assert_eq(text[3..8], "00012", "右 5 位补零显示原值");
+```
+
+双串口和 `9` 位符号示例:
+
+```rhai
+uart1_config(8, 9600, 1, "none");
+uart2_config(9, 19200, 1.5, "even");
+
+uart1_write("OK");
+uart2_write_raw([0x141, 0x055]);
+run_ms(40);
+
+assert_eq(uart1_take(), "OK", "UART1 文本输出");
+let raw = uart2_take_raw();
+assert_eq(raw[0], 0x141, "UART2 第 1 个 9 位符号");
+assert_eq(raw[1], 0x055, "UART2 第 2 个 9 位符号");
+```
+
+如果题目里的 `UART2` 会按 `9` 位数据把收到的符号倒序回发, 可以直接写成:
+
+```rhai
+uart2_config(9, 115200, 1, "none");
+uart2_write_raw([0x041, 0x155, 0x0AA, 0x1F0]);
+run_ms(220);
+
+let raw = uart2_take_raw();
+assert_eq(raw[0], 0x1F0, "UART2 第 1 个回发符号");
+assert_eq(raw[1], 0x0AA, "UART2 第 2 个回发符号");
+assert_eq(raw[2], 0x155, "UART2 第 3 个回发符号");
+assert_eq(raw[3], 0x041, "UART2 第 4 个回发符号");
 ```
 
 ## Rhai 字符串切片和正则
@@ -444,6 +494,23 @@ Rhai 也自带数值解析函数, 例如:
 - 固定字符, 空白位, 前导零, 分隔符等格式要求, 直接用 `display_text(...)[start..end]` 判断.
 - 需要描述整串格式时, 再配合 `regex_is_match(...)`.
 - 不要先看当前 `hex` 的输出再反推 `expect`, 应先根据题意, 源码, 手册推导出应有结果, 再写断言.
+
+例如某个 UART 题里, 数码管前 4 位显示 `TI` 计数和小数点, 后 5 位显示最后一次解析出的数值, 可以直接拆开判断:
+
+```rhai
+let text = display_text(30);
+assert_eq(text[0..4], "015.", "前 3 位 TI 计数");
+assert_eq(text[4..9], "00012", "后 5 位数值显示");
+```
+
+如果前 3 位是会随中断重入次数变化的计数, 更推荐把固定格式和数值范围拆开写, 不要把整串计数写死:
+
+```rhai
+let text = display_text(30);
+assert_eq(text[3..4], ".", "TI 计数小数点");
+assert_in(parse_int(text[0..3]), 2..=999, "TI 计数范围");
+assert_eq(text[4..9], "00000", "后 5 位数值显示");
+```
 
 ## 按键模式
 
