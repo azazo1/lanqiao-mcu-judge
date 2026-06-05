@@ -46,7 +46,7 @@ use crate::{
     ids::{KeyId, KeyMode, LedId, ResetMode, SignalId, VoltageChannel},
     jumper::{BoardJumpers, LineDrive, resolve_line},
     peripherals::{
-        AnalogInputs, At24c02, Ds18b20, Ds1302, I2cBus, Key, Ne555, Outputs, Pcf8591,
+        AnalogInputs, At24c02, Ds18b20, Ds1302, Ds1302State, I2cBus, Key, Ne555, Outputs, Pcf8591,
         SegmentDecoder, UltrasonicDevice,
     },
     persistent_state::PersistentState,
@@ -431,7 +431,17 @@ impl Simulator {
     }
 
     pub fn set_rtc(&mut self, hour: u8, minute: u8, second: u8) -> Result<()> {
-        self.ctx.board.ds1302.set_hms(hour, minute, second)?;
+        self.set_rtc_state(Ds1302State {
+            hour: Some(hour),
+            minute: Some(minute),
+            second: Some(second),
+            ..Ds1302State::default()
+        })?;
+        Ok(())
+    }
+
+    pub fn set_rtc_state(&mut self, state: Ds1302State) -> Result<()> {
+        self.ctx.board.ds1302.set_state(state)?;
         self.capture_control_snapshot();
         Ok(())
     }
@@ -507,6 +517,17 @@ impl Simulator {
 
     pub fn eeprom_byte(&self, addr: u8) -> u8 {
         self.ctx.board.at24c02.byte(addr)
+    }
+
+    pub fn set_eeprom_byte(&mut self, addr: u8, value: u8) {
+        self.ctx.board.at24c02.set_byte(addr, value);
+        self.capture_control_snapshot();
+    }
+
+    pub fn set_eeprom_bytes(&mut self, addr: u8, values: &[u8]) -> Result<()> {
+        self.ctx.board.at24c02.set_bytes(addr, values)?;
+        self.capture_control_snapshot();
+        Ok(())
     }
 
     pub fn configure_uart1(&mut self, config: UartConfig) -> Result<()> {

@@ -451,6 +451,7 @@ let dt_s = run_to_s(2);
 - `key_mode(BTN)`
 - `key_mode("kbd")`
 - `set_rtc(23, 59, 50)`
+- `set_rtc(#{ hour: 23, minute: 59, second: 50, running: false })`
 - `set_temperature_c(25)`
 - `set_temperature_c(25.9375)`
 - `set_ds18b20_rom("280123456789AB")`
@@ -459,6 +460,8 @@ let dt_s = run_to_s(2);
 - `set_frequency_hz(2200)`
 - `set_voltage(AIN3, 2.3)`
 - `set_voltage("AIN1", 2.3)`
+- `set_eeprom(0x10, 0xAB)`
+- `set_eeprom(0x20, [1, 2, 3])`
 - `uart_config(8, 9600, 1, "none")`
 - `uart_write("(F,?)")`
 - `uart1_write("(F,?)")`
@@ -481,6 +484,21 @@ let dt_s = run_to_s(2);
 如果只是为了等待按键释放后的稳定态, 一般不需要在 `tap_key(...)` 后面再手写一段额外的 `settle`.
 
 但这不等于可以省掉题目本身的业务刷新等待. 例如显示任务本身每 `100ms` 才更新一次, 那么在一串按键操作完成后, 仍然可能需要额外 `run_ms(...)` 去等待显示刷新, 这部分等待应按题目自身节拍来决定.
+
+`set_rtc(23, 59, 50)` 仍然是便捷写法, 只会修改时, 分, 秒, 并把亚秒进度清零.
+
+`set_rtc(#{ ... })` 会按状态方式设置 RTC. 当前支持这些字段:
+
+- `hour`, `minute`, `second`
+- `year`, `month`, `date`, `day_of_week`, `weekday`
+- `running`, `halted`
+- `hour_mode`, `hour_mode_12`
+- `write_protect`
+- `trickle_charge`
+
+未提供的字段会保持当前值不变, 只有传入的字段才会被设置.
+
+`running: false` 等价于 `halted: true`. `hour_mode` 接受 `12`, `24`, `12h`, `24h`. 如果一次调用里修改了任意时间或日期字段, 评测器会把 RTC 的亚秒进度清零.
 
 ## 输出观察
 
@@ -540,6 +558,8 @@ let dt_s = run_to_s(2);
 `da_value()` 返回当前 DA 输出的原始数值, 范围是 `0..=255`. 对 `PCF8591` 这类 AD/DA 题, 可以直接用它验证按键调节后的 DA 输出是否正确.
 
 `eeprom_byte(addr)` 返回当前 `AT24C02` 指定地址中的原始字节, 范围是 `0..=255`. 对需要验证 EEPROM 块扫描, 指针回绕, 持久化恢复的题目, 可以直接读取指定地址, 不必只靠数码管结果反推内部状态.
+
+`set_eeprom(addr, value)` 会直接覆盖指定地址的 EEPROM 字节. `set_eeprom(addr, [..])` 会从 `addr` 开始连续覆盖多个字节. `set_eeprom([..])` 等价于从 `0x00` 开始写入. 这组接口用于脚本直接布置 EEPROM 初始状态, 不模拟 I2C 总线传输过程.
 
 `uart_config(...)` 是 `uart1_config(...)` 的兼容别名. 当前默认串口格式是 `8` 位数据, `9600` 波特率, `1` 位停止位, `none` 校验位. `uart1_config(...)` 和 `uart2_config(...)` 可分别修改两路串口的外部收发格式, 参数顺序为 `data_bits, baud_rate, stop_bits, parity`.
 

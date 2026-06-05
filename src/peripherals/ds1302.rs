@@ -8,6 +8,33 @@ use crate::event::{
 use crate::persistent_state::Ds1302PersistentState;
 use crate::wave::{WaveCaptureWindow, WaveEventNote};
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Ds1302State {
+    pub(crate) hour: Option<u8>,
+    pub(crate) minute: Option<u8>,
+    pub(crate) second: Option<u8>,
+    pub(crate) day_of_week: Option<u8>,
+    pub(crate) date: Option<u8>,
+    pub(crate) month: Option<u8>,
+    pub(crate) year: Option<u8>,
+    pub(crate) halted: Option<bool>,
+    pub(crate) hour_mode_12: Option<bool>,
+    pub(crate) write_protect: Option<bool>,
+    pub(crate) trickle_charge: Option<u8>,
+}
+
+impl Ds1302State {
+    fn touches_calendar_or_time(&self) -> bool {
+        self.hour.is_some()
+            || self.minute.is_some()
+            || self.second.is_some()
+            || self.day_of_week.is_some()
+            || self.date.is_some()
+            || self.month.is_some()
+            || self.year.is_some()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct Ds1302 {
     ce_prev: bool,
@@ -94,14 +121,74 @@ impl Ds1302 {
         }
     }
 
-    pub(crate) fn set_hms(&mut self, hour: u8, minute: u8, second: u8) -> Result<()> {
-        if hour > 23 || minute > 59 || second > 59 {
-            bail!("RTC 时间越界");
+    pub(crate) fn set_state(&mut self, state: Ds1302State) -> Result<()> {
+        if let Some(hour) = state.hour
+            && hour > 23
+        {
+            bail!("RTC 小时必须在 0..=23");
         }
-        self.hour = hour;
-        self.minute = minute;
-        self.second = second;
-        self.sub_ns = 0;
+        if let Some(minute) = state.minute
+            && minute > 59
+        {
+            bail!("RTC 分钟必须在 0..=59");
+        }
+        if let Some(second) = state.second
+            && second > 59
+        {
+            bail!("RTC 秒必须在 0..=59");
+        }
+        if let Some(day_of_week) = state.day_of_week
+            && !(1..=7).contains(&day_of_week)
+        {
+            bail!("RTC 星期必须在 1..=7");
+        }
+        if let Some(date) = state.date
+            && !(1..=31).contains(&date)
+        {
+            bail!("RTC 日期必须在 1..=31");
+        }
+        if let Some(month) = state.month
+            && !(1..=12).contains(&month)
+        {
+            bail!("RTC 月份必须在 1..=12");
+        }
+
+        if let Some(hour) = state.hour {
+            self.hour = hour;
+        }
+        if let Some(minute) = state.minute {
+            self.minute = minute;
+        }
+        if let Some(second) = state.second {
+            self.second = second;
+        }
+        if let Some(day_of_week) = state.day_of_week {
+            self.day_of_week = day_of_week;
+        }
+        if let Some(date) = state.date {
+            self.date = date;
+        }
+        if let Some(month) = state.month {
+            self.month = month;
+        }
+        if let Some(year) = state.year {
+            self.year = year;
+        }
+        if let Some(halted) = state.halted {
+            self.halted = halted;
+        }
+        if let Some(hour_mode_12) = state.hour_mode_12 {
+            self.hour_mode_12 = hour_mode_12;
+        }
+        if let Some(write_protect) = state.write_protect {
+            self.write_protect = write_protect;
+        }
+        if let Some(trickle_charge) = state.trickle_charge {
+            self.trickle_charge = trickle_charge;
+        }
+        if state.touches_calendar_or_time() {
+            self.sub_ns = 0;
+        }
         Ok(())
     }
 
@@ -472,7 +559,7 @@ fn decode_hour(value: u8) -> (u8, bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::Ds1302;
+    use super::{Ds1302, Ds1302State};
     use crate::chip::NS_PER_SECOND;
 
     #[test]
@@ -635,5 +722,42 @@ mod tests {
         ds1302.write_register(0, 0x25);
 
         assert!(ds1302.take_event_notes().is_empty());
+    }
+
+    #[test]
+    fn set_state_updates_calendar_and_control_flags() {
+        let mut ds1302 = Ds1302 {
+            sub_ns: 123_456_789,
+            ..Ds1302::default()
+        };
+
+        ds1302
+            .set_state(Ds1302State {
+                hour: Some(23),
+                minute: Some(58),
+                second: Some(57),
+                day_of_week: Some(6),
+                date: Some(28),
+                month: Some(12),
+                year: Some(24),
+                halted: Some(true),
+                hour_mode_12: Some(true),
+                write_protect: Some(true),
+                trickle_charge: Some(0xA5),
+            })
+            .expect("apply rtc state");
+
+        assert_eq!(ds1302.hour, 23);
+        assert_eq!(ds1302.minute, 58);
+        assert_eq!(ds1302.second, 57);
+        assert_eq!(ds1302.day_of_week, 6);
+        assert_eq!(ds1302.date, 28);
+        assert_eq!(ds1302.month, 12);
+        assert_eq!(ds1302.year, 24);
+        assert!(ds1302.halted);
+        assert!(ds1302.hour_mode_12);
+        assert!(ds1302.write_protect);
+        assert_eq!(ds1302.trickle_charge, 0xA5);
+        assert_eq!(ds1302.sub_ns, 0);
     }
 }

@@ -1,5 +1,7 @@
 use std::mem;
 
+use anyhow::{Result, bail};
+
 use crate::persistent_state::At24c02PersistentState;
 use tracing::trace;
 
@@ -57,9 +59,23 @@ impl At24c02 {
 
     pub(crate) fn load_persistent_state(&mut self, state: &At24c02PersistentState) {
         self.memory = state.memory;
-        self.page_shadow = [0; Self::PAGE_SIZE as usize];
-        self.page_dirty_mask = 0;
-        self.write_cycle_until_ns = 0;
+        self.clear_pending_write_state();
+    }
+
+    pub(crate) fn set_byte(&mut self, addr: u8, value: u8) {
+        self.memory[addr as usize] = value;
+        self.clear_pending_write_state();
+    }
+
+    pub(crate) fn set_bytes(&mut self, addr: u8, values: &[u8]) -> Result<()> {
+        let start = addr as usize;
+        let end = start.saturating_add(values.len());
+        if end > self.memory.len() {
+            bail!("EEPROM 写入范围越界");
+        }
+        self.memory[start..end].copy_from_slice(values);
+        self.clear_pending_write_state();
+        Ok(())
     }
 
     pub(crate) fn sample_i2c(&mut self, time_ns: u64, scl_high: bool, sda_high: bool) {
@@ -82,6 +98,12 @@ impl At24c02 {
 
     fn busy(&self, time_ns: u64) -> bool {
         time_ns < self.write_cycle_until_ns
+    }
+
+    fn clear_pending_write_state(&mut self) {
+        self.page_shadow = [0; Self::PAGE_SIZE as usize];
+        self.page_dirty_mask = 0;
+        self.write_cycle_until_ns = 0;
     }
 
     fn begin_write_transaction(&mut self) {
@@ -276,5 +298,24 @@ mod tests {
             50 + At24c02::WRITE_CYCLE_NS,
             &()
         ));
+    }
+
+    #[test]
+    fn set_bytes_updates_memory_and_clears_pending_write_state() {
+        let mut eeprom = At24c02 {
+            page_dirty_mask: 0xFF,
+            write_cycle_until_ns: 123,
+            ..At24c02::default()
+        };
+
+        eeprom
+            .set_bytes(0x10, &[0xAB, 0xCD, 0xEF])
+            .expect("set eeprom bytes");
+
+        assert_eq!(eeprom.byte(0x10), 0xAB);
+        assert_eq!(eeprom.byte(0x11), 0xCD);
+        assert_eq!(eeprom.byte(0x12), 0xEF);
+        assert_eq!(eeprom.page_dirty_mask, 0);
+        assert_eq!(eeprom.write_cycle_until_ns, 0);
     }
 }

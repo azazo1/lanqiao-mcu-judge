@@ -24,6 +24,7 @@ use crate::{
         Simulator, UartConfig, UartParity, UartStopBits,
     },
     ids::{KeyId, KeyMode, LedId, ResetMode, SignalId, VoltageChannel},
+    peripherals::Ds1302State,
     script::run_target::{RunToEdge, RunToTarget},
 };
 
@@ -733,6 +734,19 @@ fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
         },
     );
 
+    let sim_rtc_patch = Arc::clone(sim);
+    engine.register_fn(
+        "set_rtc",
+        move |state: Map| -> Result<(), Box<EvalAltResult>> {
+            let state = script_rtc_state(state)?;
+            sim_rtc_patch
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .set_rtc_state(state)
+                .map_err(|err| runtime_error(err.to_string()))
+        },
+    );
+
     let sim_temp = Arc::clone(sim);
     engine.register_fn(
         "set_temperature_c",
@@ -1101,6 +1115,50 @@ fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
                 .map_err(|_| runtime_error("仿真器锁已损坏"))?
                 .eeprom_byte(addr);
             Ok(i64::from(value))
+        },
+    );
+
+    let sim_set_eeprom_byte = Arc::clone(sim);
+    engine.register_fn(
+        "set_eeprom",
+        move |addr: i64, value: i64| -> Result<(), Box<EvalAltResult>> {
+            let addr =
+                u8::try_from(addr).map_err(|_| runtime_error("EEPROM 地址必须在 0..=255"))?;
+            let value =
+                u8::try_from(value).map_err(|_| runtime_error("EEPROM 字节必须在 0..=255"))?;
+            sim_set_eeprom_byte
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .set_eeprom_byte(addr, value);
+            Ok(())
+        },
+    );
+
+    let sim_set_eeprom_block = Arc::clone(sim);
+    engine.register_fn(
+        "set_eeprom",
+        move |addr: i64, values: Array| -> Result<(), Box<EvalAltResult>> {
+            let addr =
+                u8::try_from(addr).map_err(|_| runtime_error("EEPROM 地址必须在 0..=255"))?;
+            let values = script_byte_array(values, "set_eeprom")?;
+            sim_set_eeprom_block
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .set_eeprom_bytes(addr, &values)
+                .map_err(|err| runtime_error(err.to_string()))
+        },
+    );
+
+    let sim_set_eeprom_from_zero = Arc::clone(sim);
+    engine.register_fn(
+        "set_eeprom",
+        move |values: Array| -> Result<(), Box<EvalAltResult>> {
+            let values = script_byte_array(values, "set_eeprom")?;
+            sim_set_eeprom_from_zero
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .set_eeprom_bytes(0, &values)
+                .map_err(|err| runtime_error(err.to_string()))
         },
     );
 
@@ -2038,6 +2096,97 @@ fn format_dynamic_value(value: &Dynamic) -> String {
     format!("{value}")
 }
 
+fn script_bool_field(value: Dynamic, label: &str) -> Result<bool, Box<EvalAltResult>> {
+    value
+        .as_bool()
+        .map_err(|_| runtime_error(format!("{label} 必须是布尔值")))
+}
+
+fn script_byte_field(value: Dynamic, label: &str) -> Result<u8, Box<EvalAltResult>> {
+    let value = value
+        .as_int()
+        .map_err(|_| runtime_error(format!("{label} 必须是整数")))?;
+    u8::try_from(value).map_err(|_| runtime_error(format!("{label} 必须在 0..=255")))
+}
+
+fn script_rtc_hour_mode(value: Dynamic) -> Result<bool, Box<EvalAltResult>> {
+    if value.is::<ImmutableString>() {
+        let mode = value.clone_cast::<ImmutableString>();
+        return match mode.trim().to_ascii_lowercase().as_str() {
+            "12" | "12h" => Ok(true),
+            "24" | "24h" => Ok(false),
+            _ => Err(runtime_error("hour_mode 只支持 12, 24, `12h`, `24h`")),
+        };
+    }
+
+    match value
+        .as_int()
+        .map_err(|_| runtime_error("hour_mode 只支持 12, 24, `12h`, `24h`"))?
+    {
+        12 => Ok(true),
+        24 => Ok(false),
+        _ => Err(runtime_error("hour_mode 只支持 12, 24, `12h`, `24h`")),
+    }
+}
+
+fn script_rtc_state(state: Map) -> Result<Ds1302State, Box<EvalAltResult>> {
+    if state.is_empty() {
+        return Err(runtime_error("set_rtc 状态不能为空"));
+    }
+
+    let mut rtc_state = Ds1302State::default();
+    let mut running = None;
+    let mut hour_mode = None;
+
+    for (key, value) in state {
+        match key.as_str() {
+            "hour" => rtc_state.hour = Some(script_byte_field(value, "hour")?),
+            "minute" => rtc_state.minute = Some(script_byte_field(value, "minute")?),
+            "second" => rtc_state.second = Some(script_byte_field(value, "second")?),
+            "day_of_week" | "weekday" => {
+                rtc_state.day_of_week = Some(script_byte_field(value, "day_of_week")?);
+            }
+            "date" => rtc_state.date = Some(script_byte_field(value, "date")?),
+            "month" => rtc_state.month = Some(script_byte_field(value, "month")?),
+            "year" => rtc_state.year = Some(script_byte_field(value, "year")?),
+            "running" => running = Some(script_bool_field(value, "running")?),
+            "halted" => rtc_state.halted = Some(script_bool_field(value, "halted")?),
+            "hour_mode" => hour_mode = Some(script_rtc_hour_mode(value)?),
+            "hour_mode_12" => {
+                rtc_state.hour_mode_12 = Some(script_bool_field(value, "hour_mode_12")?);
+            }
+            "write_protect" => {
+                rtc_state.write_protect = Some(script_bool_field(value, "write_protect")?);
+            }
+            "trickle_charge" => {
+                rtc_state.trickle_charge = Some(script_byte_field(value, "trickle_charge")?);
+            }
+            _ => return Err(runtime_error(format!("set_rtc 不支持的字段: {key}"))),
+        }
+    }
+
+    if let Some(running) = running {
+        let halted = !running;
+        if let Some(existing) = rtc_state.halted
+            && existing != halted
+        {
+            return Err(runtime_error("running 和 halted 不能冲突"));
+        }
+        rtc_state.halted = Some(halted);
+    }
+
+    if let Some(hour_mode_12) = hour_mode {
+        if let Some(existing) = rtc_state.hour_mode_12
+            && existing != hour_mode_12
+        {
+            return Err(runtime_error("hour_mode 和 hour_mode_12 不能冲突"));
+        }
+        rtc_state.hour_mode_12 = Some(hour_mode_12);
+    }
+
+    Ok(rtc_state)
+}
+
 fn script_uart_config(
     data_bits: i64,
     baud_rate: i64,
@@ -2086,6 +2235,20 @@ fn script_uart_raw_values(values: Array) -> Result<Vec<u16>, Box<EvalAltResult>>
                 .map_err(|_| runtime_error(format!("uart raw 第 {} 项必须是整数", index + 1)))?;
             u16::try_from(value)
                 .map_err(|_| runtime_error(format!("uart raw 第 {} 项必须在 0..=65535", index + 1)))
+        })
+        .collect()
+}
+
+fn script_byte_array(values: Array, label: &str) -> Result<Vec<u8>, Box<EvalAltResult>> {
+    values
+        .into_iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let value = value
+                .as_int()
+                .map_err(|_| runtime_error(format!("{label} 第 {} 项必须是整数", index + 1)))?;
+            u8::try_from(value)
+                .map_err(|_| runtime_error(format!("{label} 第 {} 项必须在 0..=255", index + 1)))
         })
         .collect()
 }
@@ -2139,7 +2302,7 @@ mod tests {
     use super::{
         ScriptTraceState, build_engine, build_scope, eval_source, eval_source_with_engine,
     };
-    use crate::{chip::Simulator, wave::WaveCaptureOptions};
+    use crate::{chip::Simulator, persistent_state::PersistentState, wave::WaveCaptureOptions};
 
     fn dual_uart_echo_sim() -> Simulator {
         let code = vec![
@@ -2326,6 +2489,83 @@ mod tests {
         "#;
         let err = eval_source(sim, "test:add_marker_negative", script).unwrap_err();
         assert!(err.to_string().contains("add_marker 时间戳必须 >= 0"));
+    }
+
+    #[test]
+    fn rhai_set_rtc_map_supports_partial_state_control() {
+        let sim = Arc::new(Mutex::new(Simulator::nop(false)));
+        let trace_state = Arc::new(Mutex::new(ScriptTraceState::default()));
+        let engine = build_engine(&sim, &trace_state);
+        let mut scope: Scope<'static> = build_scope();
+        let script = r#"
+            set_rtc(#{
+                hour: 11,
+                minute: 22,
+                second: 33,
+                year: 24,
+                month: 12,
+                date: 31,
+                weekday: 2,
+                running: false,
+                hour_mode: "12h",
+                write_protect: true,
+                trickle_charge: 0xA5,
+            });
+            set_rtc(#{
+                running: true,
+                hour_mode: 24,
+                second: 40,
+            });
+        "#;
+
+        eval_source_with_engine(
+            &engine,
+            &mut scope,
+            &trace_state,
+            "test:set_rtc_map",
+            script,
+        )
+        .expect("run set_rtc map script");
+
+        let encoded = sim.lock().expect("lock sim").export_persistent_state();
+        let state = PersistentState::decode(&encoded).expect("decode persistent state");
+        assert_eq!(state.ds1302.hour, 11);
+        assert_eq!(state.ds1302.minute, 22);
+        assert_eq!(state.ds1302.second, 40);
+        assert_eq!(state.ds1302.year, 24);
+        assert_eq!(state.ds1302.month, 12);
+        assert_eq!(state.ds1302.date, 31);
+        assert_eq!(state.ds1302.day_of_week, 2);
+        assert!(!state.ds1302.halted);
+        assert!(!state.ds1302.hour_mode_12);
+        assert!(state.ds1302.write_protect);
+        assert_eq!(state.ds1302.trickle_charge, 0xA5);
+    }
+
+    #[test]
+    fn rhai_set_eeprom_supports_single_and_block_writes() {
+        let sim = Arc::new(Mutex::new(Simulator::nop(false)));
+        let trace_state = Arc::new(Mutex::new(ScriptTraceState::default()));
+        let engine = build_engine(&sim, &trace_state);
+        let mut scope: Scope<'static> = build_scope();
+        let script = r#"
+            set_eeprom(0x10, 0xAB);
+            set_eeprom(0x20, [1, 2, 3, 255]);
+            set_eeprom([0x55, 0x66]);
+        "#;
+
+        eval_source_with_engine(&engine, &mut scope, &trace_state, "test:set_eeprom", script)
+            .expect("run set_eeprom script");
+
+        let encoded = sim.lock().expect("lock sim").export_persistent_state();
+        let state = PersistentState::decode(&encoded).expect("decode persistent state");
+        assert_eq!(state.at24c02.memory[0x00], 0x55);
+        assert_eq!(state.at24c02.memory[0x01], 0x66);
+        assert_eq!(state.at24c02.memory[0x10], 0xAB);
+        assert_eq!(state.at24c02.memory[0x20], 0x01);
+        assert_eq!(state.at24c02.memory[0x21], 0x02);
+        assert_eq!(state.at24c02.memory[0x22], 0x03);
+        assert_eq!(state.at24c02.memory[0x23], 0xFF);
     }
 
     #[test]
