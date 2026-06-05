@@ -66,6 +66,39 @@ u8 rtc_get_rem() {
 	return rem;
 }
 
+u8 is_leap(uint year) {
+	if (year < 100) {
+		year += 2000;
+	}
+	return (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+}
+
+u8 valid_date_alt() {
+	u8 max_d = 28, y = date_buf_alt[0], m = date_buf_alt[1], d = date_buf_alt[2];
+	
+	if (y == 0 || d == 0) {
+		return 0;
+	}
+	if (y > 12 || d > 31) {
+		return 0;
+	}
+	
+	if (is_leap(y) && m == 2) {
+		max_d = 29;
+	}
+	if (m != 2) {
+		if (m <= 7) {
+			max_d = m % 2 == 1 ? 31 : 30;
+		} else {
+			max_d = m % 2 == 0 ? 31 : 30;
+		}
+	}
+	if (d > max_d) {
+		return 0;
+	}
+	return 1;
+}
+
 void key_proc() {
 	u8 i;
 	if (key_sd < 10) return;
@@ -83,15 +116,18 @@ void key_proc() {
 			for (i = 0; i < 4; ++i) date_buf_alt[i] = date_buf[i];
 			for (i = 0; i < 3; ++i) time_buf_alt[i] = time_buf[i];
 		} else {
+			u8 valid = 1;
 			setting = 0;
-			// todo check date validity, if not pass, no write.
+			// check date validity, if not pass, no write.
 			// 1. ymd, day: 1..x, no 0
 			// 2. Feb date 28 / 29
 			// 3. date 30 / 31
-			for (i = 0; i < 4; ++i) date_buf[i] = date_buf_alt[i];
-			for (i = 0; i < 3; ++i) time_buf[i] = time_buf_alt[i];
-			rtc_set_time(time_buf);
-			rtc_set_date(date_buf);
+			if (valid_date_alt()) {
+				for (i = 0; i < 4; ++i) date_buf[i] = date_buf_alt[i];
+				for (i = 0; i < 3; ++i) time_buf[i] = time_buf_alt[i];
+				rtc_set_time(time_buf);
+				rtc_set_date(date_buf);
+			}
 		}
 	}
 	
@@ -118,7 +154,7 @@ void key_proc() {
 		if (setting) {
 			if (is_date) {
 				u8 rem = rtc_get_rem();
-				if (date_buf_alt[set_idx] == 1) {
+				if (date_buf_alt[set_idx] == 0) {
 					date_buf_alt[set_idx] = rem - 1;
 				} else {
 					date_buf_alt[set_idx] -= 1;
@@ -139,7 +175,7 @@ void key_proc() {
 			if (is_date) {
 				u8 rem = rtc_get_rem();
 				if (date_buf_alt[set_idx] == rem - 1) {
-					date_buf_alt[set_idx] = 1;
+					date_buf_alt[set_idx] = 0;
 				} else {
 					date_buf_alt[set_idx]++;
 				}
