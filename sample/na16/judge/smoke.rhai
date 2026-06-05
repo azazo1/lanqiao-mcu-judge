@@ -1,6 +1,6 @@
 set_rtc(23, 59, 50);
 run_ms(200);
-assert(regex_is_match(display_text(30), "^\\d{2}-\\d{2}-\\d{2}$"), "上电时间格式");
+assert_regex(display_text(30), "^\\d{2}-\\d{2}-\\d{2}$", "上电时间格式");
 assert_eq(parse_int(display_text()[0..2]), 23, "上电小时");
 assert_eq(display_text()[2..3], "-", "上电第1个分隔符");
 assert_eq(parse_int(display_text()[3..5]), 59, "上电分钟");

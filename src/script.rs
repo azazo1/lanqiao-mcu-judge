@@ -1454,6 +1454,16 @@ fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
     );
 
     engine.register_fn(
+        "assert_regex",
+        move |actual: ImmutableString,
+              pattern: ImmutableString,
+              label: ImmutableString|
+              -> Result<(), Box<EvalAltResult>> {
+            assert_regex_match(actual.as_str(), pattern.as_str(), label.as_str())
+        },
+    );
+
+    engine.register_fn(
         "assert_in",
         move |actual: i64,
               range: Range<i64>,
@@ -1888,6 +1898,17 @@ fn assert_eq_dynamic(
     )))
 }
 
+fn assert_regex_match(actual: &str, pattern: &str, label: &str) -> Result<(), Box<EvalAltResult>> {
+    let regex = Regex::new(pattern)
+        .map_err(|err| runtime_error(format!("{label}: 正则表达式编译失败: {err}")))?;
+    if regex.is_match(actual) {
+        return Ok(());
+    }
+    Err(runtime_error(format!(
+        "{label}: 期望匹配正则 `{pattern}` , 实际 `{actual}`"
+    )))
+}
+
 fn dynamic_values_equal(actual: &Dynamic, expected: &Dynamic) -> bool {
     if actual.is::<ImmutableString>() {
         return actual.clone_cast::<ImmutableString>() == expected.clone_cast::<ImmutableString>();
@@ -2177,6 +2198,20 @@ mod tests {
         "#;
         let err = eval_source(sim, "test:run_to_timeout_fail", script).unwrap_err();
         assert!(err.to_string().contains("超时"));
+    }
+
+    #[test]
+    fn rhai_assert_regex_reports_pattern_and_actual() {
+        let sim = Simulator::nop(false);
+        let script = r#"
+            assert_regex("123", "^\\d+$", "digits ok");
+            assert_regex("abc", "^\\d+$", "digits bad");
+        "#;
+        let err = eval_source(sim, "test:assert_regex", script).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("digits bad"));
+        assert!(message.contains("^\\d+$"));
+        assert!(message.contains("abc"));
     }
 
     #[test]

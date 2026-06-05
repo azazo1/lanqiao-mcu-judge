@@ -1,5 +1,5 @@
 run_ms(220);
-assert(regex_is_match(display_text(30), "^\\s{7}0$"), "上电显示格式");
+assert_regex(display_text(30), "^\\s{7}0$", "上电显示格式");
 assert_eq(display_text(30)[0..7], "       ", "上电前7位空白");
 assert_eq(parse_int(display_text()[7..8]), 0, "上电末位数值");
 assert(!led_on(L1), "L1 初始应熄灭");

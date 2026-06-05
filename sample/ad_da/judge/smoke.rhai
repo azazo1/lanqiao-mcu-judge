@@ -4,7 +4,7 @@ set_voltage(AIN3, 0.0);
 set_voltage(AIN1, 0.0);
 run_ms(500);
 add_marker("adc_zero_sampled");
-assert(regex_is_match(display_text(30), "^\\d{3} \\d{3}$"), "AD 显示格式");
+assert_regex(display_text(30), "^\\d{3} \\d{3}$", "AD 显示格式");
 let boot_text = display_text();
 assert_in(parse_int(boot_text[0..3]), 0..=1, "左侧 AD 零点显示");
 assert_in(parse_int(boot_text[4..7]), 0..=1, "右侧 AD 零点显示");

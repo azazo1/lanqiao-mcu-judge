@@ -272,7 +272,7 @@ tap_key(S4, 80);
 run_ms(520);
 
 let text = display_text(30);
-assert(regex_is_match(text, "^  \\d{2}\\.\\d{2}\\.\\d{2}$"), "时间格式");
+assert_regex(text, "^  \\d{2}\\.\\d{2}\\.\\d{2}$", "时间格式");
 assert_eq(parse_int(text[2..4]), 23, "小时");
 assert_eq(parse_int(text[5..7]), 59, "分钟");
 assert_eq(parse_int(text[8..10]), 58, "秒");
@@ -285,7 +285,7 @@ tap_key(S4, 80);
 run_ms(120);
 
 let text = display_text(30);
-assert(regex_is_match(text, "^\\d{2}-\\d-\\d{3}$"), "显示格式");
+assert_regex(text, "^\\d{2}-\\d-\\d{3}$", "显示格式");
 assert_eq(parse_int(text[0..2]), vv_expected, "VV");
 assert_eq(parse_int(text[3..4]), r_expected, "R");
 assert_eq(parse_int(text[5..8]), eee_expected, "EEE");
@@ -500,6 +500,7 @@ assert_eq(raw[3], 0x041, "UART2 第 4 个回发符号");
 
 - `regex_is_match(text, pattern)`
 - `regex_match(text, pattern)`
+- `assert_regex(text, pattern, "label")`
 
 Rhai 自带字符串切片语法, 可以直接写 `text[0..5]`. 这里的范围是 `start..end`, 也就是 0 基, 右边界不包含在结果里.
 
@@ -514,7 +515,7 @@ Rhai 也自带数值解析函数, 例如:
 - 数值部分如果对应固定物理数码管位, 优先用 `display_number(start, end)` 或 `display_number(start, end, window_ms)`.
 - 数值部分如果确实要按字符串格式判断, 再用 `display_text(...)[start..end]` 配合 `parse_int(...)` 或 `parse_float(...)`.
 - 固定字符, 空白位, 前导零, 分隔符等格式要求, 直接用 `display_text(...)[start..end]` 判断.
-- 需要描述整串格式时, 再配合 `regex_is_match(...)`.
+- 需要描述整串格式时, 优先用 `assert_regex(...)` 直接给出带标签的失败信息.
 - 不要先看当前 `hex` 的输出再反推 `expect`, 应先根据题意, 源码, 手册推导出应有结果, 再写断言.
 
 例如某个 UART 题里, 数码管前 4 位显示 `TI` 计数和小数点, 后 5 位显示最后一次解析出的数值, 可以直接拆开判断:
@@ -596,10 +597,12 @@ assert_in(stats.duty_percent, 8..=12, "上电占空比约 10%");
 
 - `assert(cond, "message")`
 - `assert_eq(actual, expected, "label")`
+- `assert_regex(text, pattern, "label")`
 - `assert_in(actual, 10..=12, "label")`
 - `print(anything)`
 
 `assert_eq(...)` 要求 `actual` 和 `expected` 是同类型. 适合字符串, 整数, 浮点, 布尔等直接相等比较. 失败时会同时打印 `expected` 和 `actual`.
+`assert_regex(...)` 用于判断左侧字符串是否匹配右侧正则. 失败时会同时打印正则和实际字符串, 也会保留 `label`.
 `assert_in(...)` 适合整数和浮点数的区间判断. 目前使用 Rhai 的整数 range 语法, 支持 `a..b` 和 `a..=b`. 对浮点实际值会按对应的整数边界比较. 失败时会同时打印期望区间和实际值.
 
 调试建议:

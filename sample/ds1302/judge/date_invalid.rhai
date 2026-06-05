@@ -18,7 +18,7 @@ fn tap_many(key, count) {
 }
 
 fn assert_time_text(text, hour, minute, second, label) {
-    assert(regex_is_match(text, "^  \\d{2}\\.\\d{2}\\.\\d{2}$"), label + " 时间格式");
+    assert_regex(text, "^  \\d{2}\\.\\d{2}\\.\\d{2}$", label + " 时间格式");
     assert_eq(parse_int(text[2..4]), hour, label + " 小时");
     assert_eq(parse_int(text[5..7]), minute, label + " 分钟");
     assert_eq(parse_int(text[8..10]), second, label + " 秒");
@@ -34,7 +34,7 @@ fn assert_setting_time_screen(hour, minute, second, label) {
 }
 
 fn assert_date_text(text, year, month, date, day, label) {
-    assert(regex_is_match(text, "^\\d{2}\\.\\d{2}\\.\\d{2}\\.\\d{2}$"), label + " 日期格式");
+    assert_regex(text, "^\\d{2}\\.\\d{2}\\.\\d{2}\\.\\d{2}$", label + " 日期格式");
     assert_eq(parse_int(text[0..2]), year, label + " 年");
     assert_eq(parse_int(text[3..5]), month, label + " 月");
     assert_eq(parse_int(text[6..8]), date, label + " 日");

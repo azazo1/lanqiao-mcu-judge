@@ -11,7 +11,7 @@ fn screen() {
 
 fn assert_screen(vv_expected, r_expected, eee_expected, label) {
     let text = screen();
-    assert(regex_is_match(text, "^\\d{2}-\\d-\\d{3}$"), label + " 显示格式");
+    assert_regex(text, "^\\d{2}-\\d-\\d{3}$", label + " 显示格式");
     assert_eq(text[2..3], "-", label + " 第3位固定为 -");
     assert_eq(text[4..5], "-", label + " 第5位固定为 -");
     assert_eq(parse_int(text[0..2]), vv_expected, label + " VV");

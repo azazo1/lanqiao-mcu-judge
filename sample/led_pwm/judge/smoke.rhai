@@ -1,7 +1,7 @@
 add_marker("boot");
 run_ms(220);
 add_marker("boot_display_ready");
-assert(regex_is_match(display_text(30), "^\\d{3}$"), "上电占空比显示格式");
+assert_regex(display_text(30), "^\\d{3}$", "上电占空比显示格式");
 assert_eq(display_number(1, 3, 30), 0, "上电占空比数值");
 
 let initial_stats = watch_led_stats(L1, 40);
