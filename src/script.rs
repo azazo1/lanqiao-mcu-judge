@@ -1,3 +1,8 @@
+pub(crate) mod event_track;
+pub(crate) mod run_target;
+pub(crate) mod state_target;
+mod wait_api;
+
 use std::{
     io::{self, BufRead, IsTerminal, Read, Write},
     ops::{Range, RangeInclusive},
@@ -20,7 +25,7 @@ use crate::{
         Simulator, UartConfig, UartParity, UartStopBits,
     },
     ids::{KeyId, KeyMode, LedId, ResetMode, SignalId, VoltageChannel},
-    script_target::{RunToEdge, RunToTarget},
+    script::run_target::{RunToEdge, RunToTarget},
 };
 
 pub fn run_script(sim: Simulator, path: &Path) -> Result<()> {
@@ -587,6 +592,7 @@ fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
     );
 
     register_run_to_api(engine, sim);
+    wait_api::register_wait_api(engine, sim);
 
     let sim_export_persistent = Arc::clone(sim);
     engine.register_fn(

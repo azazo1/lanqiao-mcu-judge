@@ -162,7 +162,6 @@ impl SegmentDecoder {
         self.blank_patterns.insert(pattern);
     }
 
-    #[cfg(test)]
     pub(crate) fn decode_text(&self, digit: DigitSample) -> String {
         let mut text = String::with_capacity(2);
         self.push_decoded_text(digit, &mut text);

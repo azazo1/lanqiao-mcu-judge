@@ -129,6 +129,10 @@ reset 模式:
 - `run_to(target, edge, timeout_ns)`
 - `run_to(predicate)`
 - `run_to(predicate, timeout_ns)`
+- `wait_until(target, expected)`
+- `wait_until(target, expected, timeout_ns)`
+- `run_to_event(track)`
+- `run_to_event(track, timeout_ns)`
 - `run_to_ns(target_ns)`
 - `run_to_us(target_us)`
 - `run_to_ms(target_ms)`
@@ -180,6 +184,39 @@ add_marker(25_000_000, "sample_point");
 `run_to(predicate)` 会持续推进仿真, 每推进一步就重新执行一次回调 `predicate`, 当其返回 `true` 时停止, 并返回这次一共推进了多少 `ns`.
 
 `run_to(predicate, timeout_ns)` 则会额外增加超时限制.
+
+`wait_until(target, expected)` 会持续推进仿真, 直到某个底层状态等于目标值, 并返回这次一共推进了多少 `ns`.
+
+`wait_until(target, expected, timeout_ns)` 则会额外增加超时限制.
+
+`wait_until(...)` 适合把"等待状态出现"和"断言状态语义"拆开写. 对扫描显示, 闪烁字段, 锁存器, 引脚电平这类场景, 它通常比 `run_to(predicate)` 更快, 也更容易定位失败点.
+
+常见 target 例子:
+
+- 布尔 target: `pin.p3.4`, `latch.p2.1`, `board.effective.com.0`, `seg.d3.scan`, `seg.d3.visible`
+- 整数 target: `pin.p3`, `latch.p3`, `board.effective.ctrl`, `seg.d8.pattern`, `seg.d8.raw`
+- 文本 target: `seg.text`, `seg.d8.text`
+
+`run_to_event(track)` 会持续推进仿真, 直到捕获到下一条 wave event, 并返回一个 map:
+
+- `track`: 规范轨道 id, 例如 `event.uart1`
+- `time_ns`: 事件发生时刻
+- `elapsed_ns`: 这次等待推进的时长
+- `label`: 事件标签, 例如 `RX 0x41`
+- `detail`: 附加细节, 例如 `bits=8`
+
+`run_to_event(track, timeout_ns)` 则会额外增加超时限制.
+
+常见 track 例子:
+
+- `event.cpu`
+- `event.i2c`
+- `event.onewire`
+- `event.uart1`
+- `event.uart2`
+- `event.adc_dac`
+- `event.ds1302`
+- `uart1`, `uart2`, `rtc` 这类简写也可以
 
 回调应当返回布尔值. 在 judge 编写约定里, `run_to(predicate)` 只适合最基础的条件判断, 可以把它理解成一个轻量轮询器, 而不是通用断言容器. 常见写法例如:
 
@@ -263,15 +300,16 @@ run_to(
 
 1. 如果只是等待按键释放后的稳定态, 直接依赖 `tap_key(...)` 内置等待.
 2. 如果题目本身存在 `100ms`, `500ms`, `1s` 之类的业务刷新节拍, 显式 `run_ms(...)` 留出对应余量.
-3. 等显示稳定后, 再在普通断言里做字符串切片, 正则或数值解析.
+3. 如果是扫描显示或闪烁字段, 优先用 `wait_until(...)` 等底层状态就绪, 再在普通断言里做字符串切片, 正则或数值解析.
+4. 等显示稳定后, 再在普通断言里做字符串切片, 正则或数值解析.
 
-像 `DS1302` 这种设置态会按约 `500ms` 闪烁的题, 更推荐显式跨过闪烁周期, 再做普通断言:
+像 `DS1302` 这种设置态会按约 `500ms` 闪烁的题, 更推荐先等待当前字段重新可见, 再做普通断言:
 
 ```rhai
 tap_key(S4, 80);
-run_ms(520);
+wait_until("seg.d3.visible", true, 1_200_000_000);
 
-let text = display_text(30);
+let text = display_text();
 assert_regex(text, "^  \\d{2}\\.\\d{2}\\.\\d{2}$", "时间格式");
 assert_eq(parse_int(text[2..4]), 23, "小时");
 assert_eq(parse_int(text[5..7]), 59, "分钟");
@@ -588,6 +626,7 @@ assert_in(stats.duty_percent, 8..=12, "上电占空比约 10%");
 
 - `seg_raw(index)` 返回锁存到该位数码管上的原始字节.
 - `seg_pattern(index)` 返回按 `!raw` 归一化后的段码模式, 更适合直接按 `0x3F` 这类常见段码表判断.
+- `wait_until("seg.d3.visible", true, ...)` 可以等待某一位重新显示为非空白, 适合处理闪烁字段.
 - `set_seg_decode(pattern, text)` 用于自定义 `display_text()` 的解码规则.
 - `set_seg_blank(pattern)` 将某个模式视为留空.
 

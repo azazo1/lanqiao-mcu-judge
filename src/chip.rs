@@ -43,7 +43,11 @@ use crate::{
         SegmentDecoder, UltrasonicDevice,
     },
     persistent_state::PersistentState,
-    script_target::{RunToEdge, RunToTarget},
+    script::{
+        event_track::EventTrack,
+        run_target::{RunToEdge, RunToTarget},
+        state_target::{BoardLatchSource, BoolStateTarget, IntStateTarget, TextStateTarget},
+    },
     wave::{
         TRACK_EVENT_CPU, WaveCaptureOptions, WaveCaptureWindow, WaveEventNote, WaveMarkerNote,
         WaveRecorder, WaveSnapshot,
@@ -65,6 +69,7 @@ pub struct Simulator {
     active_interrupts: Vec<InterruptSource>,
     seg_decoder: SegmentDecoder,
     wave: WaveRecorder,
+    script_events: ScriptEventTracker,
 }
 
 #[derive(Debug, Clone)]
@@ -139,6 +144,49 @@ pub(crate) struct LedWatchStats {
     pub(crate) rising_edges: u64,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct ObservedEvent {
+    pub(crate) track_id: &'static str,
+    pub(crate) time_ns: u64,
+    pub(crate) elapsed_ns: u64,
+    pub(crate) label: String,
+    pub(crate) detail: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ScriptEventTracker {
+    counts: [u64; EventTrack::COUNT],
+    last_notes: [Option<WaveEventNote>; EventTrack::COUNT],
+}
+
+impl Default for ScriptEventTracker {
+    fn default() -> Self {
+        Self {
+            counts: [0; EventTrack::COUNT],
+            last_notes: std::array::from_fn(|_| None),
+        }
+    }
+}
+
+impl ScriptEventTracker {
+    fn record(&mut self, note: WaveEventNote) {
+        let Some(track) = EventTrack::from_track_id(note.track_id) else {
+            return;
+        };
+        let index = track.index();
+        self.counts[index] = self.counts[index].saturating_add(1);
+        self.last_notes[index] = Some(note);
+    }
+
+    fn count(&self, track: EventTrack) -> u64 {
+        self.counts[track.index()]
+    }
+
+    fn last_note(&self, track: EventTrack) -> Option<&WaveEventNote> {
+        self.last_notes[track.index()].as_ref()
+    }
+}
+
 impl LedWatchStats {
     pub(crate) fn change_frequency_hz(self) -> Result<f64> {
         if self.observed_time_ns == 0 {
@@ -190,6 +238,7 @@ impl Simulator {
             active_interrupts: Vec::new(),
             seg_decoder: SegmentDecoder::default(),
             wave: WaveRecorder::new(wave_options),
+            script_events: ScriptEventTracker::default(),
         };
         sim.ctx.ports.sync_inputs(&sim.ctx.board);
         sim.capture_wave_snapshot();
@@ -611,6 +660,180 @@ impl Simulator {
             RunToTarget::Ds1302Clk => self.ctx.ports.port_latch[1] & (1 << 7) != 0,
             RunToTarget::Ds1302Io => self.ctx.ports.port_input[2] & (1 << 3) != 0,
             RunToTarget::Ne555SigOut => self.ctx.board.frequency_level(),
+        }
+    }
+
+    fn board_latch_value(&self, source: BoardLatchSource, slot: u8) -> u8 {
+        match source {
+            BoardLatchSource::Effective => self.ctx.effective_board_latches()[usize::from(slot)],
+            BoardLatchSource::Port => self.ctx.ports.board_latches[usize::from(slot)],
+            BoardLatchSource::Xdata => self.ctx.xdata.board_latches[usize::from(slot)],
+        }
+    }
+
+    pub(crate) fn read_bool_state_target(&mut self, target: BoolStateTarget) -> bool {
+        self.ctx.ports.refresh_inputs(&self.ctx.board);
+        match target {
+            BoolStateTarget::Signal(target) => self.read_run_to_target(target),
+            BoolStateTarget::LatchBit { port, bit } => {
+                self.ctx.ports.port_latch[port] & (1 << bit) != 0
+            }
+            BoolStateTarget::BoardBit { source, slot, bit } => {
+                self.board_latch_value(source, slot) & (1 << bit) != 0
+            }
+            BoolStateTarget::SegVisible { digit } => {
+                let index = usize::from(digit);
+                if !(1..=8).contains(&index) {
+                    return false;
+                }
+                let sample = self.ctx.board.outputs.digits[index - 1];
+                sample.seen && self.seg_decoder.decode_char(sample) != ' '
+            }
+        }
+    }
+
+    pub(crate) fn read_int_state_target(&mut self, target: IntStateTarget) -> Result<i64> {
+        self.ctx.ports.refresh_inputs(&self.ctx.board);
+        match target {
+            IntStateTarget::PinByte { port } => Ok(i64::from(self.ctx.ports.port_input[port])),
+            IntStateTarget::LatchByte { port } => Ok(i64::from(self.ctx.ports.port_latch[port])),
+            IntStateTarget::BoardByte { source, slot } => {
+                Ok(i64::from(self.board_latch_value(source, slot)))
+            }
+            IntStateTarget::SegRaw { digit } => Ok(i64::from(self.seg_raw(usize::from(digit))?)),
+            IntStateTarget::SegPattern { digit } => {
+                Ok(i64::from(self.seg_pattern(usize::from(digit))?))
+            }
+        }
+    }
+
+    pub(crate) fn read_text_state_target(&mut self, target: TextStateTarget) -> Result<String> {
+        self.ctx.ports.refresh_inputs(&self.ctx.board);
+        match target {
+            TextStateTarget::SegText => Ok(self.display_text()),
+            TextStateTarget::SegDigitText { digit } => {
+                let index = usize::from(digit);
+                if !(1..=8).contains(&index) {
+                    bail!("数码管编号必须在 1..=8");
+                }
+                let sample = self.ctx.board.outputs.digits[index - 1];
+                Ok(self.seg_decoder.decode_text(sample))
+            }
+        }
+    }
+
+    fn wait_until_value_with_timeout<T, F>(
+        &mut self,
+        mut read: F,
+        expected: T,
+        timeout_ns: Option<u64>,
+    ) -> Result<u64>
+    where
+        T: PartialEq,
+        F: FnMut(&mut Self) -> Result<T>,
+    {
+        let start = self.ctx.board.sim_time_ns;
+        if read(self)? == expected {
+            return Ok(0);
+        }
+        loop {
+            let elapsed_ns = self.ctx.board.sim_time_ns.saturating_sub(start);
+            if let Some(timeout_ns) = timeout_ns
+                && elapsed_ns >= timeout_ns
+            {
+                bail!("wait_until 等待超时: timeout_ns={timeout_ns}");
+            }
+            self.step_once()?;
+            let elapsed_ns = self.ctx.board.sim_time_ns.saturating_sub(start);
+            if read(self)? == expected {
+                if let Some(timeout_ns) = timeout_ns
+                    && elapsed_ns > timeout_ns
+                {
+                    bail!("wait_until 等待超时: timeout_ns={timeout_ns}");
+                }
+                return Ok(elapsed_ns);
+            }
+            if let Some(timeout_ns) = timeout_ns
+                && elapsed_ns >= timeout_ns
+            {
+                bail!("wait_until 等待超时: timeout_ns={timeout_ns}");
+            }
+        }
+    }
+
+    pub(crate) fn wait_until_bool_state_with_timeout(
+        &mut self,
+        target: BoolStateTarget,
+        expected: bool,
+        timeout_ns: Option<u64>,
+    ) -> Result<u64> {
+        self.wait_until_value_with_timeout(
+            |sim| Ok(sim.read_bool_state_target(target)),
+            expected,
+            timeout_ns,
+        )
+    }
+
+    pub(crate) fn wait_until_int_state_with_timeout(
+        &mut self,
+        target: IntStateTarget,
+        expected: i64,
+        timeout_ns: Option<u64>,
+    ) -> Result<u64> {
+        self.wait_until_value_with_timeout(
+            |sim| sim.read_int_state_target(target),
+            expected,
+            timeout_ns,
+        )
+    }
+
+    pub(crate) fn wait_until_text_state_with_timeout(
+        &mut self,
+        target: TextStateTarget,
+        expected: &str,
+        timeout_ns: Option<u64>,
+    ) -> Result<u64> {
+        self.wait_until_value_with_timeout(
+            |sim| sim.read_text_state_target(target),
+            expected.to_owned(),
+            timeout_ns,
+        )
+    }
+
+    pub(crate) fn run_to_event_with_timeout(
+        &mut self,
+        track: EventTrack,
+        timeout_ns: Option<u64>,
+    ) -> Result<ObservedEvent> {
+        let start = self.ctx.board.sim_time_ns;
+        let start_count = self.script_events.count(track);
+        loop {
+            let elapsed_ns = self.ctx.board.sim_time_ns.saturating_sub(start);
+            if self.script_events.count(track) > start_count {
+                let note = self
+                    .script_events
+                    .last_note(track)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("事件轨状态损坏: {}", track.track_id()))?;
+                if let Some(timeout_ns) = timeout_ns
+                    && elapsed_ns > timeout_ns
+                {
+                    bail!("run_to_event 等待超时: timeout_ns={timeout_ns}");
+                }
+                return Ok(ObservedEvent {
+                    track_id: note.track_id,
+                    time_ns: note.time_ns,
+                    elapsed_ns,
+                    label: note.label,
+                    detail: note.detail,
+                });
+            }
+            if let Some(timeout_ns) = timeout_ns
+                && elapsed_ns >= timeout_ns
+            {
+                bail!("run_to_event 等待超时: timeout_ns={timeout_ns}");
+            }
+            self.step_once()?;
         }
     }
 
@@ -1147,31 +1370,25 @@ impl Simulator {
     }
 
     fn drain_wave_events(&mut self) {
-        if !self.wave.enabled() {
-            return;
-        }
         for note in self.ctx.board.ds18b20.take_wave_events() {
-            self.wave.record_event_note(note);
+            self.record_observed_event(note);
         }
         for note in self.ctx.board.pcf8591.take_wave_events() {
-            self.wave.record_event_note(note);
+            self.record_observed_event(note);
         }
         for note in self.ctx.board.ds1302.take_wave_events() {
-            self.wave.record_event_note(note);
+            self.record_observed_event(note);
         }
         for note in self.ctx.ports.uart1.take_wave_events() {
-            self.wave.record_event_note(note);
+            self.record_observed_event(note);
         }
         for note in self.ctx.ports.uart2.take_wave_events() {
-            self.wave.record_event_note(note);
+            self.record_observed_event(note);
         }
     }
 
     fn note_interrupt_event(&mut self, pending: PendingInterrupt) {
         let time_ns = self.ctx.board.sim_time_ns;
-        if !self.wave.captures_time(time_ns) {
-            return;
-        }
         let label = match pending.source {
             InterruptSource::External0 => "INT0 enter",
             InterruptSource::Timer0 => "T0 enter",
@@ -1186,7 +1403,14 @@ impl Simulator {
             label,
             format!("pc=0x{:04X}", self.cpu.pc_ext(&self.ctx)),
         );
-        self.wave.record_event_note(note);
+        self.record_observed_event(note);
+    }
+
+    fn record_observed_event(&mut self, note: WaveEventNote) {
+        self.script_events.record(note.clone());
+        if self.wave.enabled() {
+            self.wave.record_event_note(note);
+        }
     }
 }
 
@@ -1282,13 +1506,14 @@ impl MachineContext {
         Self::new_with_wave_window(code, WaveCaptureWindow::from_enabled(wave_enabled))
     }
 
-    fn new_with_wave_window(code: Vec<u8>, wave_window: WaveCaptureWindow) -> Self {
-        let mut board = BoardModel::new_with_wave_window(wave_window);
+    fn new_with_wave_window(code: Vec<u8>, _wave_window: WaveCaptureWindow) -> Self {
+        let event_window = WaveCaptureWindow::from_enabled(true);
+        let mut board = BoardModel::new_with_wave_window(event_window);
         board
             .outputs
             .sample_from_latches(&BOARD_POWER_ON_LATCHES, &[0; 4]);
         Self {
-            ports: MachinePorts::new_with_wave_window(wave_window),
+            ports: MachinePorts::new_with_wave_window(event_window),
             xdata: BoardXdata::default(),
             code: CodeMemory { code },
             board,
@@ -1578,22 +1803,10 @@ impl MachinePorts {
             .read(&self.generic, SFR_TCON)
             .expect("TCON should be readable");
         let mut next_tcon = tcon;
-        next_tcon = apply_external_interrupt_flag(
-            next_tcon,
-            TCON_IT0,
-            TCON_IE0,
-            P3_INT0,
-            prev_p3,
-            next_p3,
-        );
-        next_tcon = apply_external_interrupt_flag(
-            next_tcon,
-            TCON_IT1,
-            TCON_IE1,
-            P3_INT1,
-            prev_p3,
-            next_p3,
-        );
+        next_tcon =
+            apply_external_interrupt_flag(next_tcon, TCON_IT0, TCON_IE0, P3_INT0, prev_p3, next_p3);
+        next_tcon =
+            apply_external_interrupt_flag(next_tcon, TCON_IT1, TCON_IE1, P3_INT1, prev_p3, next_p3);
         if next_tcon != tcon {
             let _ = self.timers.write(&mut self.generic, SFR_TCON, next_tcon);
         }
@@ -2985,6 +3198,7 @@ mod tests {
             active_interrupts: Vec::new(),
             seg_decoder: super::SegmentDecoder::default(),
             wave: crate::wave::WaveRecorder::new(crate::wave::WaveCaptureOptions::default()),
+            script_events: super::ScriptEventTracker::default(),
         };
         sim.cpu
             .register_set(Register::IE, u16::from(super::IE_EA | super::IE_ET1));
