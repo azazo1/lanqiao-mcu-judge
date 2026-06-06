@@ -151,3 +151,54 @@ wave-sample sample script="smoke" start="0" end="" output="":
         exit $LASTEXITCODE
     }
     Write-Output "wave html: $outputPath"
+
+[script("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
+build-sample sample:
+    $sampleDir = Join-Path 'sample' {{quote(sample)}}
+    $prjDir = Join-Path $sampleDir 'prj'
+    if (-not (Test-Path -LiteralPath $prjDir -PathType Container)) {
+        [Console]::Error.WriteLine("project directory not found: $prjDir")
+        exit 1
+    }
+
+    $uvproj = Get-ChildItem -LiteralPath $prjDir -File -Filter '*.uvproj' |
+        Sort-Object Name |
+        Select-Object -First 1
+    if ($null -eq $uvproj) {
+        [Console]::Error.WriteLine("no uvproj found in $prjDir")
+        exit 1
+    }
+
+    $targetName = ''
+    $outputName = ''
+    try {
+        [xml]$project = Get-Content -LiteralPath $uvproj.FullName
+        $targetName = [string]$project.Project.Targets.Target.TargetName
+        $outputName = [string]$project.Project.Targets.Target.TargetOption.TargetCommonOption.OutputName
+    } catch {
+    }
+
+    if ([string]::IsNullOrWhiteSpace($targetName)) {
+        $targetName = [System.IO.Path]::GetFileNameWithoutExtension($uvproj.Name)
+    }
+    if ([string]::IsNullOrWhiteSpace($outputName)) {
+        $outputName = $targetName
+    }
+
+    $objectsDir = Join-Path $prjDir 'Objects'
+    New-Item -ItemType Directory -Path $objectsDir -Force | Out-Null
+    $logPath = Join-Path $objectsDir 'uv4.log'
+
+    & 'C:/Keil_v1/UV4/UV4.exe' -b $uvproj.FullName -j0 -t $targetName -o $logPath
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+
+    $hexPath = Join-Path $objectsDir ($outputName + '.hex')
+    if (Test-Path -LiteralPath $hexPath -PathType Leaf) {
+        $hexRelative = [System.IO.Path]::GetRelativePath((Get-Location).Path, $hexPath)
+        Write-Output "hex: $hexRelative"
+    } else {
+        $logRelative = [System.IO.Path]::GetRelativePath((Get-Location).Path, $logPath)
+        Write-Output "build finished, hex not found. check log: $logRelative"
+    }

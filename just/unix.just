@@ -107,3 +107,9 @@ wave-sample sample script="smoke" start="0" end="" output="":
     fi
     "${cmd[@]}"
     echo "wave html: $output_path"
+
+build-sample sample:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "build-sample is windows only" >&2
+    exit 1
