@@ -4,7 +4,7 @@
 
 前提:
 
-- 可以直接调用 `C:\Keil_v1\UV4\UV4.exe`.
+- 可以直接调用 `C:/Keil_v1/UV4/UV4.exe`.
 - 工程里的器件头文件和工具链配置已经在 `uvproj` 中设置完成.
 
 ## 批量构建
@@ -14,14 +14,14 @@
 命令结构可以写成:
 
 ```powershell
-C:\Keil_v1\UV4\UV4.exe -b .\sample\float_bench\prj\float_bench.uvproj -j0 -t float_bench -o .\sample\float_bench\prj\Objects\uv4.log
+C:/Keil_v1/UV4/UV4.exe -b .\sample\arith_bench\prj\arith_bench.uvproj -j0 -t arith_bench -o .\sample\arith_bench\prj\Objects\uv4.log
 ```
 
 这几个参数的作用如下:
 
 - `-b`: 按工程文件执行批量构建.
 - `-j0`: 关闭交互界面阻塞, 适合命令行调用.
-- `-t float_bench`: 指定要构建的 target 名称.
+- `-t arith_bench`: 指定要构建的 target 名称.
 - `-o ...`: 把构建日志写到指定文件.
 
 ## 构建产物
@@ -29,13 +29,13 @@ C:\Keil_v1\UV4\UV4.exe -b .\sample\float_bench\prj\float_bench.uvproj -j0 -t flo
 构建成功后, `hex` 默认会输出到:
 
 ```text
-sample\float_bench\prj\Objects\float_bench.hex
+sample\arith_bench\prj\Objects\arith_bench.hex
 ```
 
 日志文件也会输出到:
 
 ```text
-sample\float_bench\prj\Objects\uv4.log
+sample\arith_bench\prj\Objects\uv4.log
 ```
 
 如果要编译别的 sample, 一般只需要同时替换这几项:
@@ -49,13 +49,13 @@ sample\float_bench\prj\Objects\uv4.log
 可以直接检查 `hex` 是否存在:
 
 ```powershell
-Get-ChildItem .\sample\float_bench\prj\Objects\float_bench.hex
+Get-ChildItem .\sample\arith_bench\prj\Objects\arith_bench.hex
 ```
 
 也可以查看日志, 确认是否为 `0 Error(s), 0 Warning(s)`:
 
 ```powershell
-Get-Content .\sample\float_bench\prj\Objects\uv4.log
+Get-Content .\sample\arith_bench\prj\Objects\uv4.log
 ```
 
 ## 后续仿真
@@ -63,5 +63,5 @@ Get-Content .\sample\float_bench\prj\Objects\uv4.log
 拿到 `hex` 之后, 可以直接运行评测:
 
 ```powershell
-stcjudge.exe run --hex .\sample\float_bench\prj\Objects\float_bench.hex --script .\sample\float_bench\judge\smoke.rhai
+stcjudge.exe run --hex .\sample\arith_bench\prj\Objects\arith_bench.hex --script .\sample\arith_bench\judge\smoke.rhai
 ```

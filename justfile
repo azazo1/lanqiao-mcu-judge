@@ -43,7 +43,7 @@ judge-samples:
 wave-sample sample script="smoke" start="0" end="" output="":
     @just --justfile {{ quote(platform_justfile) }} --working-directory {{ quote(justfile_directory()) }} wave-sample {{ quote(sample) }} {{ quote(script) }} {{ quote(start) }} {{ quote(end) }} {{ quote(output) }}
 
-# 示例: just build-sample float_bench
+# 示例: just build-sample arith_bench
 # Windows only. 使用 UV4 批量编译指定 sample, 自动查找 prj/*.uvproj.
 build-sample sample:
     @just --justfile {{ quote(platform_justfile) }} --working-directory {{ quote(justfile_directory()) }} build-sample {{ quote(sample) }}
