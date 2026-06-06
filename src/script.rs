@@ -16,7 +16,7 @@ use rhai::{
     Position, Scope,
     debugger::{DebuggerCommand, DebuggerEvent},
 };
-use tracing::{debug, trace};
+use tracing::{debug, info, trace};
 
 use crate::{
     chip::{
@@ -52,7 +52,8 @@ pub fn run_script_source(sim: Simulator, label: &str, source: &str) -> Result<()
 pub fn run_repl(sim: Simulator) -> Result<()> {
     let shared = Arc::new(Mutex::new(sim));
     let trace_state = Arc::new(Mutex::new(ScriptTraceState::default()));
-    let engine = build_engine(&shared, &trace_state);
+    let checkpoint_state = Arc::new(Mutex::new(ScriptCheckpointState::default()));
+    let engine = build_engine(&shared, &trace_state, &checkpoint_state);
     let mut scope = build_scope();
     let stdin = io::stdin();
     let mut reader = stdin.lock();
@@ -107,7 +108,8 @@ pub fn run_repl(sim: Simulator) -> Result<()> {
 fn eval_source(sim: Simulator, label: &str, source: &str) -> Result<()> {
     let shared = Arc::new(Mutex::new(sim));
     let trace_state = Arc::new(Mutex::new(ScriptTraceState::default()));
-    let engine = build_engine(&shared, &trace_state);
+    let checkpoint_state = Arc::new(Mutex::new(ScriptCheckpointState::default()));
+    let engine = build_engine(&shared, &trace_state, &checkpoint_state);
     let mut scope = build_scope();
     debug!(
         label,
@@ -115,8 +117,8 @@ fn eval_source(sim: Simulator, label: &str, source: &str) -> Result<()> {
         sim_time_ns = current_sim_time_ns(&shared),
         "开始执行评测脚本"
     );
-    eval_source_with_engine(&engine, &mut scope, &trace_state, label, source)?;
-    Ok(())
+    let result = eval_source_with_engine(&engine, &mut scope, &trace_state, label, source);
+    finalize_checkpoint_run(&checkpoint_state, result)
 }
 
 fn eval_source_with_engine(
@@ -137,7 +139,11 @@ fn eval_source_with_engine(
     Ok(())
 }
 
-fn build_engine(sim: &Arc<Mutex<Simulator>>, trace_state: &Arc<Mutex<ScriptTraceState>>) -> Engine {
+fn build_engine(
+    sim: &Arc<Mutex<Simulator>>,
+    trace_state: &Arc<Mutex<ScriptTraceState>>,
+    checkpoint_state: &Arc<Mutex<ScriptCheckpointState>>,
+) -> Engine {
     let mut engine = Engine::new();
     engine.on_print(|text| println!("{text}"));
     register_script_progress_debugger(&mut engine, sim, trace_state);
@@ -149,7 +155,7 @@ fn build_engine(sim: &Arc<Mutex<Simulator>>, trace_state: &Arc<Mutex<ScriptTrace
     engine.register_type_with_name::<SignalId>("Signal");
     engine.register_type_with_name::<RunToTarget>("RunToTarget");
     engine.register_type_with_name::<RunToEdge>("RunToEdge");
-    register_api(&mut engine, sim);
+    register_api(&mut engine, sim, checkpoint_state);
     engine
 }
 
@@ -158,6 +164,183 @@ struct ScriptTraceState {
     label: String,
     lines: Vec<String>,
     step: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CheckpointStatus {
+    Passed,
+    Failed,
+}
+
+impl CheckpointStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Passed => "✅ 通过",
+            Self::Failed => "❌ 失败",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CheckpointRecord {
+    index: i64,
+    condition: String,
+    expected: String,
+    actual: String,
+    status: CheckpointStatus,
+}
+
+#[derive(Debug, Default)]
+struct ScriptCheckpointState {
+    records: Vec<CheckpointRecord>,
+}
+
+#[derive(Debug, Clone)]
+struct CheckpointSummary {
+    total: usize,
+    failed: usize,
+    report: String,
+}
+
+impl CheckpointSummary {
+    fn failure_message(&self) -> String {
+        format!("ckpt 失败: {}/{}", self.failed, self.total)
+    }
+}
+
+impl ScriptCheckpointState {
+    fn record(
+        &mut self,
+        index: i64,
+        condition: &str,
+        expected: &str,
+        actual: String,
+        status: CheckpointStatus,
+    ) {
+        self.records.push(CheckpointRecord {
+            index,
+            condition: condition.to_owned(),
+            expected: expected.to_owned(),
+            actual,
+            status,
+        });
+    }
+
+    fn summary(&self) -> Option<CheckpointSummary> {
+        if self.records.is_empty() {
+            return None;
+        }
+
+        let total = self.records.len();
+        let failed = self
+            .records
+            .iter()
+            .filter(|record| record.status == CheckpointStatus::Failed)
+            .count();
+        let passed = total.saturating_sub(failed);
+
+        let rows = self
+            .records
+            .iter()
+            .map(|record| {
+                vec![
+                    record.index.to_string(),
+                    checkpoint_table_cell(&record.condition),
+                    checkpoint_table_cell(&record.expected),
+                    checkpoint_table_cell(&record.actual),
+                    record.status.as_str().to_owned(),
+                ]
+            })
+            .collect::<Vec<_>>();
+
+        let report = format_checkpoint_report(passed, failed, &rows);
+
+        Some(CheckpointSummary {
+            total,
+            failed,
+            report,
+        })
+    }
+}
+
+fn finalize_checkpoint_run(
+    checkpoint_state: &Arc<Mutex<ScriptCheckpointState>>,
+    result: Result<()>,
+) -> Result<()> {
+    let summary = checkpoint_state
+        .lock()
+        .expect("checkpoint state lock")
+        .summary();
+
+    if let Some(summary) = &summary {
+        print!("{}", summary.report);
+    }
+
+    match result {
+        Ok(()) => {
+            if let Some(summary) = summary
+                && summary.failed > 0
+            {
+                bail!("{}", summary.failure_message());
+            }
+            Ok(())
+        }
+        Err(err) => {
+            if let Some(summary) = summary
+                && summary.failed > 0
+            {
+                return Err(err.context(summary.failure_message()));
+            }
+            Err(err)
+        }
+    }
+}
+
+fn checkpoint_table_cell(text: &str) -> String {
+    let text = text.replace("\r\n", "\n").replace('\r', "\n");
+    let text = text.replace('\n', " / ");
+    if text.trim().is_empty() {
+        "-".to_owned()
+    } else {
+        text
+    }
+}
+
+fn format_checkpoint_report(passed: usize, failed: usize, rows: &[Vec<String>]) -> String {
+    let headers = ["序号", "测试条件", "期望结果", "实际结果", "状态"];
+    let mut report = String::new();
+    report.push_str(&format!("评测统计: 通过 {passed} 项, 失败 {failed} 项\n\n"));
+    report.push_str(&checkpoint_table_row(&headers));
+    report.push('\n');
+    report.push_str(&checkpoint_table_separator(headers.len()));
+    report.push('\n');
+    for row in rows {
+        let cells = row.iter().map(String::as_str).collect::<Vec<_>>();
+        report.push_str(&checkpoint_table_row(&cells));
+        report.push('\n');
+    }
+    report
+}
+
+fn checkpoint_table_separator(columns: usize) -> String {
+    let mut border = String::new();
+    border.push('|');
+    for _ in 0..columns {
+        border.push_str(" --- |");
+    }
+    border
+}
+
+fn checkpoint_table_row(cells: &[impl AsRef<str>]) -> String {
+    let mut row = String::new();
+    row.push('|');
+    for cell in cells {
+        row.push(' ');
+        row.push_str(cell.as_ref());
+        row.push(' ');
+        row.push('|');
+    }
+    row
 }
 
 fn update_script_trace_state(
@@ -405,7 +588,11 @@ fn led_stats_map(stats: LedWatchStats) -> Result<Map, Box<EvalAltResult>> {
     Ok(map)
 }
 
-fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
+fn register_api(
+    engine: &mut Engine,
+    sim: &Arc<Mutex<Simulator>>,
+    checkpoint_state: &Arc<Mutex<ScriptCheckpointState>>,
+) {
     let sim_run = Arc::clone(sim);
     engine.register_fn("run_ms", move |ms: i64| -> Result<(), Box<EvalAltResult>> {
         let ms = u64::try_from(ms).map_err(|_| runtime_error("run_ms 参数必须 >= 0"))?;
@@ -1565,6 +1752,63 @@ fn register_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
             assert_in_float_inclusive(actual, &range, label.as_str())
         },
     );
+
+    register_checkpoint_api(engine, sim, checkpoint_state);
+}
+
+fn register_checkpoint_api(
+    engine: &mut Engine,
+    sim: &Arc<Mutex<Simulator>>,
+    checkpoint_state: &Arc<Mutex<ScriptCheckpointState>>,
+) {
+    let sim = Arc::clone(sim);
+    let checkpoint_state = Arc::clone(checkpoint_state);
+    engine.register_fn(
+        "ckpt",
+        move |ctx: NativeCallContext,
+              index: i64,
+              condition: ImmutableString,
+              expected: ImmutableString,
+              body: FnPtr|
+              -> Result<(), Box<EvalAltResult>> {
+            let result = body.call_within_context::<Dynamic>(&ctx, ());
+            let (actual, actual_detail, status) = match result {
+                Ok(value) => {
+                    let text = checkpoint_success_message(&value);
+                    (text.clone(), text, CheckpointStatus::Passed)
+                }
+                Err(err) => {
+                    let detail = checkpoint_failure_detail(err.as_ref());
+                    let summary = checkpoint_failure_summary(&detail);
+                    (summary, detail, CheckpointStatus::Failed)
+                }
+            };
+            let mut checkpoint_state = checkpoint_state
+                .lock()
+                .map_err(|_| runtime_error("评测点状态锁已损坏"))?;
+            checkpoint_state.record(
+                index,
+                condition.as_str(),
+                expected.as_str(),
+                actual.clone(),
+                status,
+            );
+            drop(checkpoint_state);
+
+            info!(
+                ckpt_index = index,
+                ckpt_status = status.as_str(),
+                ckpt_condition = condition.as_str(),
+                ckpt_expected = expected.as_str(),
+                ckpt_actual = actual.as_str(),
+                ckpt_actual_detail = actual_detail.as_str(),
+                sim_time_ns = current_sim_time_ns(&sim),
+                "评测点执行结束"
+            );
+
+            Ok(())
+        },
+    );
 }
 
 fn register_run_to_api(engine: &mut Engine, sim: &Arc<Mutex<Simulator>>) {
@@ -1928,6 +2172,43 @@ fn run_to_callback_wait(
 
 fn runtime_error(message: impl Into<String>) -> Box<EvalAltResult> {
     EvalAltResult::ErrorRuntime(message.into().into(), rhai::Position::NONE).into()
+}
+
+fn checkpoint_failure_detail(err: &EvalAltResult) -> String {
+    err.to_string().trim().to_owned()
+}
+
+fn checkpoint_failure_summary(detail: &str) -> String {
+    let normalized = detail.replace("\r\n", "\n").replace('\r', "\n");
+    let first_line = normalized.lines().next().unwrap_or("").trim();
+    let cutoff = [" @ '", " @ \"", " / in ", " (line ", " [line "]
+        .into_iter()
+        .filter_map(|marker| first_line.find(marker))
+        .min()
+        .unwrap_or(first_line.len());
+    let summary = first_line[..cutoff]
+        .strip_prefix("Runtime error:")
+        .map(str::trim)
+        .unwrap_or(&first_line[..cutoff])
+        .trim()
+        .trim_end_matches('/')
+        .trim();
+    let summary = if summary.is_empty() {
+        "运行时错误"
+    } else {
+        summary
+    };
+    summary.to_owned()
+}
+
+fn checkpoint_success_message(value: &Dynamic) -> String {
+    if value.is::<()>() {
+        return "符合期望".to_owned();
+    }
+    if value.is::<ImmutableString>() {
+        return value.clone_cast::<ImmutableString>().to_string();
+    }
+    format!("{value}")
 }
 
 fn display_number_dynamic(value: DisplayNumber) -> Dynamic {
@@ -2300,7 +2581,8 @@ mod tests {
     use rhai::Scope;
 
     use super::{
-        ScriptTraceState, build_engine, build_scope, eval_source, eval_source_with_engine,
+        ScriptCheckpointState, ScriptTraceState, build_engine, build_scope, eval_source,
+        eval_source_with_engine,
     };
     use crate::{chip::Simulator, persistent_state::PersistentState, wave::WaveCaptureOptions};
 
@@ -2320,6 +2602,10 @@ mod tests {
             0xF5, 0x9B, 0x80, 0xE3,
         ];
         Simulator::from_code_with_options(code, false, WaveCaptureOptions::default())
+    }
+
+    fn checkpoint_state() -> Arc<Mutex<ScriptCheckpointState>> {
+        Arc::new(Mutex::new(ScriptCheckpointState::default()))
     }
 
     #[test]
@@ -2456,7 +2742,8 @@ mod tests {
             },
         )));
         let trace_state = Arc::new(Mutex::new(ScriptTraceState::default()));
-        let engine = build_engine(&sim, &trace_state);
+        let checkpoint_state = checkpoint_state();
+        let engine = build_engine(&sim, &trace_state, &checkpoint_state);
         let mut scope: Scope<'static> = build_scope();
         let script = r#"
             add_marker();
@@ -2495,7 +2782,8 @@ mod tests {
     fn rhai_set_rtc_map_supports_partial_state_control() {
         let sim = Arc::new(Mutex::new(Simulator::nop(false)));
         let trace_state = Arc::new(Mutex::new(ScriptTraceState::default()));
-        let engine = build_engine(&sim, &trace_state);
+        let checkpoint_state = checkpoint_state();
+        let engine = build_engine(&sim, &trace_state, &checkpoint_state);
         let mut scope: Scope<'static> = build_scope();
         let script = r#"
             set_rtc(#{
@@ -2546,7 +2834,8 @@ mod tests {
     fn rhai_set_eeprom_supports_single_and_block_writes() {
         let sim = Arc::new(Mutex::new(Simulator::nop(false)));
         let trace_state = Arc::new(Mutex::new(ScriptTraceState::default()));
-        let engine = build_engine(&sim, &trace_state);
+        let checkpoint_state = checkpoint_state();
+        let engine = build_engine(&sim, &trace_state, &checkpoint_state);
         let mut scope: Scope<'static> = build_scope();
         let script = r#"
             set_eeprom(0x10, 0xAB);
@@ -2566,6 +2855,33 @@ mod tests {
         assert_eq!(state.at24c02.memory[0x21], 0x02);
         assert_eq!(state.at24c02.memory[0x22], 0x03);
         assert_eq!(state.at24c02.memory[0x23], 0xFF);
+    }
+
+    #[test]
+    fn rhai_ckpt_collects_failures_and_continues() {
+        let sim = Simulator::nop(false);
+        let script = r#"
+            let visited = 0;
+            ckpt(1, "第一项", "应该失败", || {
+                assert_eq(1, 2, "ckpt bad");
+            });
+            ckpt(2, "第二项", "应该通过", || {
+                visited += 1;
+                assert_eq(visited, 1, "ckpt good");
+            });
+        "#;
+        let err = eval_source(sim, "test:ckpt", script).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("ckpt 失败: 1/2"), "{message}");
+    }
+
+    #[test]
+    fn checkpoint_failure_summary_drops_rhai_stack_frames() {
+        let detail = "Runtime error: 圆柱体 76cm 体积页 剩余空间 @ 'file:sample/na16/judge/4t.rhai' (line 172, position 5) / in call to function 'assert_volume_page' (from 'file:sample/na16/judge/4t.rhai') @ 'file:sample/na16/judge/4t.rhai' (line 801, position 5) / in closure call (from 'file:sample/na16/judge/4t.rhai') (line 798, position 1)";
+        assert_eq!(
+            super::checkpoint_failure_summary(detail),
+            "圆柱体 76cm 体积页 剩余空间"
+        );
     }
 
     #[test]

@@ -72,6 +72,44 @@ fn rhai_print_writes_to_stdout() {
 }
 
 #[test]
+fn rhai_ckpt_prints_table_and_keeps_failing_exit_code() {
+    let script_path = temp_script_path();
+    std::fs::write(
+        &script_path,
+        "ckpt(1, \"失败项\", \"应当失败\", || { assert_eq(1, 2, \"bad\"); });\nckpt(2, \"通过项\", \"应当通过\", || { \"实际通过\" });\n",
+    )
+    .expect("write script");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_stcjudge"))
+        .args(["run", "--script", script_path.to_str().expect("script path")])
+        .output()
+        .expect("run cli");
+
+    let _ = std::fs::remove_file(&script_path);
+
+    assert!(
+        !output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.contains("| 序号 "), "{stdout}");
+    assert!(stdout.contains("| --- | --- | --- | --- | --- |"), "{stdout}");
+    assert!(stdout.contains("| 1 | 失败项 |"), "{stdout}");
+    assert!(stdout.contains("| 2 | 通过项 |"), "{stdout}");
+    assert!(stdout.contains("❌ 失败"), "{stdout}");
+    assert!(stdout.contains("✅ 通过"), "{stdout}");
+    assert!(stdout.contains("bad: 期望 2 , 实际 1"), "{stdout}");
+    assert!(stdout.contains("实际通过"), "{stdout}");
+    assert!(!stdout.contains("in closure call"), "{stdout}");
+    assert!(!stdout.contains("in call to function"), "{stdout}");
+    assert!(stderr.contains("ckpt 失败: 1/2"), "{stderr}");
+}
+
+#[test]
 fn cli_accepts_stdin_script_and_builtin_constants() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_stcjudge"))
         .args([

@@ -719,17 +719,106 @@ assert_in(stats.duty_percent, 8..=12, "上电占空比约 10%");
 - `assert_eq(actual, expected, "label")`
 - `assert_regex(text, pattern, "label")`
 - `assert_in(actual, 10..=12, "label")`
+- `ckpt(index, condition, expected, || { ... })`
 - `print(anything)`
 
 `assert_eq(...)` 要求 `actual` 和 `expected` 是同类型. 适合字符串, 整数, 浮点, 布尔等直接相等比较. 失败时会同时打印 `expected` 和 `actual`.
 `assert_regex(...)` 用于判断左侧字符串是否匹配右侧正则. 失败时会同时打印正则和实际字符串, 也会保留 `label`.
 `assert_in(...)` 适合整数和浮点数的区间判断. 目前使用 Rhai 的整数 range 语法, 支持 `a..b` 和 `a..=b`. 对浮点实际值会按对应的整数边界比较. 失败时会同时打印期望区间和实际值.
 
+`ckpt(...)` 用于定义一个可以继续执行的评测点. 它会执行闭包里的脚本逻辑:
+
+- 如果闭包内所有断言都通过, 记录一条 `通过` 结果.
+- 如果闭包内任意 `assert_*`, `run_to*` 超时, 或其他脚本运行时错误失败, 记录一条 `失败` 结果, 但脚本继续往后执行.
+- 脚本结束后, 评测器会自动输出终端 Markdown 表格, 列出每个 checkpoint 的序号, 测试条件, 期望结果, 实际结果和状态.
+- 失败时, 终端表格里的 `实际结果` 会显示诊断信息. 详细错误链请看同一个 checkpoint 的 `info` tracing.
+- 如果脚本里至少定义了一个 `ckpt(...)`, 且最终存在失败项, 进程仍会以失败退出, 方便判题和 CI 感知失败.
+- 在默认 `info` 级别下, 每个 `ckpt(...)` 执行结束后, 评测器都会输出一条 tracing 日志, 包含序号, 状态, 测试条件, 期望结果, 实际结果和当时的 `sim_time_ns`.
+
+推荐把 `ckpt(...)` 理解成"显式评测点"而不是"弱化版 assert". 普通 `assert_*` 仍然保持"立即失败"语义, 更适合公共辅助函数和那些一旦失败就不适合继续推进场景的前置条件.
+
+需要特别注意一条执行语义:
+
+- `ckpt(...)` 只会在当前 checkpoint 失败后, 继续执行后面的下一个 `ckpt(...)`.
+- 它不会让当前闭包在 `assert_*` 失败后继续往下执行.
+- 也就是说, 一旦闭包里的某条 `assert_*` 失败, 这个闭包后面的语句就不会再运行.
+
+因此, 在 `ckpt(...)` 闭包里应尽量遵循"先操作, 后断言"的写法:
+
+- 先完成按键, 串口发送, 传感器设置, 页面切换, 采样读取等动作.
+- 再对前面采集到的结果统一做 `assert_*`.
+- 如果一个 checkpoint 里还要继续做后续动作, 不要在这些动作之前插入可能失败的 `assert_*`.
+
+尤其是这类多阶段流程:
+
+- 先发第一条串口命令, 再发第二条串口命令, 最后统一检查两次回复.
+- 先切完多个页面并把每页文本都读出来, 最后再统一检查每一页.
+- 先设置一个合法状态, 再发送非法输入验证保持行为, 最后再一起检查回复和显示.
+
+`ckpt(...)` 闭包返回值会作为该评测点的"实际结果"写入表格:
+
+- 如果闭包没有显式返回值, 表格中会写 `符合期望`.
+- 如果闭包返回字符串, 数字等值, 表格中会直接显示该值.
+- 如果闭包失败, 表格中会显示失败诊断信息, 详细错误链保留在 `info` tracing 中.
+
+一个常见写法如下:
+
+```rhai
+ckpt(1, "上电默认时间页", "显示 23-59-50", || {
+    let text = display_text(30);
+    assert_eq(text, "23-59-50", "默认时间");
+    text
+});
+
+ckpt(2, "非法时间配置", "返回 ERROR 且显示保持不变", || {
+    uart_write("(T:286344)");
+    run_ms(160);
+    assert_eq(uart_take(), "ERROR", "非法时间返回值");
+    let text = display_text(30);
+    assert_eq(text, "23-33-44", "非法时间后显示保持");
+    text
+});
+```
+
+如果一个 checkpoint 需要多个阶段, 推荐写成下面这样:
+
+```rhai
+ckpt(3, "两次串口设置都应成功", "OK -> OK", || {
+    send_uart("(H1,1.8)");
+    let first = uart_take();
+
+    send_uart("(H2,0.5)");
+    let second = uart_take();
+
+    assert_regex(first, "^OK", "第一次设置");
+    assert_regex(second, "^OK", "第二次设置");
+    first + "," + second
+});
+```
+
+不推荐写成下面这样:
+
+```rhai
+ckpt(4, "反例", "不要这样写", || {
+    send_uart("(H1,1.8)");
+    let first = uart_take();
+    assert_regex(first, "^OK", "第一次设置");
+
+    send_uart("(H2,0.5)");
+    let second = uart_take();
+    assert_regex(second, "^OK", "第二次设置");
+    first + "," + second
+});
+```
+
+上面的反例里, 如果第一条 `assert_regex(...)` 失败, 第二次 `send_uart(...)` 根本不会执行, 后续流程也就被吞掉了.
+
 调试建议:
 
 - 想在脚本中途打印, 用 `print(...)`.
 - 想看固定时刻全量状态, 用 `dump` 子命令.
 - 想看寄存器, 锁存器, LED, 段码, UART 等综合快照, 用 `print(snapshot_text())`.
+- 如果脚本较长, 可以直接看每个 `ckpt(...)` 结束后的 `info` tracing 摘要, 快速判断当前跑到哪里, 哪个 checkpoint 刚通过或失败.
 
 ## 示例
 
