@@ -145,7 +145,7 @@ fn assert_float_window_view(actual, min, max, label, view) {
 fn assert_query(query, expected, label) {
     send_uart(query);
     let text = uart_take();
-    assert_eq(text, expected, label);
+    assert_eq(text, expected, label + ": 串口查询结果错误");
     text
 }
 
@@ -367,14 +367,28 @@ fn prepare_sphere_scene() {
     assert_regex(reply_s, "^OK", "切到球体: 串口回复错误");
 }
 
-fn prepare_504_alarm_scene() {
+fn prepare_504_alarm_300_scene() {
     reset(POWER_RESET);
-    run_ms(320);
+    key_mode(KEYBOARD);
     ensure_sig_jumper();
     run_ms(5);
     clear_uart();
     set_rtc(3, 44, 5);
-    run_ms(320);
+    settle();
+    set_frequency_hz(300);
+    run_ms(1200);
+    set_frequency_hz(1700);
+    run_ms(1200);
+}
+
+fn prepare_504_alarm_400_scene() {
+    reset(POWER_RESET);
+    key_mode(KEYBOARD);
+    ensure_sig_jumper();
+    run_ms(5);
+    clear_uart();
+    set_rtc(3, 44, 5);
+    settle();
     set_frequency_hz(400);
     run_ms(1200);
     set_frequency_hz(1700);
@@ -478,22 +492,22 @@ ckpt(3, "无异常状态发生", "继电器断开", || {
     relay_summary()
 });
 
-ckpt(4, "2s内频率在300Hz->1700Hz", "L8以0.2s为间隔闪烁", || {
-    prepare_504_alarm_scene();
+ckpt(4, "2s内频率在300hz->1700hz", "L8以0.2s为间隔闪烁", || {
+    prepare_504_alarm_300_scene();
     let stats = watch_led_stats(L8, 1000);
     assert_int_window(stats.changes, 4, 6, "504 场景 L8 闪烁次数");
     "changes=" + stats.changes
 });
 
-ckpt(5, "504异常状态发生", "继电器吸合", || {
-    prepare_504_alarm_scene();
+ckpt(5, "504异常状态发生", "继电器吸合(无异常断开)", || {
+    prepare_504_alarm_300_scene();
     let relay_now = relay_on();
     assert_bool_state(relay_now, true, "504 异常后继电器");
     "relay=" + bool_text(relay_now)
 });
 
-ckpt(6, "时间:03:44:05, 频率值:400Hz->1700Hz", "串口返回 [504,034405,1300]", || {
-    prepare_504_alarm_scene();
+ckpt(6, "时间:03:44:05,频率值:400hz->1700hz", "串口返回 [504,034405,1300]", || {
+    prepare_504_alarm_400_scene();
     assert_uart_int_alarm(504, 34405, 34408, 1000, 1400, "504 串口上报")
 });
 
@@ -865,7 +879,7 @@ ckpt(53, "距离值:170cm", "串口返回:[501,174523,0.3]", || {
     assert_uart_float_alarm(501, 174523, 174524, 0.25, 0.31, "低液位上报")
 });
 
-ckpt(54, "距离值:170cm", "继电器吸合", || {
+ckpt(54, "距离值:170cm", "继电器吸合(无异常时断开)", || {
     prepare_row53_scene();
     open_data_page(1);
     assert_bool_state(relay_on(), true, "低液位异常时继电器");
