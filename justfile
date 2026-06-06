@@ -1,4 +1,4 @@
-set windows-shell := ["powershell", "-NoProfile", "-Command"]
+set windows-shell := ["pwsh", "-NoProfile", "-Command"]
 
 platform_justfile := if os_family() == "windows" { "just/windows.just" } else { "just/unix.just" }
 

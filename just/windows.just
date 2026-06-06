@@ -1,4 +1,4 @@
-[script("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
+[script("pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
 judge-sample sample script="":
     $sampleDir = Join-Path 'sample' {{quote(sample)}}
     $hexDir = Join-Path $sampleDir 'prj/Objects'
@@ -10,7 +10,7 @@ judge-sample sample script="":
     if (Test-Path -LiteralPath $hexDir -PathType Container) {
         $hexCandidates = @(Get-ChildItem -LiteralPath $hexDir -File -Filter '*.hex' |
             Sort-Object FullName |
-            ForEach-Object { [System.IO.Path]::GetRelativePath((Get-Location).Path, $_.FullName) })
+            ForEach-Object { Resolve-Path -LiteralPath $_.FullName -Relative })
     }
 
     if ($scriptName -ne '') {
@@ -21,7 +21,7 @@ judge-sample sample script="":
     } elseif (Test-Path -LiteralPath $judgeDir -PathType Container) {
         $judges = @(Get-ChildItem -LiteralPath $judgeDir -File -Filter '*.rhai' |
             Sort-Object FullName |
-            ForEach-Object { [System.IO.Path]::GetRelativePath((Get-Location).Path, $_.FullName) })
+            ForEach-Object { Resolve-Path -LiteralPath $_.FullName -Relative })
     }
 
     if ($judges.Count -eq 0) {
@@ -52,7 +52,7 @@ judge-sample sample script="":
         }
     }
 
-[script("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
+[script("pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
 judge-samples:
     cargo build --release --bin stcjudge
     if ($LASTEXITCODE -ne 0) {
@@ -64,7 +64,7 @@ judge-samples:
         $judges = @(Get-ChildItem -LiteralPath 'sample' -File -Recurse -Filter '*.rhai' |
             Where-Object { $_.Directory.Name -eq 'judge' } |
             Sort-Object FullName |
-            ForEach-Object { [System.IO.Path]::GetRelativePath((Get-Location).Path, $_.FullName) })
+            ForEach-Object { Resolve-Path -LiteralPath $_.FullName -Relative })
     } else {
         $judges = @()
     }
@@ -76,7 +76,7 @@ judge-samples:
         if (Test-Path -LiteralPath $hexDir -PathType Container) {
             $hexCandidates = @(Get-ChildItem -LiteralPath $hexDir -File -Filter '*.hex' |
                 Sort-Object FullName |
-                ForEach-Object { [System.IO.Path]::GetRelativePath((Get-Location).Path, $_.FullName) })
+                ForEach-Object { Resolve-Path -LiteralPath $_.FullName -Relative })
         }
 
         Write-Output "==> $judge"
@@ -95,7 +95,7 @@ judge-samples:
         }
     }
 
-[script("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
+[script("pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
 wave-sample sample script="smoke" start="0" end="" output="":
     $sampleDir = Join-Path 'sample' {{quote(sample)}}
     $scriptName = {{quote(script)}}
@@ -111,7 +111,7 @@ wave-sample sample script="smoke" start="0" end="" output="":
     if (Test-Path -LiteralPath $hexDir -PathType Container) {
         $hexCandidates = @(Get-ChildItem -LiteralPath $hexDir -File -Filter '*.hex' |
             Sort-Object FullName |
-            ForEach-Object { [System.IO.Path]::GetRelativePath((Get-Location).Path, $_.FullName) })
+            ForEach-Object { Resolve-Path -LiteralPath $_.FullName -Relative })
     }
 
     $outputPath = {{quote(output)}}
@@ -152,7 +152,7 @@ wave-sample sample script="smoke" start="0" end="" output="":
     }
     Write-Output "wave html: $outputPath"
 
-[script("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
+[script("pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
 build-sample sample:
     $sampleDir = Join-Path 'sample' {{quote(sample)}}
     $prjDir = Join-Path $sampleDir 'prj'
@@ -196,9 +196,7 @@ build-sample sample:
 
     $hexPath = Join-Path $objectsDir ($outputName + '.hex')
     if (Test-Path -LiteralPath $hexPath -PathType Leaf) {
-        $hexRelative = [System.IO.Path]::GetRelativePath((Get-Location).Path, $hexPath)
-        Write-Output "hex: $hexRelative"
+        Write-Output "hex: $hexPath"
     } else {
-        $logRelative = [System.IO.Path]::GetRelativePath((Get-Location).Path, $logPath)
-        Write-Output "build finished, hex not found. check log: $logRelative"
+        Write-Output "build finished, hex not found. check log: $logPath"
     }
