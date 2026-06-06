@@ -15,10 +15,10 @@ fn screen() {
 
 fn assert_screen(vv_expected, r_expected, eee_expected, label) {
     let text = screen();
-    assert_regex(text, "^\\d{2}-\\d-\\d{3}$", label + " 显示格式");
-    assert_eq(parse_int(text[0..2]), vv_expected, label + " VV");
-    assert_eq(parse_int(text[3..4]), r_expected, label + " R");
-    assert_eq(parse_int(text[5..8]), eee_expected, label + " EEE");
+    assert_regex(text, "^\\d{2}-\\d-\\d{3}$", label + ": 显示格式错误");
+    assert_eq(parse_int(text[0..2]), vv_expected, label + ": VV 显示错误");
+    assert_eq(parse_int(text[3..4]), r_expected, label + ": R 显示错误");
+    assert_eq(parse_int(text[5..8]), eee_expected, label + ": EEE 显示错误");
 }
 
 fn expected_value(addr) {
@@ -56,7 +56,7 @@ assert_screen(0, 3, 0, "S8 从 0x20 回到 0x00");
 tap_many(S10, 1);
 add_marker("write_00_to_01");
 assert_screen(0, 3, 1, "地址 0x00 写入 1");
-assert_eq(eeprom_byte(0), 1, "EEPROM[0x00]");
+assert_eq(eeprom_byte(0), 1, "地址 0x00 写入后: EEPROM 数据错误");
 
 load_persistent_state(boot_state);
 reset(POWER_RESET);
@@ -93,20 +93,20 @@ tap_many(S9, 1);
 add_marker("eeprom_block_written");
 assert_screen(0, 3, 255, "地址 0x20 下溢到 255");
 
-assert_eq(eeprom_byte(0), 1, "地址 0x00");
-assert_eq(eeprom_byte(1), 2, "地址 0x01");
-assert_eq(eeprom_byte(2), 255, "地址 0x02");
-assert_eq(eeprom_byte(15), 255, "地址 0x0F 应命中 255 边界");
+assert_eq(eeprom_byte(0), 1, "地址 0x00: EEPROM 数据错误");
+assert_eq(eeprom_byte(1), 2, "地址 0x01: EEPROM 数据错误");
+assert_eq(eeprom_byte(2), 255, "地址 0x02: EEPROM 数据错误");
+assert_eq(eeprom_byte(15), 255, "地址 0x0F: 255 边界值错误");
 assert_eq(eeprom_byte(16), 1, "地址 0x10 应保持 1");
-assert_eq(eeprom_byte(31), 7, "地址 0x1F 应经过上溢后得到 7");
-assert_eq(eeprom_byte(32), 255, "地址 0x20 应保留块上界值");
-assert_eq(eeprom_byte(33), 0, "地址 0x21 不应被写到");
-assert_eq(eeprom_byte(127), 0, "地址 0x7F 不应被写到");
-assert_eq(eeprom_byte(255), 0, "地址 0xFF 不应被写到");
+assert_eq(eeprom_byte(31), 7, "地址 0x1F: 上溢结果错误");
+assert_eq(eeprom_byte(32), 255, "地址 0x20: 块上界值保持错误");
+assert_eq(eeprom_byte(33), 0, "地址 0x21: EEPROM 被错误写入");
+assert_eq(eeprom_byte(127), 0, "地址 0x7F: EEPROM 被错误写入");
+assert_eq(eeprom_byte(255), 0, "地址 0xFF: EEPROM 被错误写入");
 
 let addr = 0;
 while addr <= 32 {
-    assert_eq(eeprom_byte(addr), expected_value(addr), "EEPROM 块内容");
+    assert_eq(eeprom_byte(addr), expected_value(addr), "EEPROM 块扫描: 地址 " + addr + " 数据错误");
     addr += 1;
 }
 

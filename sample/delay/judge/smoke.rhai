@@ -1,7 +1,7 @@
 fn assert_all_off(label) {
     let led = 1;
     while led <= 8 {
-        assert(!led_on(led), label + " 所有 LED 都应熄灭");
+        assert(!led_on(led), label + ": LED 熄灭状态错误, L" + led + " 实际点亮");
         led += 1;
     }
 }
@@ -10,16 +10,16 @@ fn assert_only_led(expected, label) {
     let led = 1;
     while led <= 8 {
         if led == expected {
-            assert(led_on(led), label + ", L" + led + " 应点亮");
+            assert(led_on(led), label + ": LED 点亮状态错误, 期望 L" + led + " 点亮, 实际未点亮");
         } else {
-            assert(!led_on(led), label + ", 非 L" + led + " 应熄灭");
+            assert(!led_on(led), label + ": LED 熄灭状态错误, 期望非 L" + expected + " 熄灭, L" + led + " 实际点亮");
         }
         led += 1;
     }
 }
 
 fn assert_step_delay_ns(dt_ns, label) {
-    assert_in(dt_ns, 4_500_000..=5_500_000, label + ", Delay5ms 应约为 5ms");
+    assert_in(dt_ns, 4_500_000..=5_500_000, label + ": Delay5ms 耗时超出范围");
 }
 
 fn all_off() {
@@ -40,7 +40,7 @@ fn wait_led_on(target, expected, label) {
 }
 
 let startup_ns = run_to(|| all_off(), 2_000_000);
-assert_in(startup_ns, 0..=200_000, "上电后应先清空初始 LED 输出");
+assert_in(startup_ns, 0..=200_000, "上电初始化: LED 清空时延超出范围");
 assert_all_off("上电早期");
 
 wait_led_on(L1, 1, "流水灯步进 step: 0");

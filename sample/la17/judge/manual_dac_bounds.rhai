@@ -40,29 +40,29 @@ run_ms(320);
 goto_light_page();
 tap_key(S5, 80);
 run_ms(120);
-assert_eq(display_text(30), "1-096", "默认进入手动光控 DAC 子页面");
+assert_eq(display_text(30), "1-096", "手动 DAC 边界: 初始页面显示错误");
 
 tap_many(S9, 20);
-assert_eq(display_text(30), "1-000", "手动 DAC 下界饱和到 000");
-assert_eq(da_value(), 0, "手动 DAC 下界值");
+assert_eq(display_text(30), "1-000", "手动 DAC 下界: 页面显示错误");
+assert_eq(da_value(), 0, "手动 DAC 下界: DAC 数值错误");
 tap_key(S9, 80);
 run_ms(120);
-assert_eq(display_text(30), "1-000", "继续减小后仍保持 000");
-assert_eq(da_value(), 0, "继续减小后 DAC 仍保持 0");
+assert_eq(display_text(30), "1-000", "手动 DAC 下界保持: 页面显示错误");
+assert_eq(da_value(), 0, "手动 DAC 下界保持: DAC 数值错误");
 
 let duty0 = watch_led_stats(L6, 40);
-assert_in(duty0.duty_percent, 0..=5, "DAC 为 0 时的 PWM 占空比");
+assert_in(duty0.duty_percent, 0..=5, "手动 DAC 下界: PWM 占空比超出范围");
 
 tap_many(S8, 40);
-assert_eq(display_text(30), "1-255", "手动 DAC 上界饱和到 255");
-assert_eq(da_value(), 255, "手动 DAC 上界值");
+assert_eq(display_text(30), "1-255", "手动 DAC 上界: 页面显示错误");
+assert_eq(da_value(), 255, "手动 DAC 上界: DAC 数值错误");
 tap_key(S8, 80);
 run_ms(120);
-assert_eq(display_text(30), "1-255", "继续增大后仍保持 255");
-assert_eq(da_value(), 255, "继续增大后 DAC 仍保持 255");
+assert_eq(display_text(30), "1-255", "手动 DAC 上界保持: 页面显示错误");
+assert_eq(da_value(), 255, "手动 DAC 上界保持: DAC 数值错误");
 
 let duty1 = watch_led_stats(L6, 40);
-assert_in(duty1.duty_percent, 95..=100, "DAC 为 255 时的 PWM 占空比");
+assert_in(duty1.duty_percent, 95..=100, "手动 DAC 上界: PWM 占空比超出范围");
 
 double_click(S12);
-assert_eq(display_text(30), "0-032", "切回自动光控后显示自动模式结果");
+assert_eq(display_text(30), "0-032", "切回自动光控: 页面显示错误");

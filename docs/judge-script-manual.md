@@ -268,12 +268,12 @@ run_to_state("seg.d3.visible", true, 100_000_000);
 ```rhai
 tap_key(S4, 80);
 let event = run_to_event("seg.change", 120_000_000);
-assert_in(event.elapsed_ns, 0..=100_000_000, "显示开始响应不能超过 100ms");
+assert_in(event.elapsed_ns, 0..=100_000_000, "显示响应: 启动时延超出 100ms");
 run_ms(20);
 
 tap_key(S5, 80);
 let ready_ns = run_to_state("seg.d3.visible", true, 120_000_000);
-assert_in(ready_ns, 0..=100_000_000, "闪烁位重新显示不能超过 100ms");
+assert_in(ready_ns, 0..=100_000_000, "闪烁位显示: 恢复时延超出 100ms");
 ```
 
 回调应当返回布尔值. 在 judge 编写约定里, `run_to(predicate)` 只适合最基础的条件判断, 可以把它理解成一个轻量轮询器, 而不是通用断言容器. 常见写法例如:
@@ -300,24 +300,24 @@ fn all_off() {
 }
 
 let startup_ns = run_to(|| all_off(), 2_000_000);
-assert_in(startup_ns, 0..=200_000, "上电后应先清空初始 LED 输出");
+assert_in(startup_ns, 0..=200_000, "上电初始化: LED 清空时延超出范围");
 
 let dt0 = run_to(L1, UP, 20_000_000);
 let dt1 = run_to(L2, UP, 20_000_000);
-assert_in(dt0, 4_500_000..=5_500_000, "step0 Delay5ms 约为 5ms");
-assert_in(dt1, 4_500_000..=5_500_000, "step1 Delay5ms 约为 5ms");
+assert_in(dt0, 4_500_000..=5_500_000, "step0 Delay5ms: 耗时超出范围");
+assert_in(dt1, 4_500_000..=5_500_000, "step1 Delay5ms: 耗时超出范围");
 ```
 
 对类似超声波, 温度, 电压这类题目, 推荐优先使用稳定显示和按位数值提取, 不要直接依赖原始段码:
 
 ```rhai
 run_ms(220);
-assert_eq(display_text(30)[0..1], "L", "默认距离页");
-assert_eq(display_number(4, 8, 30), 0, "默认距离");
+assert_eq(display_text(30)[0..1], "L", "默认距离页: 页面前缀错误");
+assert_eq(display_number(4, 8, 30), 0, "默认距离页: 距离数值错误");
 
 tap_key(S4, 80);
-assert_eq(display_text(30)[0..1], "P", "切到音速页");
-assert_eq(display_number(6, 8, 30), 340, "默认音速");
+assert_eq(display_text(30)[0..1], "P", "音速页: 页面前缀错误");
+assert_eq(display_number(6, 8, 30), 340, "音速页: 音速数值错误");
 ```
 
 从引擎能力上说, 回调里确实还能调用别的脚本接口. 但在本项目 judge 编写约定里, `run_to(predicate)` 默认只用于最基础的布尔判断, 不要把复杂语义分析塞进回调.
@@ -369,10 +369,10 @@ tap_key(S4, 80);
 run_to_state("seg.d3.visible", true, 1_200_000_000);
 
 let text = display_text();
-assert_regex(text, "^  \\d{2}\\.\\d{2}\\.\\d{2}$", "时间格式");
-assert_eq(parse_int(text[2..4]), 23, "小时");
-assert_eq(parse_int(text[5..7]), 59, "分钟");
-assert_eq(parse_int(text[8..10]), 58, "秒");
+assert_regex(text, "^  \\d{2}\\.\\d{2}\\.\\d{2}$", "时间页: 显示格式错误");
+assert_eq(parse_int(text[2..4]), 23, "时间页: 小时显示错误");
+assert_eq(parse_int(text[5..7]), 59, "时间页: 分钟显示错误");
+assert_eq(parse_int(text[8..10]), 58, "时间页: 秒显示错误");
 ```
 
 不要把上面的流程改写成 `run_to_state("seg.text", "  23.59.58", ...)`. 如果固件实际显示成别的值, 这种写法通常只会报超时, 很难第一时间看出它到底显示错成了什么.
@@ -384,10 +384,10 @@ tap_key(S4, 80);
 run_ms(120);
 
 let text = display_text(30);
-assert_regex(text, "^\\d{2}-\\d-\\d{3}$", "显示格式");
-assert_eq(parse_int(text[0..2]), vv_expected, "VV");
-assert_eq(parse_int(text[3..4]), r_expected, "R");
-assert_eq(parse_int(text[5..8]), eee_expected, "EEE");
+assert_regex(text, "^\\d{2}-\\d-\\d{3}$", "数据显示页: 显示格式错误");
+assert_eq(parse_int(text[0..2]), vv_expected, "数据显示页: VV 显示错误");
+assert_eq(parse_int(text[3..4]), r_expected, "数据显示页: R 显示错误");
+assert_eq(parse_int(text[5..8]), eee_expected, "数据显示页: EEE 显示错误");
 ```
 
 `run_to_ns/us/ms/s(...)` 的参数是绝对仿真时间戳, 不是相对等待时长. 它们同样返回本次推进的时间:
@@ -578,11 +578,11 @@ let dt_s = run_to_s(2);
 ```rhai
 uart_write("00012");
 run_ms(220);
-assert_eq(uart_take(), "13", "串口应返回原值加 1");
-assert_eq(uart_take(), "", "读取后串口缓冲应为空");
+assert_eq(uart_take(), "13", "UART1 回显: 返回值错误");
+assert_eq(uart_take(), "", "UART1 回显: 缓冲区清空错误");
 let text = display_text(30);
-assert_eq(text[0..3], "   ", "前 3 位保持空白");
-assert_eq(text[3..8], "00012", "右 5 位补零显示原值");
+assert_eq(text[0..3], "   ", "UART1 回显: 前 3 位空白显示错误");
+assert_eq(text[3..8], "00012", "UART1 回显: 后 5 位数值显示错误");
 ```
 
 双串口和 `9` 位符号示例:
@@ -595,10 +595,10 @@ uart1_write("OK");
 uart2_write_raw([0x141, 0x055]);
 run_ms(40);
 
-assert_eq(uart1_take(), "OK", "UART1 文本输出");
+assert_eq(uart1_take(), "OK", "UART1 示例: 文本输出错误");
 let raw = uart2_take_raw();
-assert_eq(raw[0], 0x141, "UART2 第 1 个 9 位符号");
-assert_eq(raw[1], 0x055, "UART2 第 2 个 9 位符号");
+assert_eq(raw[0], 0x141, "UART2 示例: 第 1 个 9 位符号错误");
+assert_eq(raw[1], 0x055, "UART2 示例: 第 2 个 9 位符号错误");
 ```
 
 如果题目里的 `UART2` 会按 `9` 位数据把收到的符号倒序回发, 可以直接写成:
@@ -609,10 +609,10 @@ uart2_write_raw([0x041, 0x155, 0x0AA, 0x1F0]);
 run_ms(220);
 
 let raw = uart2_take_raw();
-assert_eq(raw[0], 0x1F0, "UART2 第 1 个回发符号");
-assert_eq(raw[1], 0x0AA, "UART2 第 2 个回发符号");
-assert_eq(raw[2], 0x155, "UART2 第 3 个回发符号");
-assert_eq(raw[3], 0x041, "UART2 第 4 个回发符号");
+assert_eq(raw[0], 0x1F0, "UART2 倒序回发: 第 1 个符号错误");
+assert_eq(raw[1], 0x0AA, "UART2 倒序回发: 第 2 个符号错误");
+assert_eq(raw[2], 0x155, "UART2 倒序回发: 第 3 个符号错误");
+assert_eq(raw[3], 0x041, "UART2 倒序回发: 第 4 个符号错误");
 ```
 
 ## Rhai 字符串切片和正则
@@ -641,17 +641,17 @@ Rhai 也自带数值解析函数, 例如:
 
 ```rhai
 let text = display_text(30);
-assert_eq(text[0..4], "015.", "前 3 位 TI 计数");
-assert_eq(text[4..9], "00012", "后 5 位数值显示");
+assert_eq(text[0..4], "015.", "TI 计数页: 前 4 位显示错误");
+assert_eq(text[4..9], "00012", "TI 计数页: 后 5 位数值显示错误");
 ```
 
 如果前 3 位是会随中断重入次数变化的计数, 更推荐把固定格式和数值范围拆开写, 不要把整串计数写死:
 
 ```rhai
 let text = display_text(30);
-assert_eq(text[3..4], ".", "TI 计数小数点");
-assert_in(parse_int(text[0..3]), 2..=999, "TI 计数范围");
-assert_eq(text[4..9], "00000", "后 5 位数值显示");
+assert_eq(text[3..4], ".", "TI 计数页: 小数点显示错误");
+assert_in(parse_int(text[0..3]), 2..=999, "TI 计数页: 计数值超出范围");
+assert_eq(text[4..9], "00000", "TI 计数页: 后 5 位数值显示错误");
 ```
 
 ## 按键模式
@@ -681,7 +681,7 @@ assert_eq(text[4..9], "00000", "后 5 位数值显示");
 ```rhai
 run_ms(20);
 let stats = watch_led_stats(L1, 1000);
-assert_in(stats.changes, 9..=11, "1 秒内 L1 线路变化次数约 10");
+assert_in(stats.changes, 9..=11, "L1 闪烁统计: 1 秒内翻转次数超出范围");
 ```
 
 - 但是评测最好留有余量, 防止误差.
@@ -691,9 +691,9 @@ assert_in(stats.changes, 9..=11, "1 秒内 L1 线路变化次数约 10");
 ```rhai
 run_ms(220);
 let stats = watch_led_stats(L1, 40);
-assert_in(stats.pwm_frequency_hz, 950..=1050, "L1 PWM 频率约 1kHz");
+assert_in(stats.pwm_frequency_hz, 950..=1050, "L1 PWM: 频率超出范围");
 
-assert_in(stats.duty_percent, 8..=12, "上电占空比约 10%");
+assert_in(stats.duty_percent, 8..=12, "L1 PWM: 占空比超出范围");
 ```
 
 ## 数码管段码
@@ -725,6 +725,13 @@ assert_in(stats.duty_percent, 8..=12, "上电占空比约 10%");
 `assert_eq(...)` 要求 `actual` 和 `expected` 是同类型. 适合字符串, 整数, 浮点, 布尔等直接相等比较. 失败时会同时打印 `expected` 和 `actual`.
 `assert_regex(...)` 用于判断左侧字符串是否匹配右侧正则. 失败时会同时打印正则和实际字符串, 也会保留 `label`.
 `assert_in(...)` 适合整数和浮点数的区间判断. 目前使用 Rhai 的整数 range 语法, 支持 `a..b` 和 `a..=b`. 对浮点实际值会按对应的整数边界比较. 失败时会同时打印期望区间和实际值.
+
+断言文案建议遵循下面几条:
+
+- `label` 和失败说明之间使用非空白分隔符, 例如 `: `, 不要只靠空格直接拼接.
+- 不要只写对象名, 应明确说明失败语义, 例如 `时间显示错误`, `PWM 占空比超出范围`, `串口回复错误`.
+- 优先使用 `assert_eq(...)`, `assert_in(...)`, `assert_regex(...)` 这类会自动输出 `expected` 和 `actual` 的断言.
+- 如果必须使用裸 `assert(...)`, 需要在消息里手动补上关键现场, 例如 `actual=`, `expected=`, `display=` 或 `reply=`.
 
 `ckpt(...)` 用于定义一个可以继续执行的评测点. 它会执行闭包里的脚本逻辑:
 
@@ -766,16 +773,16 @@ assert_in(stats.duty_percent, 8..=12, "上电占空比约 10%");
 ```rhai
 ckpt(1, "上电默认时间页", "显示 23-59-50", || {
     let text = display_text(30);
-    assert_eq(text, "23-59-50", "默认时间");
+    assert_eq(text, "23-59-50", "默认时间页: 显示内容错误");
     text
 });
 
 ckpt(2, "非法时间配置", "返回 ERROR 且显示保持不变", || {
     uart_write("(T:286344)");
     run_ms(160);
-    assert_eq(uart_take(), "ERROR", "非法时间返回值");
+    assert_eq(uart_take(), "ERROR", "非法时间配置: 串口回复错误");
     let text = display_text(30);
-    assert_eq(text, "23-33-44", "非法时间后显示保持");
+    assert_eq(text, "23-33-44", "非法时间配置: 显示保持错误");
     text
 });
 ```
@@ -790,8 +797,8 @@ ckpt(3, "两次串口设置都应成功", "OK -> OK", || {
     send_uart("(H2,0.5)");
     let second = uart_take();
 
-    assert_regex(first, "^OK", "第一次设置");
-    assert_regex(second, "^OK", "第二次设置");
+    assert_regex(first, "^OK", "第一次设置: 串口回复错误");
+    assert_regex(second, "^OK", "第二次设置: 串口回复错误");
     first + "," + second
 });
 ```
@@ -802,11 +809,11 @@ ckpt(3, "两次串口设置都应成功", "OK -> OK", || {
 ckpt(4, "反例", "不要这样写", || {
     send_uart("(H1,1.8)");
     let first = uart_take();
-    assert_regex(first, "^OK", "第一次设置");
+    assert_regex(first, "^OK", "第一次设置: 串口回复错误");
 
     send_uart("(H2,0.5)");
     let second = uart_take();
-    assert_regex(second, "^OK", "第二次设置");
+    assert_regex(second, "^OK", "第二次设置: 串口回复错误");
     first + "," + second
 });
 ```
@@ -825,19 +832,19 @@ ckpt(4, "反例", "不要这样写", || {
 ```rhai
 run_ms(220);
 let text = display_text(30);
-assert_eq(text[0..7], "       ", "前7位空白");
-assert_eq(parse_int(text[7..8]), 0, "上电末位数值");
+assert_eq(text[0..7], "       ", "上电检查: 前 7 位空白显示错误");
+assert_eq(parse_int(text[7..8]), 0, "上电检查: 末位数值错误");
 
 set_key(S4, true);
 run_ms(220);
 let value = parse_int(display_text()[7..8]);
-assert_eq(value, 1, "显示稳定");
-assert(led_on(L1), "L1 应点亮");
+assert_eq(value, 1, "S4 按下: 末位数值错误");
+assert(led_on(L1), "S4 按下: L1 状态错误, 期望点亮, 实际未点亮");
 
 set_temperature_c(25.9375);
 run_ms(700);
-assert_eq(display_number(1, 6), 25.500, "9bit 温度显示");
-assert_eq(display_number(8, 8), 0, "精度等级");
+assert_eq(display_number(1, 6), 25.500, "9bit 采样: 温度显示错误");
+assert_eq(display_number(8, 8), 0, "9bit 采样: 精度等级错误");
 
 print(snapshot_text());
 ```

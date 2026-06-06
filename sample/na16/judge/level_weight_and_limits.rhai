@@ -23,10 +23,10 @@ fn goto_weight_page() {
 
 fn assert_data_page(temp, value_min, value_max, label) {
     let text = display_text(30);
-    assert_regex(text, "^-?\\s?\\d{1,2}-\\s?\\d{1,2}\\.\\d{1,2}$", label + " 数据格式");
-    assert_eq(display_number(1, 4), temp, label + " 左侧数值");
+    assert_regex(text, "^-?\\s?\\d{1,2}-\\s?\\d{1,2}\\.\\d{1,2}$", label + ": 数据格式错误");
+    assert_eq(display_number(1, 4), temp, label + ": 左侧数值错误");
     let value = display_number(5, 8);
-    assert(value >= value_min && value <= value_max, label + " 右侧数值");
+    assert(value >= value_min && value <= value_max, label + ": 右侧数值超出范围, actual=" + value);
 }
 
 set_temperature_c(25);
@@ -104,8 +104,8 @@ set_distance_cm(170);
 sensor_settle();
 goto_liq_page();
 assert_data_page(85, 0.25, 0.30, "170cm 低液位");
-assert(relay_on(), "低于液位下限时继电器应吸合");
-assert_eq(uart_take(), "[501,174523,0.30]", "501 异常串口上报");
+assert(relay_on(), "低液位异常: 继电器状态错误, 期望吸合, 实际断开");
+assert_eq(uart_take(), "[501,174523,0.30]", "501 异常: 串口上报错误");
 
 reset(POWER_RESET);
 set_rtc(17, 45, 23);
@@ -113,5 +113,5 @@ set_distance_cm(5);
 sensor_settle();
 goto_liq_page();
 assert_data_page(85, 2.40, 2.45, "5cm 高液位");
-assert(relay_on(), "超过液位上限时继电器应吸合");
-assert_eq(uart_take(), "[500,174523,2.44]", "500 异常串口上报");
+assert(relay_on(), "高液位异常: 继电器状态错误, 期望吸合, 实际断开");
+assert_eq(uart_take(), "[500,174523,2.44]", "500 异常: 串口上报错误");

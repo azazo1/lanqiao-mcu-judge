@@ -18,7 +18,7 @@ fn two_digits(value) {
 
 fn wait_seg_change_and_settle(timeout_ns, label) {
     let event = run_to_event("seg.change", timeout_ns);
-    assert_in(event.elapsed_ns, 0..=timeout_ns, label + " 首次段码变化时延");
+    assert_in(event.elapsed_ns, 0..=timeout_ns, label + ": 首次段码变化时延超出范围");
     run_ms(20);
 }
 
@@ -27,19 +27,19 @@ fn time_text(hour, minute, second) {
 }
 
 fn assert_time_text(text, hour, minute, second, label) {
-    assert_regex(text, "^  \\d{2}\\.\\d{2}\\.\\d{2}$", label + " 时间格式");
-    assert_eq(parse_int(text[2..4]), hour, label + " 小时");
-    assert_eq(text[4..5], ".", label + " 第1个分隔点");
-    assert_eq(parse_int(text[5..7]), minute, label + " 分钟");
-    assert_eq(text[7..8], ".", label + " 第2个分隔点");
-    assert_eq(parse_int(text[8..10]), second, label + " 秒");
+    assert_regex(text, "^  \\d{2}\\.\\d{2}\\.\\d{2}$", label + ": 时间格式错误");
+    assert_eq(parse_int(text[2..4]), hour, label + ": 小时显示错误");
+    assert_eq(text[4..5], ".", label + ": 第1个分隔点显示错误");
+    assert_eq(parse_int(text[5..7]), minute, label + ": 分钟显示错误");
+    assert_eq(text[7..8], ".", label + ": 第2个分隔点显示错误");
+    assert_eq(parse_int(text[8..10]), second, label + ": 秒显示错误");
 }
 
 fn assert_time_screen(hour, minute, second, label) {
     let expected = time_text(hour, minute, second);
     let current = display_text();
     if current != expected {
-        wait_seg_change_and_settle(300_000_000, label + " 显示同步");
+        wait_seg_change_and_settle(300_000_000, label + ": 显示同步");
     }
     let text = display_text();
     assert_time_text(text, hour, minute, second, label);
@@ -49,13 +49,13 @@ fn assert_mode_switch(hour24, expected12, minute, second, label) {
     boot();
     set_rtc(hour24, minute, second);
     run_ms(120);
-    assert_time_screen(hour24, minute, second, label + " 初始 24h");
+    assert_time_screen(hour24, minute, second, label + ": 初始 24h");
     // S12: 从 24h 切到 12h.
     tap_once(S12);
-    assert_time_screen(expected12, minute, second, label + " 切到 12h");
+    assert_time_screen(expected12, minute, second, label + ": 切到 12h");
     // S12: 再从 12h 切回 24h.
     tap_once(S12);
-    assert_time_screen(hour24, minute, second, label + " 切回 24h");
+    assert_time_screen(hour24, minute, second, label + ": 切回 24h");
 }
 
 // 这 4 组样例覆盖午夜, 正午, 下午首小时, 以及 24h 上边界.

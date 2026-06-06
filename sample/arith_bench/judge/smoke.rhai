@@ -86,18 +86,18 @@ let unit_op_counts = [
 ];
 
 fn assert_phase_ns(actual, label) {
-    assert_in(actual, 5_000..=800_000_000, label + ", 高电平脉宽应可测");
+    assert_in(actual, 5_000..=800_000_000, label + ": 高电平脉宽超出可测范围");
 }
 
 fn assert_gap_ns(actual, label) {
-    assert_in(actual, 100_000..=20_000_000, label + ", 相邻阶段之间应存在稳定低电平间隔");
+    assert_in(actual, 100_000..=20_000_000, label + ": 相邻阶段低电平间隔超出范围");
 }
 
 fn assert_repeat_ns(actual, baseline, label) {
     let tolerance = baseline / 2 + 50_000;
     assert(
         actual >= baseline - tolerance && actual <= baseline + tolerance,
-        label + ", 同一阶段的两轮脉宽应保持接近"
+        label + ": 两轮脉宽波动过大, baseline_ns=" + baseline + ", actual_ns=" + actual
     );
 }
 
@@ -237,7 +237,7 @@ fn print_summary_table(cycle0, cycle1, phase_names, unit_op_counts) {
 add_marker("上电");
 let startup_ns = run_to(P34, UP, 2_000_000);
 add_marker("第1轮_u8加法_上升沿");
-assert_in(startup_ns, 0..=2_000_000, "上电后应很快进入第 1 个运算阶段");
+assert_in(startup_ns, 0..=2_000_000, "上电阶段: 首个运算阶段启动时延超出范围");
 
 // 场景: 测量第 1 轮完整阶段序列.
 let cycle0 = measure_cycle("第1轮", true, phase_names);

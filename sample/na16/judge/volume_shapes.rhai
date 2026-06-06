@@ -17,10 +17,10 @@ fn goto_volume_page() {
 
 fn assert_volume_page(spare_min, spare_max, volume_min, volume_max, label) {
     let text = display_text(30);
-    assert_regex(text, "^\\s?\\d{1,3}-\\s{0,2}\\d{1,2}\\.\\d$", label + " 体积格式");
-    assert_in(display_number(1, 3), spare_min..=spare_max, label + " 剩余空间");
+    assert_regex(text, "^\\s?\\d{1,3}-\\s{0,2}\\d{1,2}\\.\\d$", label + ": 体积格式错误");
+    assert_in(display_number(1, 3), spare_min..=spare_max, label + ": 剩余空间超出范围");
     let volume = display_number(5, 8);
-    assert(volume >= volume_min && volume <= volume_max, label + " 液体体积");
+    assert(volume >= volume_min && volume <= volume_max, label + ": 液体体积超出范围, actual=" + volume);
 }
 
 set_temperature_c(25);
@@ -36,7 +36,7 @@ uart_take();
 uart_write("(L,1.5)(W,1.0)(H,2.0)");
 run_ms(160);
 let reply_rect = uart_take();
-assert(reply_rect[0..2] == "OK", "长方体参数配置");
+assert(reply_rect[0..2] == "OK", "长方体参数配置: 串口回复错误, actual=" + reply_rect);
 set_temperature_c(25);
 set_distance_cm(76);
 sensor_settle();
@@ -48,11 +48,11 @@ settle();
 uart_take();
 uart_write("(S,1)");
 run_ms(160);
-assert_eq(uart_take(), "OK", "切换到圆柱体");
+assert_eq(uart_take(), "OK", "切换圆柱体: 串口回复错误");
 uart_write("(L,1.5)(H,2.0)");
 run_ms(160);
 let reply_cyl = uart_take();
-assert(reply_cyl[0..2] == "OK", "圆柱体参数配置");
+assert(reply_cyl[0..2] == "OK", "圆柱体参数配置: 串口回复错误, actual=" + reply_cyl);
 set_temperature_c(25);
 set_distance_cm(76);
 sensor_settle();
@@ -65,7 +65,7 @@ uart_take();
 uart_write("(S,1)(H1,2.3)(H2,0.5)(L,3.0)(W,1.5)(H,2.5)(r,2.0)");
 run_ms(220);
 let reply_big = uart_take();
-assert(reply_big[0..2] == "OK", "圆柱体大容器参数配置");
+assert(reply_big[0..2] == "OK", "圆柱体大容器参数配置: 串口回复错误, actual=" + reply_big);
 set_temperature_c(25);
 set_distance_cm(87);
 sensor_settle();

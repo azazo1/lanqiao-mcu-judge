@@ -15,10 +15,10 @@ fn screen() {
 
 fn assert_screen(vv_expected, r_expected, eee_expected, label) {
     let text = screen();
-    assert_regex(text, "^\\d{2}-\\d-\\d{3}$", label + " 显示格式");
-    assert_eq(parse_int(text[0..2]), vv_expected, label + " VV");
-    assert_eq(parse_int(text[3..4]), r_expected, label + " R");
-    assert_eq(parse_int(text[5..8]), eee_expected, label + " EEE");
+    assert_regex(text, "^\\d{2}-\\d-\\d{3}$", label + ": 显示格式错误");
+    assert_eq(parse_int(text[0..2]), vv_expected, label + ": VV 显示错误");
+    assert_eq(parse_int(text[3..4]), r_expected, label + ": R 显示错误");
+    assert_eq(parse_int(text[5..8]), eee_expected, label + ": EEE 显示错误");
 }
 
 fn normalized_state() {
@@ -32,40 +32,40 @@ assert_screen(0, 3, 0, "上电");
 
 tap_many(S4, 99);
 assert_screen(99, 3, 0, "S4 连按 99 次");
-assert_eq(normalized_state(), boot_state, "VV 变化不应进入持久状态");
+assert_eq(normalized_state(), boot_state, "VV 变化后: 持久状态被错误改写");
 
 tap_many(S4, 1);
 assert_screen(0, 3, 0, "S4 第 100 次回绕");
-assert_eq(normalized_state(), boot_state, "VV 回绕后仍不应进入持久状态");
+assert_eq(normalized_state(), boot_state, "VV 回绕后: 持久状态被错误改写");
 
 tap_many(S4, 1);
 assert_screen(1, 3, 0, "S4 第 101 次");
-assert_eq(normalized_state(), boot_state, "VV 增加 1 后仍不应进入持久状态");
+assert_eq(normalized_state(), boot_state, "VV 增加 1 后: 持久状态被错误改写");
 
 reset(POWER_RESET);
 run_ms(180);
 assert_screen(0, 3, 0, "reset 后 VV 清零");
-assert_eq(normalized_state(), boot_state, "reset 后持久状态仍应保持 boot");
+assert_eq(normalized_state(), boot_state, "reset 后: 持久状态恢复错误");
 
 tap_many(S6, 1);
 assert_screen(0, 0, 0, "S6 从 3 回绕到 0");
 let res0_state = normalized_state();
-assert(res0_state != boot_state, "R 改变后持久状态字符串应变化");
+assert(res0_state != boot_state, "R 变化持久化: 持久状态未变化错误, boot=" + boot_state + ", actual=" + res0_state);
 
 reset(POWER_RESET);
 run_ms(180);
 assert_screen(0, 0, 0, "reset 后保留 R");
-assert_eq(normalized_state(), res0_state, "reset 不应破坏 R 的持久状态");
+assert_eq(normalized_state(), res0_state, "reset 后: R 的持久状态恢复错误");
 
 tap_many(S5, 1);
 assert_screen(0, 3, 0, "S5 从 0 回绕到 3");
 let res3_written_state = normalized_state();
-assert(res3_written_state != res0_state, "R 从 0 回到 3 后持久状态应再次变化");
+assert(res3_written_state != res0_state, "R 回绕持久化: 持久状态未变化错误, previous=" + res0_state + ", actual=" + res3_written_state);
 
 tap_many(S5, 4);
 assert_screen(0, 3, 0, "S5 循环 4 次");
-assert_eq(normalized_state(), res3_written_state, "S5 循环一周后持久状态不变");
+assert_eq(normalized_state(), res3_written_state, "S5 循环一周后: 持久状态被错误改写");
 
 tap_many(S6, 4);
 assert_screen(0, 3, 0, "S6 循环 4 次");
-assert_eq(normalized_state(), res3_written_state, "S6 循环一周后持久状态不变");
+assert_eq(normalized_state(), res3_written_state, "S6 循环一周后: 持久状态被错误改写");

@@ -118,7 +118,7 @@ fn read_display() {
 }
 
 fn assert_int_window(actual, min, max, label) {
-    assert_in(actual, min..=max, label);
+    assert_in(actual, min..=max, label + ": 数值超出范围");
 }
 
 fn assert_float_window(actual, min, max, label) {
@@ -152,33 +152,33 @@ fn assert_query(query, expected, label) {
 fn assert_bool_state(actual, expected, label) {
     assert(
         actual == expected,
-        label + ": 期望" + bool_text(expected) + ", 实际" + bool_text(actual)
+        label + ": 状态错误, expected=" + bool_text(expected) + ", actual=" + bool_text(actual)
     );
 }
 
 fn assert_ok_or_warn(reply, label) {
     assert(
         regex_is_match(reply, "^(OK|WARN)"),
-        label + ": 应返回OK或WARN, 实际" + reply
+        label + ": 串口回复错误, expected=OK|WARN, actual=" + reply
     );
 }
 
 fn assert_warn_reply(reply, label) {
     assert(
         regex_is_match(reply, "^WARN"),
-        label + ": 应返回WARN, 实际" + reply
+        label + ": 串口回复错误, expected=WARN, actual=" + reply
     );
 }
 
 fn assert_led_pattern(l1, l2, l3, l4, l5, l6, l7, l8, label) {
-    assert_eq(led_on(L1), l1, label + " L1");
-    assert_eq(led_on(L2), l2, label + " L2");
-    assert_eq(led_on(L3), l3, label + " L3");
-    assert_eq(led_on(L4), l4, label + " L4");
-    assert_eq(led_on(L5), l5, label + " L5");
-    assert_eq(led_on(L6), l6, label + " L6");
-    assert_eq(led_on(L7), l7, label + " L7");
-    assert_eq(led_on(L8), l8, label + " L8");
+    assert_eq(led_on(L1), l1, label + ": L1 状态错误");
+    assert_eq(led_on(L2), l2, label + ": L2 状态错误");
+    assert_eq(led_on(L3), l3, label + ": L3 状态错误");
+    assert_eq(led_on(L4), l4, label + ": L4 状态错误");
+    assert_eq(led_on(L5), l5, label + ": L5 状态错误");
+    assert_eq(led_on(L6), l6, label + ": L6 状态错误");
+    assert_eq(led_on(L7), l7, label + ": L7 状态错误");
+    assert_eq(led_on(L8), l8, label + ": L8 状态错误");
 }
 
 fn assert_time_page(hour, minute, second_min, second_max, label) {
@@ -187,11 +187,11 @@ fn assert_time_page(hour, minute, second_min, second_max, label) {
 }
 
 fn assert_time_text(text, hour, minute, second_min, second_max, label) {
-    assert_regex(text, "^\\d{2}-\\d{2}-\\d{2}$", label + " 时间格式");
-    assert_eq(parse_int(text[0..2]), hour, label + " 小时");
-    assert_eq(parse_int(text[3..5]), minute, label + " 分钟");
+    assert_regex(text, "^\\d{2}-\\d{2}-\\d{2}$", label + ": 时间格式错误");
+    assert_eq(parse_int(text[0..2]), hour, label + ": 小时显示错误");
+    assert_eq(parse_int(text[3..5]), minute, label + ": 分钟显示错误");
     let second = parse_int(text[6..8]);
-    assert_int_window(second, second_min, second_max, label + " 秒值");
+    assert_int_window(second, second_min, second_max, label + ": 秒值");
     text
 }
 
@@ -206,32 +206,32 @@ fn right_value_abs() {
 
 fn assert_liquid_page(temp, value_min, value_max, label) {
     let text = display_text(30);
-    assert_eq(display_number(1, 4), temp, label + " 温度");
+    assert_eq(display_number(1, 4), temp, label + ": 温度显示错误");
     let value = right_value_abs();
-    assert_float_window_view(value, value_min, value_max, label + " 液位值", text);
+    assert_float_window_view(value, value_min, value_max, label + ": 液位值", text);
     text
 }
 
 fn assert_volume_page(spare_min, spare_max, volume_min, volume_max, label) {
     let text = display_text(30);
     let spare = display_number(1, 3);
-    assert_int_window_view(spare, spare_min, spare_max, label + " 剩余空间", text);
+    assert_int_window_view(spare, spare_min, spare_max, label + ": 剩余空间", text);
     let volume = right_value_abs();
-    assert_float_window_view(volume, volume_min, volume_max, label + " 体积值", text);
+    assert_float_window_view(volume, volume_min, volume_max, label + ": 体积值", text);
     text
 }
 
 fn assert_weight_page(temp, value_min, value_max, label) {
     let text = display_text(30);
-    assert_eq(display_number(1, 4), temp, label + " 温度");
+    assert_eq(display_number(1, 4), temp, label + ": 温度显示错误");
     let value = display_number(5, 8);
-    assert_float_window_view(value, value_min, value_max, label + " 重量值", text);
+    assert_float_window_view(value, value_min, value_max, label + ": 重量值", text);
     text
 }
 
 fn assert_exact_display(expected, label) {
     let text = display_text(30);
-    assert_eq(text, expected, label);
+    assert_eq(text, expected, label + ": 显示内容错误");
     text
 }
 
@@ -239,13 +239,13 @@ fn assert_uart_int_alarm(code, time_min, time_max, value_min, value_max, label) 
     let text = uart_take();
     assert(
         regex_is_match(text, "^\\[\\d{3},\\d{6},\\d+\\]$"),
-        label + " 串口格式: 应为[异常码,时间,整数值], 实际" + text
+        label + ": 串口格式错误, expected=[异常码,时间,整数值], actual=" + text
     );
-    assert_eq(parse_int(text[1..4]), code, label + " 异常码");
+    assert_eq(parse_int(text[1..4]), code, label + ": 异常码错误");
     let time_value = parse_int(text[5..11]);
-    assert_int_window(time_value, time_min, time_max, label + " 时间戳");
+    assert_int_window(time_value, time_min, time_max, label + ": 时间戳");
     let value = parse_int(text[12..(len(text) - 1)]);
-    assert_int_window(value, value_min, value_max, label + " 异常值");
+    assert_int_window(value, value_min, value_max, label + ": 异常值");
     text
 }
 
@@ -253,13 +253,13 @@ fn assert_uart_float_alarm(code, time_min, time_max, value_min, value_max, label
     let text = uart_take();
     assert(
         regex_is_match(text, "^\\[\\d{3},\\d{6},\\d+(\\.\\d{1,2})?\\]$"),
-        label + " 串口格式: 应为[异常码,时间,浮点值], 实际" + text
+        label + ": 串口格式错误, expected=[异常码,时间,浮点值], actual=" + text
     );
-    assert_eq(parse_int(text[1..4]), code, label + " 异常码");
+    assert_eq(parse_int(text[1..4]), code, label + ": 异常码错误");
     let time_value = parse_int(text[5..11]);
-    assert_int_window(time_value, time_min, time_max, label + " 时间戳");
+    assert_int_window(time_value, time_min, time_max, label + ": 时间戳");
     let value = parse_float(text[12..(len(text) - 1)]);
-    assert_float_window(value, value_min, value_max, label + " 异常值");
+    assert_float_window(value, value_min, value_max, label + ": 异常值");
     text
 }
 
@@ -304,9 +304,9 @@ fn prepare_rect_1_5_1_2(temp, distance) {
     set_voltage(RB2, 2.3);
     sensor_settle();
     clear_uart();
-    assert_regex(reply_h1, "^OK", "预置 H1");
-    assert_regex(reply_h2, "^OK", "预置 H2");
-    assert_regex(reply_size, "^OK", "预置长方体尺寸");
+    assert_regex(reply_h1, "^OK", "预置 H1: 串口回复错误");
+    assert_regex(reply_h2, "^OK", "预置 H2: 串口回复错误");
+    assert_regex(reply_size, "^OK", "预置长方体尺寸: 串口回复错误");
 }
 
 fn prepare_cylinder_small(distance) {
@@ -323,8 +323,8 @@ fn prepare_cylinder_small(distance) {
     set_distance_cm(distance);
     sensor_settle();
     clear_uart();
-    assert_regex(reply_s, "^OK", "切到圆柱体");
-    assert_regex(reply_size, "^OK", "预置圆柱体尺寸");
+    assert_regex(reply_s, "^OK", "切到圆柱体: 串口回复错误");
+    assert_regex(reply_size, "^OK", "预置圆柱体尺寸: 串口回复错误");
 }
 
 fn prepare_cylinder_large(distance, temp) {
@@ -345,7 +345,7 @@ fn prepare_cylinder_large(distance, temp) {
     set_voltage(RB2, 1.5);
     sensor_settle();
     clear_uart();
-    assert_regex(reply_s, "^OK", "切到圆柱体");
+    assert_regex(reply_s, "^OK", "切到圆柱体: 串口回复错误");
     assert_ok_or_warn(reply, "预置尺寸参数");
     assert_ok_or_warn(radius_reply, "预置半径参数");
 }
@@ -364,7 +364,7 @@ fn prepare_sphere_scene() {
     set_voltage(RB2, 1.5);
     sensor_settle();
     clear_uart();
-    assert_regex(reply_s, "^OK", "切到球体");
+    assert_regex(reply_s, "^OK", "切到球体: 串口回复错误");
 }
 
 fn prepare_504_alarm_scene() {
@@ -428,8 +428,8 @@ fn prepare_row53_scene() {
     set_temperature_c(25);
     set_distance_cm(170);
     sensor_settle();
-    assert_regex(reply_s, "^OK", "切到圆柱体");
-    assert_regex(reply_h, "^OK", "设置圆柱体高度");
+    assert_regex(reply_s, "^OK", "切到圆柱体: 串口回复错误");
+    assert_regex(reply_h, "^OK", "设置圆柱体高度: 串口回复错误");
 }
 
 fn prepare_row59_scene() {
@@ -450,7 +450,7 @@ fn prepare_row59_scene() {
     set_temperature_c(25);
     set_distance_cm(5);
     sensor_settle();
-    assert_regex(reply_s, "^OK", "切到圆柱体");
+    assert_regex(reply_s, "^OK", "切到圆柱体: 串口回复错误");
     assert_ok_or_warn(reply_size, "设置大容器尺寸");
     assert_ok_or_warn(reply_r, "设置圆柱体半径");
 }
@@ -569,14 +569,14 @@ ckpt(14, "切换8个子参数界面", "P1-   1.0, P2-   0.1, P3- 2000, P4-    2,
     tap_key(S5, 80);
     settle();
     let p8 = read_display();
-    assert_eq(p1, "P1-   1.0", "P1");
-    assert_eq(p2, "P2-   0.1", "P2");
-    assert_eq(p3, "P3- 2000", "P3");
-    assert_eq(p4, "P4-    2", "P4");
-    assert_eq(p5, "P5-   1.0", "P5");
-    assert_eq(p6, "P6-   1.0", "P6");
-    assert_eq(p7, "P7-   1.0", "P7");
-    assert_eq(p8, "P8-   1.0", "P8");
+    assert_eq(p1, "P1-   1.0", "参数页 P1: 显示内容错误");
+    assert_eq(p2, "P2-   0.1", "参数页 P2: 显示内容错误");
+    assert_eq(p3, "P3- 2000", "参数页 P3: 显示内容错误");
+    assert_eq(p4, "P4-    2", "参数页 P4: 显示内容错误");
+    assert_eq(p5, "P5-   1.0", "参数页 P5: 显示内容错误");
+    assert_eq(p6, "P6-   1.0", "参数页 P6: 显示内容错误");
+    assert_eq(p7, "P7-   1.0", "参数页 P7: 显示内容错误");
+    assert_eq(p8, "P8-   1.0", "参数页 P8: 显示内容错误");
     p1 + "," + p2 + "," + p3 + "," + p4 + "," + p5 + "," + p6 + "," + p7 + "," + p8
 });
 
@@ -744,9 +744,9 @@ ckpt(39, "0吨标定点加0.4, 5吨标定点加0.2, 15吨标定点减1.5", "E00 
     tap_times(S5, 2, 320);
     adjust_down(5);
     let e15 = read_display();
-    assert_eq(e00, "E00   0.4", "E00");
-    assert_eq(e05, "E05   1.2", "E05");
-    assert_eq(e15, "E15   3.5", "E15");
+    assert_eq(e00, "E00   0.4", "标定点 E00: 显示内容错误");
+    assert_eq(e05, "E05   1.2", "标定点 E05: 显示内容错误");
+    assert_eq(e15, "E15   3.5", "标定点 E15: 显示内容错误");
     e00 + "," + e05 + "," + e15
 });
 
@@ -786,7 +786,7 @@ ckpt(44, "发送(F,1500)", "串口返回:OK", || {
     boot_clean();
     send_uart("(F,1500)");
     let text = uart_take();
-    assert_eq(text, "OK", "设置频率参数");
+    assert_eq(text, "OK", "设置频率参数: 串口回复错误");
     text
 });
 
@@ -805,7 +805,7 @@ ckpt(45, "频率值:1300->1800", "串口返回:[502,132454,1800]", || {
     clear_uart();
     set_frequency_hz(1800);
     run_ms(1200);
-    assert_eq(reply, "OK", "设置 F=1500");
+    assert_eq(reply, "OK", "设置 F=1500: 串口回复错误");
     assert_uart_int_alarm(502, 132454, 132457, 1500, 1900, "1300->1800 数值异常")
 });
 
@@ -825,8 +825,8 @@ ckpt(47, "发送(H1,1.8)(H2,0.5) -> (L,1.5)(H,2.0)", "串口返回:OK -> OK", ||
     let first = uart_take();
     send_uart("(L,1.5)(H,2.0)");
     let second = uart_take();
-    assert_regex(first, "^OK", "设置 H1/H2");
-    assert_regex(second, "^OK", "设置 L/H");
+    assert_regex(first, "^OK", "设置 H1/H2: 串口回复错误");
+    assert_regex(second, "^OK", "设置 L/H: 串口回复错误");
     first + "," + second
 });
 
@@ -883,7 +883,7 @@ ckpt(55, "发送(H1,2.3)(H2,0.5)(S,3)(L,3.0)(W,1.5)(H,2.5)", "串口返回:WARN"
     let switch_reply = uart_take();
     send_uart("(H1,2.3)(H2,0.5)(S,3)(L,3.0)(W,1.5)(H,2.5)");
     let text = uart_take();
-    assert_regex(switch_reply, "^OK", "先切到圆柱体");
+    assert_regex(switch_reply, "^OK", "先切到圆柱体: 串口回复错误");
     assert_warn_reply(text, "部分生效参数返回值");
     text
 });
@@ -917,7 +917,7 @@ ckpt(60, "发送(T:12:13:15)", "串口返回:OK, 数码管显示 12-13-15", || {
     send_uart("(T:121315)");
     let reply = uart_take();
     let text = read_display();
-    assert_eq(reply, "OK", "设置 12:13:15");
+    assert_eq(reply, "OK", "设置 12:13:15: 串口回复错误");
     assert_time_text(text, 12, 13, 15, 15, "12:13:15 时间页");
     reply + "," + text
 });
@@ -927,7 +927,7 @@ ckpt(61, "(T:23:33:44)", "串口返回:OK, 数码管显示 23-33-44", || {
     send_uart("(T:233344)");
     let reply = uart_take();
     let text = read_display();
-    assert_eq(reply, "OK", "设置 23:33:44");
+    assert_eq(reply, "OK", "设置 23:33:44: 串口回复错误");
     assert_time_text(text, 23, 33, 44, 44, "23:33:44 时间页");
     reply + "," + text
 });
@@ -942,7 +942,7 @@ ckpt(62, "频率趋势异常", "L7以0.1s为间隔闪烁", || {
 ckpt(63, "5s内, 频率值:1500->1300->1000->800->500", "串口返回:[503,233344,0]", || {
     prepare_503_alarm_scene();
     let text = uart_take();
-    assert_regex(text, "^\\[503,23334[4-9],0\\]$", "503 串口上报");
+    assert_regex(text, "^\\[503,23334[4-9],0\\]$", "503 串口上报: 格式错误");
     text
 });
 
@@ -953,8 +953,8 @@ ckpt(64, "发送(T:28:63:44)", "串口返回:ERROR, 数码管显示 23-33-44", |
     send_uart("(T:286344)");
     let reply = uart_take();
     let text = read_display();
-    assert_eq(first, "OK", "先设置合法时间");
-    assert_eq(reply, "ERROR", "非法时间应返回 ERROR");
+    assert_eq(first, "OK", "先设置合法时间: 串口回复错误");
+    assert_eq(reply, "ERROR", "非法时间设置: 串口回复错误");
     assert_time_text(text, 23, 33, 44, 44, "非法时间后保持原显示");
     reply + "," + text
 });
@@ -968,10 +968,10 @@ ckpt(65, "发送(S,4) -> (r,1.0)(S,3) -> (S,?)", "串口返回:ERROR -> WARN -> 
     send_uart("(r,1.0)(S,3)");
     let second = uart_take();
     let third = query_uart("(S,?)");
-    assert_eq(init, "OK", "先切到圆柱体");
-    assert_eq(first, "ERROR", "非法容器类型应返回 ERROR");
-    assert_eq(second, "WARN", "部分生效参数应返回 WARN");
-    assert_eq(third, "(S,1)", "查询容器类型保持圆柱体");
+    assert_eq(init, "OK", "先切到圆柱体: 串口回复错误");
+    assert_eq(first, "ERROR", "非法容器类型设置: 串口回复错误");
+    assert_eq(second, "WARN", "部分生效参数: 串口回复错误");
+    assert_eq(third, "(S,1)", "查询容器类型: 返回值错误");
     first + "," + second + "," + third
 });
 

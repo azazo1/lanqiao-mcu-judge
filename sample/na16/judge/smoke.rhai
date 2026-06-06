@@ -13,10 +13,10 @@ fn page_settle() {
 }
 
 fn assert_only_data_led(index, label) {
-    assert_eq(led_on(L1), index == 1, label + " L1");
-    assert_eq(led_on(L2), index == 2, label + " L2");
-    assert_eq(led_on(L3), index == 3, label + " L3");
-    assert_eq(led_on(L4), index == 4, label + " L4");
+    assert_eq(led_on(L1), index == 1, label + ": L1 页面指示状态错误");
+    assert_eq(led_on(L2), index == 2, label + ": L2 页面指示状态错误");
+    assert_eq(led_on(L3), index == 3, label + ": L3 页面指示状态错误");
+    assert_eq(led_on(L4), index == 4, label + ": L4 页面指示状态错误");
 }
 
 fn goto_param_menu() {
@@ -32,38 +32,38 @@ fn goto_std_menu() {
 
 fn assert_time_page(hour, minute, second, label) {
     let text = display_text(30);
-    assert_regex(text, "^\\d{2}-\\d{2}-\\d{2}$", label + " 时间格式");
-    assert_eq(parse_int(text[0..2]), hour, label + " 小时");
-    assert_eq(parse_int(text[3..5]), minute, label + " 分钟");
-    assert_eq(parse_int(text[6..8]), second, label + " 秒");
+    assert_regex(text, "^\\d{2}-\\d{2}-\\d{2}$", label + ": 时间格式错误");
+    assert_eq(parse_int(text[0..2]), hour, label + ": 小时显示错误");
+    assert_eq(parse_int(text[3..5]), minute, label + ": 分钟显示错误");
+    assert_eq(parse_int(text[6..8]), second, label + ": 秒显示错误");
 }
 
 fn assert_liq_page(temp, value_min, value_max, label) {
     let text = display_text(30);
-    assert_regex(text, "^\\s{0,2}-?\\d{1,2}-\\s?\\d{1,2}\\.\\d{1,2}$", label + " 数据格式");
-    assert_eq(display_number(1, 4), temp, label + " 左侧数值");
+    assert_regex(text, "^\\s{0,2}-?\\d{1,2}-\\s?\\d{1,2}\\.\\d{1,2}$", label + ": 数据格式错误");
+    assert_eq(display_number(1, 4), temp, label + ": 左侧数值错误");
     let value = 0.0 - display_number(5, 8);
-    assert(value >= value_min && value <= value_max, label + " 右侧数值");
+    assert(value >= value_min && value <= value_max, label + ": 右侧数值超出范围, actual=" + value);
 }
 
 fn assert_weight_page(temp, value_min, value_max, label) {
     let text = display_text(30);
-    assert_regex(text, "^\\s{0,2}-?\\d{1,2}-\\s?\\d{1,2}\\.\\d{1,2}$", label + " 数据格式");
-    assert_eq(display_number(1, 4), temp, label + " 左侧数值");
+    assert_regex(text, "^\\s{0,2}-?\\d{1,2}-\\s?\\d{1,2}\\.\\d{1,2}$", label + ": 数据格式错误");
+    assert_eq(display_number(1, 4), temp, label + ": 左侧数值错误");
     let value = display_number(5, 8);
-    assert(value >= value_min && value <= value_max, label + " 右侧数值");
+    assert(value >= value_min && value <= value_max, label + ": 右侧数值超出范围, actual=" + value);
 }
 
 fn assert_volume_page(spare_min, spare_max, volume_min, volume_max, label) {
     let text = display_text(30);
-    assert_regex(text, "^\\s?\\d{1,3}-\\s{0,2}\\d{1,2}\\.\\d$", label + " 体积格式");
-    assert_in(display_number(1, 3), spare_min..=spare_max, label + " 剩余空间");
+    assert_regex(text, "^\\s?\\d{1,3}-\\s{0,2}\\d{1,2}\\.\\d$", label + ": 体积格式错误");
+    assert_in(display_number(1, 3), spare_min..=spare_max, label + ": 剩余空间超出范围");
     let volume = display_number(5, 8);
-    assert(volume >= volume_min && volume <= volume_max, label + " 液体体积");
+    assert(volume >= volume_min && volume <= volume_max, label + ": 液体体积超出范围, actual=" + volume);
 }
 
 fn assert_display_exact(expected, label) {
-    assert_eq(display_text(30), expected, label);
+    assert_eq(display_text(30), expected, label + ": 显示内容错误");
 }
 
 fn assert_stable_calibration_after_return(expected, label) {
@@ -74,7 +74,7 @@ fn assert_stable_calibration_after_return(expected, label) {
     settle();
     tap_key(S4, 80);
     settle();
-    assert_display_exact(expected, label + " 再次进入标定界面");
+    assert_display_exact(expected, label + ": 再次进入标定界面");
 }
 
 set_rtc(23, 59, 50);
@@ -82,7 +82,7 @@ settle();
 
 assert_time_page(23, 59, 50, "上电默认时间页");
 assert_only_data_led(1, "上电默认指示灯");
-assert(!relay_on(), "上电无异常时继电器断开");
+assert(!relay_on(), "上电检查: 继电器状态错误, 期望断开, 实际吸合");
 
 set_temperature_c(25);
 set_distance_cm(35);

@@ -11,7 +11,7 @@ fn tap_many(key, count) {
 }
 
 fn assert_page(prefix, label) {
-    assert_eq(display_text(30)[0..1], prefix, label + ", 页面前缀");
+    assert_eq(display_text(30)[0..1], prefix, label + ": 页面前缀错误");
 }
 
 fn distance_value() {
@@ -24,12 +24,12 @@ fn speed_value() {
 
 fn assert_speed(expected, label) {
     assert_page("P", label);
-    assert_eq(speed_value(), expected, label + ", 音速数值");
+    assert_eq(speed_value(), expected, label + ": 音速数值错误");
 }
 
 fn assert_distance_range(lower, upper, label) {
     assert_page("L", label);
-    assert_in(distance_value(), lower..=upper, label + ", 距离数值");
+    assert_in(distance_value(), lower..=upper, label + ": 距离数值超出范围");
 }
 
 fn assert_distance_formula(distance_cm, speed, tolerance, label) {
@@ -39,7 +39,7 @@ fn assert_distance_formula(distance_cm, speed, tolerance, label) {
 
 settle();
 assert_page("L", "上电默认距离页");
-assert_eq(distance_value(), 0, "上电默认距离值");
+assert_eq(distance_value(), 0, "上电检查: 默认距离值错误");
 
 set_distance_cm(20);
 settle();
@@ -106,4 +106,4 @@ assert_distance_formula(100, 300, 1, "300m/s 时 100cm 的距离显示");
 
 set_distance_cm(0);
 settle();
-assert_eq(distance_value(), 0, "0cm 输入应显示 0");
+assert_eq(distance_value(), 0, "0cm 输入: 距离显示错误");

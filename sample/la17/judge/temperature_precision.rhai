@@ -6,8 +6,8 @@ fn goto_temp_page() {
 }
 
 fn assert_temp_precision(temp, precision, label) {
-    assert_eq(display_number(1, 6), temp, label + " 温度值");
-    assert_eq(display_number(8, 8), precision, label + " 精度等级");
+    assert_eq(display_number(1, 6), temp, label + ": 温度值错误");
+    assert_eq(display_number(8, 8), precision, label + ": 精度等级错误");
 }
 
 set_rtc(#{

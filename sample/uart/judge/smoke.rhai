@@ -4,19 +4,19 @@ fn settle() {
 
 fn assert_display(expected_count, expected, label) {
     let text = display_text(30);
-    assert_eq(len(text), 9, label + ", 显示长度");
-    assert_eq(text[0..4], expected_count, label + ", 前 3 位应为 TI 计数并带小数点");
-    assert_eq(text[4..9], expected, label + ", 后 5 位补零显示");
+    assert_eq(len(text), 9, label + ": 显示长度错误");
+    assert_eq(text[0..4], expected_count, label + ": 前4位 TI 计数显示错误");
+    assert_eq(text[4..9], expected, label + ": 后5位数值显示错误");
 }
 
 fn assert_uart_reply(expected, label) {
-    assert_eq(uart_take(), expected, label + ", 串口输出");
-    assert_eq(uart_take(), "", label + ", 读取后串口缓冲应为空");
+    assert_eq(uart_take(), expected, label + ": 串口输出错误");
+    assert_eq(uart_take(), "", label + ": 串口缓冲清空错误");
 }
 
 settle();
 assert_display("000.", "00000", "上电默认显示");
-assert_eq(uart_take(), "", "上电默认无串口输出");
+assert_eq(uart_take(), "", "上电检查: 串口默认输出错误");
 
 uart_write("0");
 settle();

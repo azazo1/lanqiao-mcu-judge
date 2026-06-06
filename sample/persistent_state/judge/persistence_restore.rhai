@@ -15,10 +15,10 @@ fn screen() {
 
 fn assert_screen(vv_expected, r_expected, eee_expected, label) {
     let text = screen();
-    assert_regex(text, "^\\d{2}-\\d-\\d{3}$", label + " 显示格式");
-    assert_eq(parse_int(text[0..2]), vv_expected, label + " VV");
-    assert_eq(parse_int(text[3..4]), r_expected, label + " R");
-    assert_eq(parse_int(text[5..8]), eee_expected, label + " EEE");
+    assert_regex(text, "^\\d{2}-\\d-\\d{3}$", label + ": 显示格式错误");
+    assert_eq(parse_int(text[0..2]), vv_expected, label + ": VV 显示错误");
+    assert_eq(parse_int(text[3..4]), r_expected, label + ": R 显示错误");
+    assert_eq(parse_int(text[5..8]), eee_expected, label + ": EEE 显示错误");
 }
 
 fn normalized_state() {
@@ -42,13 +42,13 @@ tap_many(S4, 12);
 assert_screen(12, 0, 3, "构造 snapshot A");
 let state_a = normalized_state();
 add_marker("snapshot_a_exported");
-assert(state_a != boot_state, "snapshot A 应不同于 boot");
+assert(state_a != boot_state, "snapshot A: 持久状态未变化错误, boot=" + boot_state + ", actual=" + state_a);
 
 reset(POWER_RESET);
 run_ms(180);
 add_marker("snapshot_a_restored_after_reset");
 assert_screen(0, 0, 1, "reset 后恢复 snapshot A");
-assert_eq(normalized_state(), state_a, "reset 后 persistent state 不变");
+assert_eq(normalized_state(), state_a, "reset 后: 持久状态恢复错误");
 
 tap_many(S10, 3);
 tap_many(S8, 1);
@@ -61,14 +61,14 @@ let visible_b = screen();
 assert_screen(7, 3, 255, "构造 snapshot B");
 let state_b = normalized_state();
 add_marker("snapshot_b_exported");
-assert(state_b != state_a, "snapshot B 应不同于 snapshot A");
+assert(state_b != state_a, "snapshot B: 持久状态未变化错误, previous=" + state_a + ", actual=" + state_b);
 
 load_persistent_state(state_a);
-assert_eq(normalized_state(), state_a, "load 后持久状态应立即恢复为 snapshot A");
-assert_eq(eeprom_byte(0), 1, "load A 后 EEPROM[0x00]");
-assert_eq(eeprom_byte(1), 2, "load A 后 EEPROM[0x01]");
-assert_eq(eeprom_byte(2), 3, "load A 后 EEPROM[0x02]");
-assert_eq(screen(), visible_b, "仅 load 不应自动刷新 RAM 缓存显示");
+assert_eq(normalized_state(), state_a, "load A 后: 持久状态恢复错误");
+assert_eq(eeprom_byte(0), 1, "load A 后: EEPROM[0x00] 数据错误");
+assert_eq(eeprom_byte(1), 2, "load A 后: EEPROM[0x01] 数据错误");
+assert_eq(eeprom_byte(2), 3, "load A 后: EEPROM[0x02] 数据错误");
+assert_eq(screen(), visible_b, "仅 load A: RAM 缓存显示被错误刷新");
 
 reset(POWER_RESET);
 run_ms(180);
@@ -94,6 +94,6 @@ reset(POWER_RESET);
 run_ms(180);
 add_marker("boot_state_visible_after_reset");
 assert_screen(0, 3, 0, "恢复 boot 后");
-assert_eq(eeprom_byte(0), 0, "恢复 boot 后 EEPROM[0x00]");
-assert_eq(eeprom_byte(1), 0, "恢复 boot 后 EEPROM[0x01]");
-assert_eq(eeprom_byte(2), 0, "恢复 boot 后 EEPROM[0x02]");
+assert_eq(eeprom_byte(0), 0, "恢复 boot 后: EEPROM[0x00] 数据错误");
+assert_eq(eeprom_byte(1), 0, "恢复 boot 后: EEPROM[0x01] 数据错误");
+assert_eq(eeprom_byte(2), 0, "恢复 boot 后: EEPROM[0x02] 数据错误");

@@ -23,12 +23,12 @@ fn time_text(hour, minute, second) {
 fn assert_visible_digit(digit, timeout_ns, label) {
     let target = "seg.d" + digit + ".visible";
     let dt = run_to_state(target, true, timeout_ns);
-    assert_in(dt, 0..=timeout_ns, label + " 可见相位");
+    assert_in(dt, 0..=timeout_ns, label + ": 可见相位等待超时");
 }
 
 fn wait_seg_change_and_settle(timeout_ns, label) {
     let event = run_to_event("seg.change", timeout_ns);
-    assert_in(event.elapsed_ns, 0..=timeout_ns, label + " 首次段码变化时延");
+    assert_in(event.elapsed_ns, 0..=timeout_ns, label + ": 首次段码变化时延超出范围");
     run_ms(20);
     return event.elapsed_ns + 20_000_000;
 }
@@ -37,31 +37,31 @@ fn assert_setting_field_visible(start_digit, timeout_ns, label) {
     let end_digit = start_digit + 1;
     let target = "seg.d" + end_digit + ".visible";
     let dt_off = run_to_state(target, false, timeout_ns);
-    assert_in(dt_off, 0..=timeout_ns, label + " 进入隐藏相位");
+    assert_in(dt_off, 0..=timeout_ns, label + ": 进入隐藏相位超时");
     let remain_ns = timeout_ns - dt_off;
-    assert(remain_ns >= 0, label + " 重新显示预算应非负");
+    assert(remain_ns >= 0, label + ": 重新显示预算错误, remain_ns=" + remain_ns);
     let dt_on = run_to_state(target, true, remain_ns);
-    assert_in(dt_on, 0..=remain_ns, label + " 重新显示");
+    assert_in(dt_on, 0..=remain_ns, label + ": 重新显示超时");
     run_ms(20);
 }
 
 fn assert_time_text(text, hour, minute, second, label) {
-    assert_regex(text, "^  \\d{2}\\.\\d{2}\\.\\d{2}$", label + " 时间格式");
-    assert_eq(parse_int(text[2..4]), hour, label + " 小时");
-    assert_eq(text[4..5], ".", label + " 第1个分隔点");
-    assert_eq(parse_int(text[5..7]), minute, label + " 分钟");
-    assert_eq(text[7..8], ".", label + " 第2个分隔点");
-    assert_eq(parse_int(text[8..10]), second, label + " 秒");
+    assert_regex(text, "^  \\d{2}\\.\\d{2}\\.\\d{2}$", label + ": 时间格式错误");
+    assert_eq(parse_int(text[2..4]), hour, label + ": 小时显示错误");
+    assert_eq(text[4..5], ".", label + ": 第1个分隔点显示错误");
+    assert_eq(parse_int(text[5..7]), minute, label + ": 分钟显示错误");
+    assert_eq(text[7..8], ".", label + ": 第2个分隔点显示错误");
+    assert_eq(parse_int(text[8..10]), second, label + ": 秒显示错误");
 }
 
 fn assert_time_screen(hour, minute, second, label) {
     let expected = time_text(hour, minute, second);
     let current = display_text();
     if current != expected {
-        wait_seg_change_and_settle(300_000_000, label + " 显示同步");
+        wait_seg_change_and_settle(300_000_000, label + ": 显示同步");
     }
     let text = display_text();
-    assert_eq(text, expected, label + " 可见文本");
+    assert_eq(text, expected, label + ": 可见文本错误");
     assert_time_text(text, hour, minute, second, label);
 }
 
@@ -69,29 +69,29 @@ fn assert_setting_time_screen(visible_digit, hour, minute, second, label) {
     let expected = time_text(hour, minute, second);
     let current = display_text();
     if current != expected {
-        let spent_ns = wait_seg_change_and_settle(1_200_000_000, label + " 显示同步");
+        let spent_ns = wait_seg_change_and_settle(1_200_000_000, label + ": 显示同步");
         let remain_ns = 1_200_000_000 - spent_ns;
-        assert(remain_ns >= 0, label + " 可见相位预算应非负");
-        assert_visible_digit(visible_digit + 1, remain_ns, label + " 可见相位");
+        assert(remain_ns >= 0, label + ": 可见相位预算错误, remain_ns=" + remain_ns);
+        assert_visible_digit(visible_digit + 1, remain_ns, label + ": 可见相位");
         run_ms(20);
     } else {
-        assert_setting_field_visible(visible_digit, 1_200_000_000, label + " 选中字段");
+        assert_setting_field_visible(visible_digit, 1_200_000_000, label + ": 选中字段");
     }
     let text = display_text();
-    assert_eq(text, expected, label + " 可见文本");
+    assert_eq(text, expected, label + ": 可见文本错误");
     assert_time_text(text, hour, minute, second, label);
 }
 
 fn assert_time_resume(hour, minute, old_second, new_second, min_elapsed_ns, max_elapsed_ns, label) {
     let event = run_to_event("seg.change", max_elapsed_ns);
-    assert_in(event.elapsed_ns, min_elapsed_ns..=max_elapsed_ns, label + " 恢复计时时长");
+    assert_in(event.elapsed_ns, min_elapsed_ns..=max_elapsed_ns, label + ": 恢复计时时长超出范围");
     run_ms(20);
     let text = display_text();
-    assert_regex(text, "^  \\d{2}\\.\\d{2}\\.\\d{2}$", label + " 时间格式");
-    assert_eq(parse_int(text[2..4]), hour, label + " 小时");
-    assert_eq(parse_int(text[5..7]), minute, label + " 分钟");
-    assert_eq(parse_int(text[8..10]), new_second, label + " 恢复后的秒值");
-    assert(new_second != old_second, label + " 恢复后的秒值应已推进");
+    assert_regex(text, "^  \\d{2}\\.\\d{2}\\.\\d{2}$", label + ": 时间格式错误");
+    assert_eq(parse_int(text[2..4]), hour, label + ": 小时显示错误");
+    assert_eq(parse_int(text[5..7]), minute, label + ": 分钟显示错误");
+    assert_eq(parse_int(text[8..10]), new_second, label + ": 恢复后的秒值错误");
+    assert(new_second != old_second, label + ": 秒值恢复错误, old_second=" + old_second + ", new_second=" + new_second);
 }
 
 // 场景 1. 进入设置态后, 时间应冻结在进入时的快照.
