@@ -1,9 +1,15 @@
-run_ms(5);
+fn settle() {
+    run_ms(320);
+}
+
+fn assert_time_page(hour, minute, second, label) {
+    let text = display_text(30);
+    assert_regex(text, "^\\d{2}-\\d{2}-\\d{2}$", label + " 时间格式");
+    assert_eq(parse_int(text[0..2]), hour, label + " 小时");
+    assert_eq(parse_int(text[3..5]), minute, label + " 分钟");
+    assert_eq(parse_int(text[6..8]), second, label + " 秒");
+}
+
 set_rtc(23, 59, 50);
-run_ms(200);
-assert_regex(display_text(30), "^\\d{2}-\\d{2}-\\d{2}$", "RTC 显示格式");
-assert_eq(parse_int(display_text()[0..2]), 23, "RTC 小时");
-assert_eq(display_text()[2..3], "-", "RTC 第1个分隔符");
-assert_eq(parse_int(display_text()[3..5]), 59, "RTC 分钟");
-assert_eq(display_text()[5..6], "-", "RTC 第2个分隔符");
-assert_eq(parse_int(display_text()[6..8]), 50, "RTC 秒钟");
+settle();
+assert_time_page(23, 59, 50, "上电 RTC 显示");
