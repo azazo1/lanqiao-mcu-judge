@@ -4,7 +4,7 @@
 
 前提:
 
-- 可以直接调用 `C:/Keil_v1/UV4/UV4.exe`.
+- 可以直接调用 `C:/Keil_v5/UV4/UV4.exe`.
 - 工程里的器件头文件和工具链配置已经在 `uvproj` 中设置完成.
 
 ## 批量构建
@@ -14,7 +14,7 @@
 命令结构可以写成:
 
 ```powershell
-C:/Keil_v1/UV4/UV4.exe -b .\sample\arith_bench\prj\arith_bench.uvproj -j0 -t arith_bench -o .\sample\arith_bench\prj\Objects\uv4.log
+C:/Keil_v5/UV4/UV4.exe -b .\sample\arith_bench\prj\arith_bench.uvproj -j0 -t arith_bench -o .\sample\arith_bench\prj\Objects\uv4.log
 ```
 
 这几个参数的作用如下:

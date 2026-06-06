@@ -189,9 +189,27 @@ build-sample sample:
     New-Item -ItemType Directory -Path $objectsDir -Force | Out-Null
     $logPath = Join-Path $objectsDir 'uv4.log'
 
-    & 'C:/Keil_v1/UV4/UV4.exe' -b $uvproj.FullName -j0 -t $targetName -o $logPath
-    if ($LASTEXITCODE -ne 0) {
-        exit $LASTEXITCODE
+    $uv4 = $null
+    $uv4Command = Get-Command 'UV4.exe' -ErrorAction SilentlyContinue
+    if ($null -ne $uv4Command) {
+        $uv4 = $uv4Command.Source
+    } elseif (Test-Path 'C:/Keil_v5/UV4/UV4.exe') {
+        $uv4 = 'C:/Keil_v5/UV4/UV4.exe'
+    } else {
+        [Console]::Error.WriteLine('UV4.exe not found in PATH or at C:/Keil_v5/UV4/UV4.exe')
+        exit 1
+    }
+
+    $arguments = @(
+        '-b', $uvproj.FullName,
+        '-j0',
+        '-t', $targetName,
+        '-o', $logPath
+    )
+
+    $process = Start-Process -FilePath $uv4 -ArgumentList $arguments -Wait -PassThru -WindowStyle Hidden
+    if ($process.ExitCode -ne 0) {
+        exit $process.ExitCode
     }
 
     $hexPath = Join-Path $objectsDir ($outputName + '.hex')
