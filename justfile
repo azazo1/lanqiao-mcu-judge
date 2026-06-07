@@ -47,3 +47,8 @@ wave-sample sample script="smoke" start="0" end="" output="":
 # Windows only. 使用 UV4 批量编译指定 sample, 自动查找 prj/*.uvproj.
 build-sample sample:
     @just --justfile {{ quote(platform_justfile) }} --working-directory {{ quote(justfile_directory()) }} build-sample {{ quote(sample) }}
+
+# 示例: just build-sample-sdcc key_seg
+# 调用 Rust bin 使用 sdcc + packihx 构建指定 sample, 并自动兼容一部分常见的 Keil C51 语法差异.
+build-sample-sdcc sample:
+    cargo run --quiet --bin build-sample-sdcc -- {{ quote(sample) }}
