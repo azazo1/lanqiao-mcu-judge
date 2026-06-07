@@ -1913,6 +1913,14 @@ function pointValueText(signal, value) {
   return String(value);
 }
 
+function busSegmentLabelText(signal, value) {
+  const text = pointValueText(signal, value);
+  if (signal.id === "seg.text") {
+    return text.trim();
+  }
+  return text;
+}
+
 function computeAnalogScale(signal) {
   const points = sampleArray(signal);
   let observedMin = Number.POSITIVE_INFINITY;
@@ -2581,6 +2589,8 @@ function renderBusLike(signal, rowTop, rowHeight, waveLeft, waveWidth, detail) {
   let segmentStart = range.startTime;
   let segmentValue = points[range.startIndex].v;
   let lastLabelRight = Number.NEGATIVE_INFINITY;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
   for (let index = range.startIndex + 1; index < range.endExclusive; index += 1) {
     const nextTime = points[index].t;
     const left = xOf(segmentStart, waveLeft, waveWidth);
@@ -2595,12 +2605,15 @@ function renderBusLike(signal, rowTop, rowHeight, waveLeft, waveWidth, detail) {
     ctx.fillRect(left, rowTop + 8, width, rowHeight - 16);
     ctx.strokeStyle = "#7fb8ff";
     ctx.strokeRect(left, rowTop + 8, width, rowHeight - 16);
-    const text = pointValueText(signal, segmentValue);
-    const minTextWidth = denseMode ? 54 : 30;
-    if (width > minTextWidth && left >= lastLabelRight + 10) {
+    const text = busSegmentLabelText(signal, segmentValue);
+    const textWidth = text ? ctx.measureText(text).width : 0;
+    const labelLeft = left + 6;
+    const labelGap = denseMode ? 4 : 6;
+    const minTextWidth = text ? Math.max(textWidth + 12, denseMode ? 18 : 12) : Number.POSITIVE_INFINITY;
+    if (text && width >= minTextWidth && labelLeft >= lastLabelRight + labelGap) {
       ctx.fillStyle = "#eef3ff";
-      ctx.fillText(text, left + 6, rowTop + rowHeight / 2 + 4);
-      lastLabelRight = left + 6 + ctx.measureText(text).width;
+      ctx.fillText(text, labelLeft, rowTop + rowHeight / 2);
+      lastLabelRight = labelLeft + textWidth;
     }
     segmentStart = points[index].t;
     segmentValue = points[index].v;
@@ -2614,11 +2627,14 @@ function renderBusLike(signal, rowTop, rowHeight, waveLeft, waveWidth, detail) {
       ctx.fillRect(left, rowTop + 8, width, rowHeight - 16);
       ctx.strokeStyle = "#7fb8ff";
       ctx.strokeRect(left, rowTop + 8, width, rowHeight - 16);
-      const text = pointValueText(signal, segmentValue);
-      const minTextWidth = denseMode ? 54 : 30;
-      if (width > minTextWidth && left >= lastLabelRight + 10) {
+      const text = busSegmentLabelText(signal, segmentValue);
+      const textWidth = text ? ctx.measureText(text).width : 0;
+      const labelLeft = left + 6;
+      const labelGap = denseMode ? 4 : 6;
+      const minTextWidth = text ? Math.max(textWidth + 12, denseMode ? 18 : 12) : Number.POSITIVE_INFINITY;
+      if (text && width >= minTextWidth && labelLeft >= lastLabelRight + labelGap) {
         ctx.fillStyle = "#eef3ff";
-        ctx.fillText(text, left + 6, rowTop + rowHeight / 2 + 4);
+        ctx.fillText(text, labelLeft, rowTop + rowHeight / 2);
       }
     }
   }
