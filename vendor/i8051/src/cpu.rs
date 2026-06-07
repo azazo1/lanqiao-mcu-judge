@@ -1384,6 +1384,7 @@ op! {
     OP XCH "A,R{x}" 0b11001000 -x 0b111 => {(A, R[x])=(R[x], A);PC+=1};
     OP XCHD "A,@R{x}" 0b11010110 -x 0b1 => {let tmp=IDATA[R[x]]; let tmp2=A&0x0F; A=(A&0xF0)|(tmp&0x0F); IDATA[R[x]]=tmp&0xF0|tmp2; PC+=1};
 }
+#[allow(unused_imports)]
 pub(crate) use op;
 
 fn swap_nibbles(a: Reg8) -> Reg8 {
