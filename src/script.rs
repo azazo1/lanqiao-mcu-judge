@@ -187,6 +187,7 @@ struct CheckpointRecord {
     condition: String,
     expected: String,
     actual: String,
+    actual_detail: Option<String>,
     status: CheckpointStatus,
 }
 
@@ -215,6 +216,7 @@ impl ScriptCheckpointState {
         condition: &str,
         expected: &str,
         actual: String,
+        actual_detail: Option<String>,
         status: CheckpointStatus,
     ) {
         self.records.push(CheckpointRecord {
@@ -222,6 +224,7 @@ impl ScriptCheckpointState {
             condition: condition.to_owned(),
             expected: expected.to_owned(),
             actual,
+            actual_detail,
             status,
         });
     }
@@ -253,7 +256,8 @@ impl ScriptCheckpointState {
             })
             .collect::<Vec<_>>();
 
-        let report = format_checkpoint_report(passed, failed, &rows);
+        let mut report = format_checkpoint_report(passed, failed, &rows);
+        report.push_str(&format_checkpoint_failure_records(&self.records));
 
         Some(CheckpointSummary {
             total,
@@ -317,6 +321,27 @@ fn format_checkpoint_report(passed: usize, failed: usize, rows: &[Vec<String>]) 
     for row in rows {
         let cells = row.iter().map(String::as_str).collect::<Vec<_>>();
         report.push_str(&checkpoint_table_row(&cells));
+        report.push('\n');
+    }
+    report
+}
+
+fn format_checkpoint_failure_records(records: &[CheckpointRecord]) -> String {
+    let mut report = String::new();
+    let failed_records = records
+        .iter()
+        .filter(|record| record.status == CheckpointStatus::Failed)
+        .collect::<Vec<_>>();
+    if failed_records.is_empty() {
+        return report;
+    }
+
+    report.push('\n');
+    report.push_str("失败详情:\n");
+    for record in failed_records {
+        report.push_str(&format!("\n[{}] {}\n", record.index, record.condition));
+        let detail = record.actual_detail.as_deref().unwrap_or(record.actual.as_str());
+        report.push_str(&indent_checkpoint_detail(detail, "  "));
         report.push('\n');
     }
     report
@@ -2230,20 +2255,43 @@ fn register_checkpoint_api(
                 condition.as_str(),
                 expected.as_str(),
                 actual.clone(),
+                if status == CheckpointStatus::Failed {
+                    Some(actual_detail.clone())
+                } else {
+                    None
+                },
                 status,
             );
             drop(checkpoint_state);
 
-            info!(
-                ckpt_index = index,
-                ckpt_status = status.as_str(),
-                ckpt_condition = condition.as_str(),
-                ckpt_expected = expected.as_str(),
-                ckpt_actual = actual.as_str(),
-                ckpt_actual_detail = actual_detail.as_str(),
-                sim_time_ns = current_sim_time_ns(&sim),
-                "评测点执行结束"
-            );
+            match status {
+                CheckpointStatus::Passed => {
+                    info!(
+                        ckpt_index = index,
+                        ckpt_status = status.as_str(),
+                        ckpt_condition = condition.as_str(),
+                        ckpt_expected = expected.as_str(),
+                        ckpt_actual = actual.as_str(),
+                        sim_time_ns = current_sim_time_ns(&sim),
+                        "评测点执行结束"
+                    );
+                }
+                CheckpointStatus::Failed => {
+                    info!(
+                        ckpt_index = index,
+                        ckpt_status = status.as_str(),
+                        ckpt_condition = condition.as_str(),
+                        ckpt_expected = expected.as_str(),
+                        ckpt_actual = actual.as_str(),
+                        sim_time_ns = current_sim_time_ns(&sim),
+                        "评测点执行结束"
+                    );
+                    info!(
+                        "{}",
+                        format_checkpoint_stack_log(index, &actual_detail)
+                    );
+                }
+            }
 
             Ok(())
         },
@@ -2622,13 +2670,13 @@ fn runtime_error(message: impl Into<String>) -> Box<EvalAltResult> {
 }
 
 fn checkpoint_failure_detail(err: &EvalAltResult) -> String {
-    err.to_string().trim().to_owned()
+    format_checkpoint_failure_detail(&err.to_string())
 }
 
 fn checkpoint_failure_summary(detail: &str) -> String {
     let normalized = detail.replace("\r\n", "\n").replace('\r', "\n");
     let first_line = normalized.lines().next().unwrap_or("").trim();
-    let cutoff = [" @ '", " @ \"", " / in ", " (line ", " [line "]
+    let cutoff = [" @ '", " @ \"", " @ ", " / in ", " (line ", " [line "]
         .into_iter()
         .filter_map(|marker| first_line.find(marker))
         .min()
@@ -2646,6 +2694,185 @@ fn checkpoint_failure_summary(detail: &str) -> String {
         summary
     };
     summary.to_owned()
+}
+
+fn format_checkpoint_failure_detail(detail: &str) -> String {
+    let normalized = detail
+        .trim()
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .replace(" / in ", "\nin ");
+    if normalized.is_empty() {
+        return "运行时错误".to_owned();
+    }
+
+    let frames = split_checkpoint_failure_frames(&normalized);
+    if frames.len() <= 1 {
+        return simplify_checkpoint_failure_head(&normalized);
+    }
+
+    let mut lines = Vec::with_capacity(frames.len() + 1);
+    lines.push(simplify_checkpoint_failure_head(&frames[0]));
+    lines.push("调用栈:".to_owned());
+    for (index, frame) in frames.iter().enumerate().skip(1) {
+        lines.push(format!("  {}. {}", index, simplify_checkpoint_stack_frame(frame)));
+    }
+    lines.join("\n")
+}
+
+fn split_checkpoint_failure_frames(detail: &str) -> Vec<String> {
+    let mut frames = Vec::new();
+    let mut current = String::new();
+
+    for line in detail.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with("in ") && !current.is_empty() {
+            frames.push(current);
+            current = line.to_owned();
+            continue;
+        }
+        if !current.is_empty() {
+            current.push('\n');
+        }
+        current.push_str(line);
+    }
+
+    if !current.is_empty() {
+        frames.push(current);
+    }
+
+    frames
+}
+
+fn simplify_checkpoint_failure_head(frame: &str) -> String {
+    format_checkpoint_frame_text(
+        frame
+            .trim()
+            .strip_prefix("Runtime error:")
+            .map(str::trim)
+            .unwrap_or_else(|| frame.trim()),
+    )
+}
+
+fn simplify_checkpoint_stack_frame(frame: &str) -> String {
+    let frame = normalize_checkpoint_source_label(frame.trim());
+
+    if let Some(rest) = frame.strip_prefix("in call to function ") {
+        return format_checkpoint_frame_text(&format!("函数 {}", rest.trim()));
+    }
+    if let Some(rest) = frame.strip_prefix("in closure call") {
+        let rest = rest.trim();
+        if rest.is_empty() {
+            return format_checkpoint_frame_text("闭包调用");
+        }
+        return format_checkpoint_frame_text(&format!("闭包调用 {}", rest));
+    }
+    if let Some(rest) = frame.strip_prefix("in ") {
+        return format_checkpoint_frame_text(&format!("调用 {}", rest.trim()));
+    }
+
+    format_checkpoint_frame_text(&frame)
+}
+
+fn normalize_checkpoint_source_label(text: &str) -> String {
+    text.replace("'file:", "'").replace("\"file:", "\"")
+}
+
+fn format_checkpoint_frame_text(text: &str) -> String {
+    let (cleaned, location) = extract_checkpoint_frame_location(text);
+    let cleaned = strip_checkpoint_source_origin(&cleaned);
+    match location {
+        Some(location) => format!("{cleaned} @ {location}"),
+        None => cleaned,
+    }
+}
+
+fn extract_checkpoint_frame_location(text: &str) -> (String, Option<String>) {
+    if let Some((cleaned, location)) = strip_checkpoint_location_suffix(
+        text,
+        r#" @ ['"](?P<path>[^'"]+)['"] \(line (?P<line>\d+), position (?P<column>\d+)\)"#,
+    ) {
+        return (
+            normalize_checkpoint_source_label(cleaned.trim()),
+            Some(location),
+        );
+    }
+
+    if let Some((cleaned, location)) = strip_checkpoint_location_suffix(
+        text,
+        r#"\(from ['"](?P<path>[^'"]+)['"]\) \(line (?P<line>\d+), position (?P<column>\d+)\)"#,
+    ) {
+        return (
+            normalize_checkpoint_source_label(cleaned.trim()),
+            Some(location),
+        );
+    }
+
+    (normalize_checkpoint_source_label(text.trim()), None)
+}
+
+fn strip_checkpoint_location_suffix(text: &str, pattern: &str) -> Option<(String, String)> {
+    let regex = Regex::new(pattern).expect("valid checkpoint location regex");
+    let captures = regex.captures(text)?;
+    let matched = captures.get(0)?;
+    let path = captures.name("path")?.as_str();
+    let line = captures.name("line")?.as_str();
+    let column = captures.name("column")?.as_str();
+
+    let mut cleaned = String::with_capacity(text.len().saturating_sub(matched.as_str().len()));
+    cleaned.push_str(text[..matched.start()].trim_end());
+    cleaned.push_str(text[matched.end()..].trim_start());
+
+    Some((cleaned, format_checkpoint_vscode_location(path, line, column)))
+}
+
+fn format_checkpoint_vscode_location(path: &str, line: &str, column: &str) -> String {
+    format!(
+        "{}:{}:{}",
+        normalize_checkpoint_source_path(path),
+        line,
+        column
+    )
+}
+
+fn normalize_checkpoint_source_path(path: &str) -> &str {
+    path.strip_prefix("file:").unwrap_or(path)
+}
+
+fn strip_checkpoint_source_origin(frame: &str) -> String {
+    let mut result = String::with_capacity(frame.len());
+    let mut remaining = frame;
+
+    while let Some(start) = remaining.find(" (from ") {
+        result.push_str(&remaining[..start]);
+        let after_start = &remaining[start + 1..];
+        let Some(end) = after_start.find(')') else {
+            result.push_str(&remaining[start..]);
+            return result;
+        };
+        remaining = &after_start[end + 1..];
+    }
+
+    result.push_str(remaining);
+    result
+}
+
+fn indent_checkpoint_detail(detail: &str, prefix: &str) -> String {
+    detail
+        .lines()
+        .map(|line| format!("{prefix}{line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_checkpoint_stack_log(index: i64, detail: &str) -> String {
+    format!(
+        "ckpt[{index}] 调用堆栈\n{}",
+        indent_checkpoint_detail(detail, "  ")
+    )
 }
 
 fn checkpoint_success_message(value: &Dynamic) -> String {
@@ -3402,6 +3629,17 @@ mod tests {
             super::checkpoint_failure_summary(detail),
             "圆柱体 76cm 体积页 剩余空间"
         );
+    }
+
+    #[test]
+    fn checkpoint_failure_detail_formats_stack_as_multiline() {
+        let detail = "Runtime error: bad: 期望 2 , 实际 1 @ 'file:test.rhai' (line 2, position 5)\nin call to function 'inner' (from 'file:test.rhai') @ 'file:test.rhai' (line 6, position 5)\nin closure call (from 'file:test.rhai') (line 5, position 1)";
+        let formatted = super::format_checkpoint_failure_detail(detail);
+        assert!(formatted.contains("调用栈:"), "{formatted}");
+        assert!(formatted.contains("bad: 期望 2 , 实际 1 @ test.rhai:2:5"), "{formatted}");
+        assert!(formatted.contains("1. 函数 'inner' @ test.rhai:6:5"), "{formatted}");
+        assert!(formatted.contains("2. 闭包调用 @ test.rhai:5:1"), "{formatted}");
+        assert!(!formatted.contains("(from "), "{formatted}");
     }
 
     #[test]

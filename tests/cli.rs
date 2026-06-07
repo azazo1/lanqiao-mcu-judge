@@ -104,9 +104,45 @@ fn rhai_ckpt_prints_table_and_keeps_failing_exit_code() {
     assert!(stdout.contains("✅ 通过"), "{stdout}");
     assert!(stdout.contains("bad: 期望 2 , 实际 1"), "{stdout}");
     assert!(stdout.contains("实际通过"), "{stdout}");
+    assert!(stdout.contains("失败详情:"), "{stdout}");
+    assert!(stdout.contains("调用栈:"), "{stdout}");
+    assert!(stdout.contains("闭包调用"), "{stdout}");
     assert!(!stdout.contains("in closure call"), "{stdout}");
     assert!(!stdout.contains("in call to function"), "{stdout}");
     assert!(stderr.contains("ckpt 失败: 1/2"), "{stderr}");
+}
+
+#[test]
+fn rhai_ckpt_info_log_prints_multiline_stack() {
+    let script_path = temp_script_path();
+    std::fs::write(
+        &script_path,
+        "fn inner() { assert_eq(1, 2, \"bad\"); }\nckpt(1, \"失败项\", \"应当失败\", || { inner(); });\n",
+    )
+    .expect("write script");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_stcjudge"))
+        .env("RUST_LOG", "info")
+        .args(["run", "--script", script_path.to_str().expect("script path")])
+        .output()
+        .expect("run cli");
+
+    let _ = std::fs::remove_file(&script_path);
+
+    assert!(
+        !output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("评测点执行结束"), "{stdout}");
+    assert!(stdout.contains("ckpt[1] 调用堆栈"), "{stdout}");
+    assert!(stdout.contains("函数 'inner'"), "{stdout}");
+    assert!(stdout.contains("闭包调用"), "{stdout}");
+    assert!(!stdout.contains("ckpt_actual_detail"), "{stdout}");
+    assert!(!stdout.contains("'file:"), "{stdout}");
 }
 
 #[test]
