@@ -1564,6 +1564,20 @@ fn register_api(
         },
     );
 
+    let sim_uart_take_segment = Arc::clone(sim);
+    engine.register_fn(
+        "uart_take",
+        move |idle_ms: i64| -> Result<ImmutableString, Box<EvalAltResult>> {
+            let idle_ms = script_duration_ms(idle_ms, "idle_ms")?;
+            let text = sim_uart_take_segment
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .uart_take_string_segment(idle_ms)
+                .map_err(|err| runtime_error(err.to_string()))?;
+            Ok(text.into())
+        },
+    );
+
     let sim_uart1_take = Arc::clone(sim);
     engine.register_fn(
         "uart1_take",
@@ -1572,6 +1586,20 @@ fn register_api(
                 .lock()
                 .map_err(|_| runtime_error("仿真器锁已损坏"))?
                 .uart1_take_string()
+                .map_err(|err| runtime_error(err.to_string()))?;
+            Ok(text.into())
+        },
+    );
+
+    let sim_uart1_take_segment = Arc::clone(sim);
+    engine.register_fn(
+        "uart1_take",
+        move |idle_ms: i64| -> Result<ImmutableString, Box<EvalAltResult>> {
+            let idle_ms = script_duration_ms(idle_ms, "idle_ms")?;
+            let text = sim_uart1_take_segment
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .uart1_take_string_segment(idle_ms)
                 .map_err(|err| runtime_error(err.to_string()))?;
             Ok(text.into())
         },
@@ -1590,6 +1618,20 @@ fn register_api(
         },
     );
 
+    let sim_uart2_take_segment = Arc::clone(sim);
+    engine.register_fn(
+        "uart2_take",
+        move |idle_ms: i64| -> Result<ImmutableString, Box<EvalAltResult>> {
+            let idle_ms = script_duration_ms(idle_ms, "idle_ms")?;
+            let text = sim_uart2_take_segment
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .uart2_take_string_segment(idle_ms)
+                .map_err(|err| runtime_error(err.to_string()))?;
+            Ok(text.into())
+        },
+    );
+
     let sim_uart_take_raw = Arc::clone(sim);
     engine.register_fn(
         "uart_take_raw",
@@ -1598,6 +1640,19 @@ fn register_api(
                 .lock()
                 .map_err(|_| runtime_error("仿真器锁已损坏"))?
                 .uart_take_raw();
+            Ok(script_uart_raw_array(&symbols))
+        },
+    );
+
+    let sim_uart_take_raw_segment = Arc::clone(sim);
+    engine.register_fn(
+        "uart_take_raw",
+        move |idle_ms: i64| -> Result<Array, Box<EvalAltResult>> {
+            let idle_ms = script_duration_ms(idle_ms, "idle_ms")?;
+            let symbols = sim_uart_take_raw_segment
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .uart_take_raw_segment(idle_ms);
             Ok(script_uart_raw_array(&symbols))
         },
     );
@@ -1614,6 +1669,19 @@ fn register_api(
         },
     );
 
+    let sim_uart1_take_raw_segment = Arc::clone(sim);
+    engine.register_fn(
+        "uart1_take_raw",
+        move |idle_ms: i64| -> Result<Array, Box<EvalAltResult>> {
+            let idle_ms = script_duration_ms(idle_ms, "idle_ms")?;
+            let symbols = sim_uart1_take_raw_segment
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .uart1_take_raw_segment(idle_ms);
+            Ok(script_uart_raw_array(&symbols))
+        },
+    );
+
     let sim_uart2_take_raw = Arc::clone(sim);
     engine.register_fn(
         "uart2_take_raw",
@@ -1622,6 +1690,175 @@ fn register_api(
                 .lock()
                 .map_err(|_| runtime_error("仿真器锁已损坏"))?
                 .uart2_take_raw();
+            Ok(script_uart_raw_array(&symbols))
+        },
+    );
+
+    let sim_uart2_take_raw_segment = Arc::clone(sim);
+    engine.register_fn(
+        "uart2_take_raw",
+        move |idle_ms: i64| -> Result<Array, Box<EvalAltResult>> {
+            let idle_ms = script_duration_ms(idle_ms, "idle_ms")?;
+            let symbols = sim_uart2_take_raw_segment
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .uart2_take_raw_segment(idle_ms);
+            Ok(script_uart_raw_array(&symbols))
+        },
+    );
+
+    let sim_uart_peek = Arc::clone(sim);
+    engine.register_fn(
+        "uart_peek",
+        move || -> Result<ImmutableString, Box<EvalAltResult>> {
+            let text = sim_uart_peek
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .uart_peek_string()
+                .map_err(|err| runtime_error(err.to_string()))?;
+            Ok(text.into())
+        },
+    );
+
+    let sim_uart_peek_segment = Arc::clone(sim);
+    engine.register_fn(
+        "uart_peek",
+        move |idle_ms: i64| -> Result<ImmutableString, Box<EvalAltResult>> {
+            let idle_ms = script_duration_ms(idle_ms, "idle_ms")?;
+            let text = sim_uart_peek_segment
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .uart_peek_string_segment(idle_ms)
+                .map_err(|err| runtime_error(err.to_string()))?;
+            Ok(text.into())
+        },
+    );
+
+    let sim_uart1_peek = Arc::clone(sim);
+    engine.register_fn(
+        "uart1_peek",
+        move || -> Result<ImmutableString, Box<EvalAltResult>> {
+            let text = sim_uart1_peek
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .uart1_peek_string()
+                .map_err(|err| runtime_error(err.to_string()))?;
+            Ok(text.into())
+        },
+    );
+
+    let sim_uart1_peek_segment = Arc::clone(sim);
+    engine.register_fn(
+        "uart1_peek",
+        move |idle_ms: i64| -> Result<ImmutableString, Box<EvalAltResult>> {
+            let idle_ms = script_duration_ms(idle_ms, "idle_ms")?;
+            let text = sim_uart1_peek_segment
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .uart1_peek_string_segment(idle_ms)
+                .map_err(|err| runtime_error(err.to_string()))?;
+            Ok(text.into())
+        },
+    );
+
+    let sim_uart2_peek = Arc::clone(sim);
+    engine.register_fn(
+        "uart2_peek",
+        move || -> Result<ImmutableString, Box<EvalAltResult>> {
+            let text = sim_uart2_peek
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .uart2_peek_string()
+                .map_err(|err| runtime_error(err.to_string()))?;
+            Ok(text.into())
+        },
+    );
+
+    let sim_uart2_peek_segment = Arc::clone(sim);
+    engine.register_fn(
+        "uart2_peek",
+        move |idle_ms: i64| -> Result<ImmutableString, Box<EvalAltResult>> {
+            let idle_ms = script_duration_ms(idle_ms, "idle_ms")?;
+            let text = sim_uart2_peek_segment
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .uart2_peek_string_segment(idle_ms)
+                .map_err(|err| runtime_error(err.to_string()))?;
+            Ok(text.into())
+        },
+    );
+
+    let sim_uart_peek_raw = Arc::clone(sim);
+    engine.register_fn(
+        "uart_peek_raw",
+        move || -> Result<Array, Box<EvalAltResult>> {
+            let symbols = sim_uart_peek_raw
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .uart_peek_raw();
+            Ok(script_uart_raw_array(&symbols))
+        },
+    );
+
+    let sim_uart_peek_raw_segment = Arc::clone(sim);
+    engine.register_fn(
+        "uart_peek_raw",
+        move |idle_ms: i64| -> Result<Array, Box<EvalAltResult>> {
+            let idle_ms = script_duration_ms(idle_ms, "idle_ms")?;
+            let symbols = sim_uart_peek_raw_segment
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .uart_peek_raw_segment(idle_ms);
+            Ok(script_uart_raw_array(&symbols))
+        },
+    );
+
+    let sim_uart1_peek_raw = Arc::clone(sim);
+    engine.register_fn(
+        "uart1_peek_raw",
+        move || -> Result<Array, Box<EvalAltResult>> {
+            let symbols = sim_uart1_peek_raw
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .uart1_peek_raw();
+            Ok(script_uart_raw_array(&symbols))
+        },
+    );
+
+    let sim_uart1_peek_raw_segment = Arc::clone(sim);
+    engine.register_fn(
+        "uart1_peek_raw",
+        move |idle_ms: i64| -> Result<Array, Box<EvalAltResult>> {
+            let idle_ms = script_duration_ms(idle_ms, "idle_ms")?;
+            let symbols = sim_uart1_peek_raw_segment
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .uart1_peek_raw_segment(idle_ms);
+            Ok(script_uart_raw_array(&symbols))
+        },
+    );
+
+    let sim_uart2_peek_raw = Arc::clone(sim);
+    engine.register_fn(
+        "uart2_peek_raw",
+        move || -> Result<Array, Box<EvalAltResult>> {
+            let symbols = sim_uart2_peek_raw
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .uart2_peek_raw();
+            Ok(script_uart_raw_array(&symbols))
+        },
+    );
+
+    let sim_uart2_peek_raw_segment = Arc::clone(sim);
+    engine.register_fn(
+        "uart2_peek_raw",
+        move |idle_ms: i64| -> Result<Array, Box<EvalAltResult>> {
+            let idle_ms = script_duration_ms(idle_ms, "idle_ms")?;
+            let symbols = sim_uart2_peek_raw_segment
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .uart2_peek_raw_segment(idle_ms);
             Ok(script_uart_raw_array(&symbols))
         },
     );
@@ -2322,6 +2559,14 @@ fn script_duration_ns(value: i64, label: &str) -> Result<u64, Box<EvalAltResult>
     u64::try_from(value).map_err(|_| runtime_error(format!("{label} 参数必须 >= 0")))
 }
 
+fn script_duration_ms(value: i64, label: &str) -> Result<u64, Box<EvalAltResult>> {
+    let value = u64::try_from(value).map_err(|_| runtime_error(format!("{label} 参数必须 > 0")))?;
+    if value == 0 {
+        return Err(runtime_error(format!("{label} 参数必须 > 0")));
+    }
+    Ok(value)
+}
+
 fn run_to_target_wait(
     sim: &Arc<Mutex<Simulator>>,
     target: RunToTarget,
@@ -2922,6 +3167,51 @@ mod tests {
         "#;
 
         eval_source(sim, "test:uart2_raw_api", script).expect("run uart2 raw script");
+    }
+
+    #[test]
+    fn rhai_uart_take_without_idle_window_still_drains_full_queue() {
+        let sim = dual_uart_echo_sim();
+        let script = r#"
+            uart1_config(8, 9600, 1, "none");
+
+            uart_write("OK");
+            run_ms(20);
+            uart_write("ERROR");
+            run_ms(20);
+
+            assert_eq(uart_take(), "OKERROR", "uart_take should still drain the full queue");
+            assert_eq(uart_take(), "", "uart_take should clear the queue");
+        "#;
+
+        eval_source(sim, "test:uart_take_full_queue", script).expect("run uart take full queue script");
+    }
+
+    #[test]
+    fn rhai_uart_segment_take_and_peek_split_by_idle_gap() {
+        let sim = dual_uart_echo_sim();
+        let script = r#"
+            uart1_config(8, 9600, 1, "none");
+
+            uart_write("OK");
+            run_ms(20);
+            uart_write("ERROR");
+            run_ms(20);
+            uart_write("OK");
+            run_ms(20);
+
+            assert_eq(uart_peek(), "OKERROROK", "uart_peek should expose the full host receive queue");
+            assert_eq(uart_peek(10), "OK", "uart_peek(idle_ms) should only read the first segment");
+            assert_eq(uart_take(10), "OK", "first segmented take");
+            assert_eq(uart_peek(10), "ERROR", "peek should advance after the first segment is consumed");
+            assert_eq(uart_take(10), "ERROR", "second segmented take");
+            assert_eq(uart_take(10), "OK", "third segmented take");
+            assert_eq(uart_take(10), "", "segmented take should clear the queue");
+            assert_eq(uart_peek(), "", "peek should see an empty queue after segmented drains");
+        "#;
+
+        eval_source(sim, "test:uart_segment_take_peek", script)
+            .expect("run uart segment take and peek script");
     }
 
     #[test]

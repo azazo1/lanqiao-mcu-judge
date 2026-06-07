@@ -553,11 +553,29 @@ assert_eq(peek_xdata(0x32), 0x77, "页内 XDATA: 回读错误");
 - `display_number(start, end, window_ms)`
 - `snapshot_text()`
 - `uart_take()`
+- `uart_take(idle_ms)`
 - `uart_take_raw()`
+- `uart_take_raw(idle_ms)`
 - `uart1_take()`
+- `uart1_take(idle_ms)`
 - `uart1_take_raw()`
+- `uart1_take_raw(idle_ms)`
 - `uart2_take()`
+- `uart2_take(idle_ms)`
 - `uart2_take_raw()`
+- `uart2_take_raw(idle_ms)`
+- `uart_peek()`
+- `uart_peek(idle_ms)`
+- `uart_peek_raw()`
+- `uart_peek_raw(idle_ms)`
+- `uart1_peek()`
+- `uart1_peek(idle_ms)`
+- `uart1_peek_raw()`
+- `uart1_peek_raw(idle_ms)`
+- `uart2_peek()`
+- `uart2_peek(idle_ms)`
+- `uart2_peek_raw()`
+- `uart2_peek_raw(idle_ms)`
 - `da_value()`
 - `eeprom_byte(addr)`
 - `relay_on()`
@@ -612,9 +630,22 @@ assert_eq(peek_xdata(0x32), 0x77, "页内 XDATA: 回读错误");
 
 `uart1_write_raw(...)` 和 `uart2_write_raw(...)` 用于注入原始符号数组, 每项范围是 `0..=65535`. 当你需要验证 `9` 位数据, 或者不方便直接当文本处理时, 优先使用 `*_raw` 版本.
 
-`uart_take()` 是 `uart1_take()` 的兼容别名, 返回当前已经从 `UART1` 发出的串口文本, 并清空内部发送队列. `uart2_take()` 对 `UART2` 做同样的事情. 如果要确认某次串口输出已经被完整消费, 可以连续调用两次, 第二次应返回空字符串.
+`uart_take()` 是 `uart1_take()` 的兼容别名, 返回当前已经从 `UART1` 发出的全部串口文本, 并清空内部发送队列. `uart2_take()` 对 `UART2` 做同样的事情. 如果单片机先发 `OK`, 过一段时间再发 `ERROR`, 只要中间没有先读取, `uart_take()` 默认仍会返回合并后的 `OKERROR`.
 
-`uart_take_raw()`, `uart1_take_raw()`, `uart2_take_raw()` 会返回对应串口当前已经发出的原始符号数组, 并清空内部发送队列. 当串口配置为 `9` 位数据, 或者发送内容不适合直接按文本解释时, 请优先使用 `*_take_raw()`.
+`uart_take_raw()`, `uart1_take_raw()`, `uart2_take_raw()` 会返回对应串口当前已经发出的全部原始符号数组, 并清空内部发送队列. 当串口配置为 `9` 位数据, 或者发送内容不适合直接按文本解释时, 请优先使用 `*_take_raw()`.
+
+带 `idle_ms` 参数的版本会按"空闲超时"分段:
+
+- `uart_take(10)` / `uart1_take(10)` / `uart2_take(10)` 只返回当前第 1 段文本, 并只清空这一段.
+- `uart_take_raw(10)` / `uart1_take_raw(10)` / `uart2_take_raw(10)` 只返回当前第 1 段原始符号数组, 并只清空这一段.
+- 分段规则是: 相邻两次发送之间, 如果 TX 线空闲时间 `>= idle_ms` 毫秒, 就视为新的一段.
+- `idle_ms` 必须 `> 0`. 例如 `10` 常用于把 `OK` 和稍后再发出的 `ERROR` 分开读取.
+
+`uart_peek()` / `uart1_peek()` / `uart2_peek()` 用于非破坏读取当前"上位机接收缓冲区". 它们返回当前已经从单片机发出的文本, 但不会清空队列.
+
+`uart_peek_raw()` / `uart1_peek_raw()` / `uart2_peek_raw()` 是对应的原始符号版本, 同样不会清空队列.
+
+带 `idle_ms` 参数的 `uart_peek(10)` / `uart_peek_raw(10)` 也会按同样的空闲超时规则, 只查看当前第 1 段, 但不会消费任何内容.
 
 串口题常见写法:
 
@@ -626,6 +657,17 @@ assert_eq(uart_take(), "", "UART1 回显: 缓冲区清空错误");
 let text = display_text(30);
 assert_eq(text[0..3], "   ", "UART1 回显: 前 3 位空白显示错误");
 assert_eq(text[3..8], "00012", "UART1 回显: 后 5 位数值显示错误");
+```
+
+如果你需要验证"长时间不读串口, 多条回复是否会合并", 可以这样写:
+
+```rhai
+run_ms(1000);
+assert_eq(uart_peek(), "OKERROROK", "累计读取: 默认整队列查看错误");
+assert_eq(uart_peek(10), "OK", "累计读取: 首段查看错误");
+assert_eq(uart_take(10), "OK", "累计读取: 第 1 段读取错误");
+assert_eq(uart_take(10), "ERROR", "累计读取: 第 2 段读取错误");
+assert_eq(uart_take(10), "OK", "累计读取: 第 3 段读取错误");
 ```
 
 双串口和 `9` 位符号示例:

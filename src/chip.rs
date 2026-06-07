@@ -587,6 +587,18 @@ impl Simulator {
         self.uart1_take_string()
     }
 
+    pub fn uart1_take_string_segment(&mut self, idle_ms: u64) -> Result<String> {
+        self.ctx.ports.uart1.take_tx_string_segment(idle_ms)
+    }
+
+    pub fn uart2_take_string_segment(&mut self, idle_ms: u64) -> Result<String> {
+        self.ctx.ports.uart2.take_tx_string_segment(idle_ms)
+    }
+
+    pub fn uart_take_string_segment(&mut self, idle_ms: u64) -> Result<String> {
+        self.uart1_take_string_segment(idle_ms)
+    }
+
     pub fn uart1_take_raw(&mut self) -> Vec<u16> {
         self.ctx.ports.uart1.take_tx_raw()
     }
@@ -597,6 +609,66 @@ impl Simulator {
 
     pub fn uart_take_raw(&mut self) -> Vec<u16> {
         self.uart1_take_raw()
+    }
+
+    pub fn uart1_take_raw_segment(&mut self, idle_ms: u64) -> Vec<u16> {
+        self.ctx.ports.uart1.take_tx_raw_segment(idle_ms)
+    }
+
+    pub fn uart2_take_raw_segment(&mut self, idle_ms: u64) -> Vec<u16> {
+        self.ctx.ports.uart2.take_tx_raw_segment(idle_ms)
+    }
+
+    pub fn uart_take_raw_segment(&mut self, idle_ms: u64) -> Vec<u16> {
+        self.uart1_take_raw_segment(idle_ms)
+    }
+
+    pub fn uart1_peek_string(&self) -> Result<String> {
+        self.ctx.ports.uart1.peek_tx_string()
+    }
+
+    pub fn uart2_peek_string(&self) -> Result<String> {
+        self.ctx.ports.uart2.peek_tx_string()
+    }
+
+    pub fn uart_peek_string(&self) -> Result<String> {
+        self.uart1_peek_string()
+    }
+
+    pub fn uart1_peek_string_segment(&self, idle_ms: u64) -> Result<String> {
+        self.ctx.ports.uart1.peek_tx_string_segment(idle_ms)
+    }
+
+    pub fn uart2_peek_string_segment(&self, idle_ms: u64) -> Result<String> {
+        self.ctx.ports.uart2.peek_tx_string_segment(idle_ms)
+    }
+
+    pub fn uart_peek_string_segment(&self, idle_ms: u64) -> Result<String> {
+        self.uart1_peek_string_segment(idle_ms)
+    }
+
+    pub fn uart1_peek_raw(&self) -> Vec<u16> {
+        self.ctx.ports.uart1.peek_tx_raw()
+    }
+
+    pub fn uart2_peek_raw(&self) -> Vec<u16> {
+        self.ctx.ports.uart2.peek_tx_raw()
+    }
+
+    pub fn uart_peek_raw(&self) -> Vec<u16> {
+        self.uart1_peek_raw()
+    }
+
+    pub fn uart1_peek_raw_segment(&self, idle_ms: u64) -> Vec<u16> {
+        self.ctx.ports.uart1.peek_tx_raw_segment(idle_ms)
+    }
+
+    pub fn uart2_peek_raw_segment(&self, idle_ms: u64) -> Vec<u16> {
+        self.ctx.ports.uart2.peek_tx_raw_segment(idle_ms)
+    }
+
+    pub fn uart_peek_raw_segment(&self, idle_ms: u64) -> Vec<u16> {
+        self.uart1_peek_raw_segment(idle_ms)
     }
 
     pub fn peek_iram(&self, addr: u8) -> u8 {
@@ -2372,13 +2444,15 @@ struct UartFrameSegment {
 #[derive(Debug)]
 struct UartFrame {
     symbol: u16,
+    started_at_ns: u64,
+    completed_at_ns: u64,
     segments: Vec<UartFrameSegment>,
     segment_index: usize,
     segment_remaining_ns: u64,
 }
 
 impl UartFrame {
-    fn new(symbol: u16, config: UartConfig) -> Self {
+    fn new(symbol: u16, config: UartConfig, started_at_ns: u64) -> Self {
         let bit_ns = config.bit_ns();
         let mut segments = Vec::with_capacity(1 + usize::from(config.data_bits) + 2);
         segments.push(UartFrameSegment {
@@ -2401,9 +2475,14 @@ impl UartFrame {
             level: true,
             duration_ns: config.stop_ns(),
         });
+        let completed_at_ns = segments.iter().fold(started_at_ns, |time_ns, segment| {
+            time_ns.saturating_add(segment.duration_ns)
+        });
 
         Self {
             symbol,
+            started_at_ns,
+            completed_at_ns,
             segment_remaining_ns: segments[0].duration_ns,
             segments,
             segment_index: 0,
@@ -2432,6 +2511,13 @@ impl UartFrame {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct TimedUartSymbol {
+    symbol: u16,
+    started_at_ns: u64,
+    completed_at_ns: u64,
+}
+
 #[derive(Debug)]
 struct Uart {
     scon_addr: u8,
@@ -2441,7 +2527,7 @@ struct Uart {
     interrupt_requested: bool,
     interrupt_reassert_countdown: Option<u8>,
     rx_sbuf: u8,
-    tx_queue: VecDeque<u16>,
+    tx_queue: VecDeque<TimedUartSymbol>,
     tx_pending: VecDeque<u16>,
     rx_queue: VecDeque<u16>,
     tx_frame: Option<UartFrame>,
@@ -2510,7 +2596,7 @@ impl Uart {
         if self.tx_frame.is_none()
             && let Some(symbol) = self.tx_pending.pop_front()
         {
-            self.tx_frame = Some(UartFrame::new(symbol, self.config));
+            self.tx_frame = Some(UartFrame::new(symbol, self.config, start_time_ns));
             self.tx_line_high = false;
             let data_bits = self.config.data_bits;
             let track_id = self.event_track.track_id();
@@ -2527,6 +2613,8 @@ impl Uart {
         if let Some(frame) = self.tx_frame.as_mut() {
             if frame.advance(elapsed_ns) {
                 let symbol = frame.symbol;
+                let started_at_ns = frame.started_at_ns;
+                let completed_at_ns = frame.completed_at_ns;
                 self.tx_frame = None;
                 self.tx_line_high = true;
                 let old_control = self.control;
@@ -2536,7 +2624,11 @@ impl Uart {
                     SCON_TI
                 };
                 self.note_interrupt_flag_edges(old_control, self.control);
-                self.tx_queue.push_back(symbol);
+                self.tx_queue.push_back(TimedUartSymbol {
+                    symbol,
+                    started_at_ns,
+                    completed_at_ns,
+                });
                 sent.push(symbol);
             } else {
                 self.tx_line_high = frame.current_level();
@@ -2546,7 +2638,7 @@ impl Uart {
         if self.rx_frame.is_none()
             && let Some(symbol) = self.rx_queue.pop_front()
         {
-            self.rx_frame = Some(UartFrame::new(symbol, self.config));
+            self.rx_frame = Some(UartFrame::new(symbol, self.config, start_time_ns));
             self.rx_line_high = false;
             let data_bits = self.config.data_bits;
             let track_id = self.event_track.track_id();
@@ -2642,10 +2734,73 @@ impl Uart {
     }
 
     fn take_tx_string(&mut self) -> Result<String> {
-        let symbols = self.tx_queue.drain(..).collect::<Vec<_>>();
+        let symbols = self.tx_queue.drain(..).map(|entry| entry.symbol).collect::<Vec<_>>();
+        Self::symbols_to_string(&symbols)
+    }
+
+    fn take_tx_raw(&mut self) -> Vec<u16> {
+        self.tx_queue.drain(..).map(|entry| entry.symbol).collect()
+    }
+
+    fn take_tx_string_segment(&mut self, idle_ms: u64) -> Result<String> {
+        let symbols = self.take_tx_raw_segment(idle_ms);
+        Self::symbols_to_string(&symbols)
+    }
+
+    fn take_tx_raw_segment(&mut self, idle_ms: u64) -> Vec<u16> {
+        let count = self.segment_symbol_count(idle_ms);
+        self.tx_queue
+            .drain(..count)
+            .map(|entry| entry.symbol)
+            .collect()
+    }
+
+    fn peek_tx_string(&self) -> Result<String> {
+        let symbols = self.tx_queue.iter().map(|entry| entry.symbol).collect::<Vec<_>>();
+        Self::symbols_to_string(&symbols)
+    }
+
+    fn peek_tx_raw(&self) -> Vec<u16> {
+        self.tx_queue.iter().map(|entry| entry.symbol).collect()
+    }
+
+    fn peek_tx_string_segment(&self, idle_ms: u64) -> Result<String> {
+        let symbols = self.peek_tx_raw_segment(idle_ms);
+        Self::symbols_to_string(&symbols)
+    }
+
+    fn peek_tx_raw_segment(&self, idle_ms: u64) -> Vec<u16> {
+        let count = self.segment_symbol_count(idle_ms);
+        self.tx_queue
+            .iter()
+            .take(count)
+            .map(|entry| entry.symbol)
+            .collect()
+    }
+
+    fn segment_symbol_count(&self, idle_ms: u64) -> usize {
+        let idle_ns = idle_ms.saturating_mul(NS_PER_MILLISECOND);
+        let mut iter = self.tx_queue.iter();
+        let Some(first) = iter.next() else {
+            return 0;
+        };
+        let mut count = 1;
+        let mut previous_completed_at_ns = first.completed_at_ns;
+        for entry in iter {
+            let idle_gap_ns = entry.started_at_ns.saturating_sub(previous_completed_at_ns);
+            if idle_gap_ns >= idle_ns {
+                break;
+            }
+            count += 1;
+            previous_completed_at_ns = entry.completed_at_ns;
+        }
+        count
+    }
+
+    fn symbols_to_string(symbols: &[u16]) -> Result<String> {
         let mut bytes = Vec::with_capacity(symbols.len());
         for symbol in symbols {
-            let byte = u8::try_from(symbol).map_err(|_| {
+            let byte = u8::try_from(*symbol).map_err(|_| {
                 anyhow::anyhow!("当前串口包含超过 8 位的数据, 请改用 uart*_take_raw()")
             })?;
             bytes.push(byte);
@@ -2653,26 +2808,22 @@ impl Uart {
         Ok(String::from_utf8_lossy(&bytes).into_owned())
     }
 
-    fn take_tx_raw(&mut self) -> Vec<u16> {
-        self.tx_queue.drain(..).collect()
-    }
-
     fn tx_text(&self) -> String {
         if self
             .tx_queue
             .iter()
-            .all(|symbol| *symbol <= u16::from(u8::MAX))
+            .all(|entry| entry.symbol <= u16::from(u8::MAX))
         {
             let bytes = self
                 .tx_queue
                 .iter()
-                .map(|symbol| *symbol as u8)
+                .map(|entry| entry.symbol as u8)
                 .collect::<Vec<_>>();
             return String::from_utf8_lossy(&bytes).into_owned();
         }
         self.tx_queue
             .iter()
-            .map(|symbol| format!("0x{symbol:X}"))
+            .map(|entry| format!("0x{:X}", entry.symbol))
             .collect::<Vec<_>>()
             .join(" ")
     }

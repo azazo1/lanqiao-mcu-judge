@@ -66,6 +66,10 @@ fi
 mkdir -p "$objects_dir"
 log_path="$objects_dir/uv4.log"
 hex_path="$objects_dir/$output_name.hex"
+build_log_candidates=(
+    "$objects_dir/$output_name.build_log.htm"
+    "$objects_dir/$target_name.build_log.htm"
+)
 
 abs_path() {
     local path="$1"
@@ -132,19 +136,84 @@ run_with_wine() {
     "$wine_bin" "$uv4_path" -b "$project_win" -j0 -t "$target_name" -o "$log_win"
 }
 
+get_build_report() {
+    local build_log_path="$1"
+    local fallback_log_path="$2"
+
+    if [ -n "$build_log_path" ] && [ -f "$build_log_path" ]; then
+        sed -E 's/<[^>]+>//g' "$build_log_path" | awk 'NF { print }'
+        return 0
+    fi
+
+    if [ -f "$fallback_log_path" ]; then
+        cat "$fallback_log_path"
+        return 0
+    fi
+
+    return 1
+}
+
 echo "==> 构建 sample/$sample"
 echo "uvproj: $uvproj"
 echo "target: $target_name"
 echo "log: $log_path"
 
+uv4_exit_code=0
+set +e
 if [ -n "${KEIL_UV4_LAUNCHER:-}" ]; then
     run_with_launcher "$(expand_tilde_path "$KEIL_UV4_LAUNCHER")"
 else
     run_with_wine
 fi
+uv4_exit_code=$?
+set -e
+
+build_log_path=""
+for candidate in "${build_log_candidates[@]}"; do
+    if [ -f "$candidate" ]; then
+        build_log_path="$candidate"
+        break
+    fi
+done
+
+build_has_zero_errors=0
+error_probe_path="$build_log_path"
+if [ -z "$error_probe_path" ]; then
+    error_probe_path="$log_path"
+fi
+if [ -f "$error_probe_path" ] && grep -q '0 Error(s)' "$error_probe_path"; then
+    build_has_zero_errors=1
+fi
+
+build_report=""
+if build_report="$(get_build_report "$build_log_path" "$log_path")"; then
+    :
+fi
+
+if [ "$uv4_exit_code" -ne 0 ] && ! { [ -f "$hex_path" ] && [ "$build_has_zero_errors" -eq 1 ]; }; then
+    if [ -n "$build_log_path" ]; then
+        echo "UV4 exited with code $uv4_exit_code. check build log: $build_log_path" >&2
+    else
+        echo "UV4 exited with code $uv4_exit_code. check log: $log_path" >&2
+    fi
+    if [ -n "$build_report" ]; then
+        echo "build log:"
+        printf '%s\n' "$build_report"
+    fi
+    exit "$uv4_exit_code"
+fi
+
+if [ -n "$build_report" ]; then
+    echo "build log:"
+    printf '%s\n' "$build_report"
+fi
 
 if [ -f "$hex_path" ]; then
     echo "hex: $hex_path"
+    if [ "$uv4_exit_code" -ne 0 ]; then
+        echo "UV4 exited with code $uv4_exit_code, but build log reports 0 errors."
+    fi
 else
     echo "构建已结束, 但未找到 hex. 请检查日志: $log_path"
+    exit 1
 fi
