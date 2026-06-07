@@ -16,6 +16,10 @@ test:
 bench-run-to-callback:
     cargo test --release bench_run_to_callback_predicate -- --ignored --nocapture
 
+alias sj := stcjudge
+stcjudge *args:
+    cargo run --release -- {{ args }}
+
 # 示例: just run-sample sample/key_seg/prj/Objects/key_seg.hex sample/key_seg/judge/smoke.rhai
 # 运行任意脚本文件, 需要显式给出 hex 和 script 路径.
 run-sample hex script:
