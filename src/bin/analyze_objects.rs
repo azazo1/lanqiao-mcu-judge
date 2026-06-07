@@ -9,7 +9,11 @@ use clap::Parser;
 use regex::Regex;
 
 #[derive(Debug, Parser)]
-#[command(name = "analyze-objects", version, about = "分析 Keil Listings 中适合 peek_* / poke_* 使用的固定地址符号")]
+#[command(
+    name = "analyze-objects",
+    version,
+    about = "分析 Keil Listings 中适合 peek_* / poke_* 使用的固定地址符号"
+)]
 struct Cli {
     sample: String,
     pattern: Option<String>,
@@ -344,7 +348,9 @@ fn extract_public_symbols_m51(map_file: &Path) -> Result<Vec<SymbolRecord>> {
         let Some(raw_token) = parts.first().copied() else {
             continue;
         };
-        if !matches!(raw_token.chars().next(), Some('D' | 'I' | 'X' | 'B' | 'C')) || !raw_token.contains(':') {
+        if !matches!(raw_token.chars().next(), Some('D' | 'I' | 'X' | 'B' | 'C'))
+            || !raw_token.contains(':')
+        {
             continue;
         }
         if parts.len() < 3 || parts[1] != "PUBLIC" {
@@ -507,7 +513,9 @@ fn print_memory_overview(map_file: &Path) -> Result<Vec<String>> {
 fn matches_memory_overview(line: &str) -> bool {
     ["REG", "DATA", "IDATA", "BIT", "XDATA"]
         .iter()
-        .any(|prefix| line.starts_with(prefix) && line[prefix.len()..].starts_with(char::is_whitespace))
+        .any(|prefix| {
+            line.starts_with(prefix) && line[prefix.len()..].starts_with(char::is_whitespace)
+        })
 }
 
 fn filter_symbols(symbols: &[SymbolRecord], pattern: &str) -> Vec<SymbolRecord> {
@@ -550,7 +558,10 @@ fn print_rows(
     for row in rows {
         let decl_info = find_declaration_info(&row.name, &row.module, listings_dir, lst_files)?;
         let mut resolved_size = row.size.clone();
-        if resolved_size == "?" && let Some(info) = &decl_info && info.size != "?" {
+        if resolved_size == "?"
+            && let Some(info) = &decl_info
+            && info.size != "?"
+        {
             resolved_size = info.size.clone();
         }
 
@@ -635,7 +646,10 @@ fn find_declaration_info(
     }
 
     for file in lst_files {
-        if candidates.iter().any(|candidate: &PathBuf| same_path(candidate, file)) {
+        if candidates
+            .iter()
+            .any(|candidate: &PathBuf| same_path(candidate, file))
+        {
             continue;
         }
         candidates.push(file.clone());
@@ -643,7 +657,8 @@ fn find_declaration_info(
 
     for prefer_decl in [true, false] {
         for file in &candidates {
-            if let Some((line_number, text)) = search_declaration_in_file(file, name, prefer_decl)? {
+            if let Some((line_number, text)) = search_declaration_in_file(file, name, prefer_decl)?
+            {
                 return Ok(Some(DeclarationInfo {
                     file: file
                         .file_name()
@@ -695,28 +710,9 @@ fn looks_like_decl(line: &str, needle: &str) -> bool {
 
     let prefix = line[..pos].to_lowercase();
     [
-        "idata",
-        "pdata",
-        "xdata",
-        "bdata",
-        "data",
-        "code",
-        "bit",
-        "sbit",
-        "volatile",
-        "static",
-        "const",
-        "unsigned",
-        "signed",
-        "char",
-        "int",
-        "long",
-        "float",
-        "double",
-        "u8",
-        "u16",
-        "u32",
-        "u64",
+        "idata", "pdata", "xdata", "bdata", "data", "code", "bit", "sbit", "volatile", "static",
+        "const", "unsigned", "signed", "char", "int", "long", "float", "double", "u8", "u16",
+        "u32", "u64",
     ]
     .iter()
     .any(|keyword| prefix.contains(keyword))

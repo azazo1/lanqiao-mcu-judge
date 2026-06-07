@@ -340,7 +340,10 @@ fn format_checkpoint_failure_records(records: &[CheckpointRecord]) -> String {
     report.push_str("失败详情:\n");
     for record in failed_records {
         report.push_str(&format!("\n[{}] {}\n", record.index, record.condition));
-        let detail = record.actual_detail.as_deref().unwrap_or(record.actual.as_str());
+        let detail = record
+            .actual_detail
+            .as_deref()
+            .unwrap_or(record.actual.as_str());
         report.push_str(&indent_checkpoint_detail(detail, "  "));
         report.push('\n');
     }
@@ -1378,8 +1381,7 @@ fn register_api(
     engine.register_fn(
         "peek_iram",
         move |addr: i64| -> Result<i64, Box<EvalAltResult>> {
-            let addr =
-                u8::try_from(addr).map_err(|_| runtime_error("IRAM 地址必须在 0..=255"))?;
+            let addr = u8::try_from(addr).map_err(|_| runtime_error("IRAM 地址必须在 0..=255"))?;
             let value = sim_peek_iram
                 .lock()
                 .map_err(|_| runtime_error("仿真器锁已损坏"))?
@@ -1392,8 +1394,7 @@ fn register_api(
     engine.register_fn(
         "peek_idata",
         move |addr: i64| -> Result<i64, Box<EvalAltResult>> {
-            let addr =
-                u8::try_from(addr).map_err(|_| runtime_error("IDATA 地址必须在 0..=255"))?;
+            let addr = u8::try_from(addr).map_err(|_| runtime_error("IDATA 地址必须在 0..=255"))?;
             let value = sim_peek_idata
                 .lock()
                 .map_err(|_| runtime_error("仿真器锁已损坏"))?
@@ -1406,8 +1407,7 @@ fn register_api(
     engine.register_fn(
         "peek_data",
         move |addr: i64| -> Result<i64, Box<EvalAltResult>> {
-            let addr =
-                u8::try_from(addr).map_err(|_| runtime_error("DATA 地址必须在 0..=127"))?;
+            let addr = u8::try_from(addr).map_err(|_| runtime_error("DATA 地址必须在 0..=127"))?;
             if addr > 0x7F {
                 return Err(runtime_error("DATA 地址必须在 0..=127"));
             }
@@ -1423,8 +1423,7 @@ fn register_api(
     engine.register_fn(
         "poke_iram",
         move |addr: i64, value: i64| -> Result<(), Box<EvalAltResult>> {
-            let addr =
-                u8::try_from(addr).map_err(|_| runtime_error("IRAM 地址必须在 0..=255"))?;
+            let addr = u8::try_from(addr).map_err(|_| runtime_error("IRAM 地址必须在 0..=255"))?;
             let value =
                 u8::try_from(value).map_err(|_| runtime_error("IRAM 字节必须在 0..=255"))?;
             sim_poke_iram
@@ -1439,8 +1438,7 @@ fn register_api(
     engine.register_fn(
         "poke_idata",
         move |addr: i64, value: i64| -> Result<(), Box<EvalAltResult>> {
-            let addr =
-                u8::try_from(addr).map_err(|_| runtime_error("IDATA 地址必须在 0..=255"))?;
+            let addr = u8::try_from(addr).map_err(|_| runtime_error("IDATA 地址必须在 0..=255"))?;
             let value =
                 u8::try_from(value).map_err(|_| runtime_error("IDATA 字节必须在 0..=255"))?;
             sim_poke_idata
@@ -1455,8 +1453,7 @@ fn register_api(
     engine.register_fn(
         "poke_data",
         move |addr: i64, value: i64| -> Result<(), Box<EvalAltResult>> {
-            let addr =
-                u8::try_from(addr).map_err(|_| runtime_error("DATA 地址必须在 0..=127"))?;
+            let addr = u8::try_from(addr).map_err(|_| runtime_error("DATA 地址必须在 0..=127"))?;
             if addr > 0x7F {
                 return Err(runtime_error("DATA 地址必须在 0..=127"));
             }
@@ -1506,8 +1503,7 @@ fn register_api(
         move |addr: i64, value: i64| -> Result<(), Box<EvalAltResult>> {
             let addr =
                 u8::try_from(addr).map_err(|_| runtime_error("SFR 地址必须在 0x80..=0xFF"))?;
-            let value =
-                u8::try_from(value).map_err(|_| runtime_error("SFR 字节必须在 0..=255"))?;
+            let value = u8::try_from(value).map_err(|_| runtime_error("SFR 字节必须在 0..=255"))?;
             sim_poke_sfr
                 .lock()
                 .map_err(|_| runtime_error("仿真器锁已损坏"))?
@@ -1534,8 +1530,7 @@ fn register_api(
     engine.register_fn(
         "peek_pdata",
         move |addr: i64| -> Result<i64, Box<EvalAltResult>> {
-            let addr =
-                u8::try_from(addr).map_err(|_| runtime_error("PDATA 地址必须在 0..=255"))?;
+            let addr = u8::try_from(addr).map_err(|_| runtime_error("PDATA 地址必须在 0..=255"))?;
             let value = sim_peek_pdata
                 .lock()
                 .map_err(|_| runtime_error("仿真器锁已损坏"))?
@@ -1564,8 +1559,7 @@ fn register_api(
     engine.register_fn(
         "poke_pdata",
         move |addr: i64, value: i64| -> Result<(), Box<EvalAltResult>> {
-            let addr =
-                u8::try_from(addr).map_err(|_| runtime_error("PDATA 地址必须在 0..=255"))?;
+            let addr = u8::try_from(addr).map_err(|_| runtime_error("PDATA 地址必须在 0..=255"))?;
             let value =
                 u8::try_from(value).map_err(|_| runtime_error("PDATA 字节必须在 0..=255"))?;
             sim_poke_pdata
@@ -2286,10 +2280,7 @@ fn register_checkpoint_api(
                         sim_time_ns = current_sim_time_ns(&sim),
                         "评测点执行结束"
                     );
-                    info!(
-                        "{}",
-                        format_checkpoint_stack_log(index, &actual_detail)
-                    );
+                    info!("{}", format_checkpoint_stack_log(index, &actual_detail));
                 }
             }
 
@@ -2715,7 +2706,11 @@ fn format_checkpoint_failure_detail(detail: &str) -> String {
     lines.push(simplify_checkpoint_failure_head(&frames[0]));
     lines.push("调用栈:".to_owned());
     for (index, frame) in frames.iter().enumerate().skip(1) {
-        lines.push(format!("  {}. {}", index, simplify_checkpoint_stack_frame(frame)));
+        lines.push(format!(
+            "  {}. {}",
+            index,
+            simplify_checkpoint_stack_frame(frame)
+        ));
     }
     lines.join("\n")
 }
@@ -2826,7 +2821,10 @@ fn strip_checkpoint_location_suffix(text: &str, pattern: &str) -> Option<(String
     cleaned.push_str(text[..matched.start()].trim_end());
     cleaned.push_str(text[matched.end()..].trim_start());
 
-    Some((cleaned, format_checkpoint_vscode_location(path, line, column)))
+    Some((
+        cleaned,
+        format_checkpoint_vscode_location(path, line, column),
+    ))
 }
 
 fn format_checkpoint_vscode_location(path: &str, line: &str, column: &str) -> String {
@@ -3411,7 +3409,8 @@ mod tests {
             assert_eq(uart_take(), "", "uart_take should clear the queue");
         "#;
 
-        eval_source(sim, "test:uart_take_full_queue", script).expect("run uart take full queue script");
+        eval_source(sim, "test:uart_take_full_queue", script)
+            .expect("run uart take full queue script");
     }
 
     #[test]
@@ -3636,9 +3635,18 @@ mod tests {
         let detail = "Runtime error: bad: 期望 2 , 实际 1 @ 'file:test.rhai' (line 2, position 5)\nin call to function 'inner' (from 'file:test.rhai') @ 'file:test.rhai' (line 6, position 5)\nin closure call (from 'file:test.rhai') (line 5, position 1)";
         let formatted = super::format_checkpoint_failure_detail(detail);
         assert!(formatted.contains("调用栈:"), "{formatted}");
-        assert!(formatted.contains("bad: 期望 2 , 实际 1 @ test.rhai:2:5"), "{formatted}");
-        assert!(formatted.contains("1. 函数 'inner' @ test.rhai:6:5"), "{formatted}");
-        assert!(formatted.contains("2. 闭包调用 @ test.rhai:5:1"), "{formatted}");
+        assert!(
+            formatted.contains("bad: 期望 2 , 实际 1 @ test.rhai:2:5"),
+            "{formatted}"
+        );
+        assert!(
+            formatted.contains("1. 函数 'inner' @ test.rhai:6:5"),
+            "{formatted}"
+        );
+        assert!(
+            formatted.contains("2. 闭包调用 @ test.rhai:5:1"),
+            "{formatted}"
+        );
         assert!(!formatted.contains("(from "), "{formatted}");
     }
 

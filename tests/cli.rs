@@ -81,7 +81,11 @@ fn rhai_ckpt_prints_table_and_keeps_failing_exit_code() {
     .expect("write script");
 
     let output = Command::new(env!("CARGO_BIN_EXE_stcjudge"))
-        .args(["run", "--script", script_path.to_str().expect("script path")])
+        .args([
+            "run",
+            "--script",
+            script_path.to_str().expect("script path"),
+        ])
         .output()
         .expect("run cli");
 
@@ -97,7 +101,10 @@ fn rhai_ckpt_prints_table_and_keeps_failing_exit_code() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stdout.contains("| 序号 "), "{stdout}");
-    assert!(stdout.contains("| --- | --- | --- | --- | --- |"), "{stdout}");
+    assert!(
+        stdout.contains("| --- | --- | --- | --- | --- |"),
+        "{stdout}"
+    );
     assert!(stdout.contains("| 1 | 失败项 |"), "{stdout}");
     assert!(stdout.contains("| 2 | 通过项 |"), "{stdout}");
     assert!(stdout.contains("❌ 失败"), "{stdout}");
@@ -123,7 +130,11 @@ fn rhai_ckpt_info_log_prints_multiline_stack() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_stcjudge"))
         .env("RUST_LOG", "info")
-        .args(["run", "--script", script_path.to_str().expect("script path")])
+        .args([
+            "run",
+            "--script",
+            script_path.to_str().expect("script path"),
+        ])
         .output()
         .expect("run cli");
 

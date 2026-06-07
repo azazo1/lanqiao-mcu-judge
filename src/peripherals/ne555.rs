@@ -15,7 +15,9 @@ impl Ne555 {
     pub(crate) fn set_frequency_hz_at(&mut self, time_ns: u64, value: f32) {
         let new_frequency_hz = value.max(0.0);
         let anchor_position = if self.frequency_hz > 0.0 && new_frequency_hz > 0.0 {
-            self.phase_position_at(time_ns).unwrap_or(0.0).rem_euclid(2.0)
+            self.phase_position_at(time_ns)
+                .unwrap_or(0.0)
+                .rem_euclid(2.0)
         } else {
             0.0
         };
