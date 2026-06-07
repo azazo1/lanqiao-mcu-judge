@@ -462,6 +462,19 @@ let dt_s = run_to_s(2);
 - `set_voltage("AIN1", 2.3)`
 - `set_eeprom(0x10, 0xAB)`
 - `set_eeprom(0x20, [1, 2, 3])`
+- `peek_data(0x30)`
+- `peek_iram(0x30)`
+- `peek_idata(0x30)`
+- `poke_data(0x30, 0x5A)`
+- `poke_iram(0x30, 0x5A)`
+- `poke_idata(0x30, 0x5A)`
+- `peek_sfr(0x90)`
+- `peek_sfr_latch(0x90)`
+- `poke_sfr(0x90, 0x55)`
+- `peek_pdata(0x32)`
+- `poke_pdata(0x32, 0x77)`
+- `peek_xdata(0x1234)`
+- `poke_xdata(0x1234, 0xAB)`
 - `uart_config(8, 9600, 1, "none")`
 - `uart_write("(F,?)")`
 - `uart1_write("(F,?)")`
@@ -499,6 +512,34 @@ let dt_s = run_to_s(2);
 未提供的字段会保持当前值不变, 只有传入的字段才会被设置.
 
 `running: false` 等价于 `halted: true`. `hour_mode` 接受 `12`, `24`, `12h`, `24h`. 如果一次调用里修改了任意时间或日期字段, 评测器会把 RTC 的亚秒进度清零.
+
+`peek_data(addr)` 和 `poke_data(addr, value)` 直接访问内部 RAM 的低 `128` 字节, 也就是 `C51` 里通常说的 `data` 区. 地址范围必须在 `0..=127`.
+
+`peek_iram(addr)` 和 `poke_iram(addr, value)` 直接访问整块内部 RAM, 地址范围是 `0..=255`. `peek_idata(...)` 和 `poke_idata(...)` 是同一块存储的别名, 只是名字上更贴近 `idata`.
+
+`peek_sfr(addr)` 读取当前 `SFR` 的输入视图. 对端口寄存器来说, 它更接近 CPU 指令实际读到的引脚电平. `peek_sfr_latch(addr)` 则读取端口锁存值, 更适合看程序最后写进去了什么. `poke_sfr(addr, value)` 会按仿真器当前的 `SFR` 写入语义直接更新寄存器, 地址范围必须在 `0x80..=0xFF`.
+
+`peek_pdata(addr)` 和 `poke_pdata(addr, value)` 访问 `pdata` 视图. 当前实现把它当作 `xdata` 低 `256` 字节的页内别名, 地址范围是 `0..=255`.
+
+`peek_xdata(addr)` 和 `poke_xdata(addr, value)` 直接读写线性的 `xdata` 空间, 地址范围是 `0..=65535`.
+
+这组接口适合两类场景:
+
+- 定位 `UART`, 中断, 参数解析, 缓冲区等问题时, 直接观察关键内存和寄存器值.
+- 在确实需要时, 直接布置 `data`, `idata`, `pdata`, `SFR`, `xdata` 场景, 避开冗长的前置交互.
+
+例如:
+
+```rhai
+poke_data(0x30, 0x12);
+assert_eq(peek_idata(0x30), 0x12, "内部 RAM: 回读错误");
+
+poke_sfr(0x90, 0x55);
+assert_eq(peek_sfr_latch(0x90), 0x55, "P1 锁存器: 回读错误");
+
+poke_pdata(0x32, 0x77);
+assert_eq(peek_xdata(0x32), 0x77, "页内 XDATA: 回读错误");
+```
 
 ## 输出观察
 

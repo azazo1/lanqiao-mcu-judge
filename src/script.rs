@@ -1349,6 +1349,208 @@ fn register_api(
         },
     );
 
+    let sim_peek_iram = Arc::clone(sim);
+    engine.register_fn(
+        "peek_iram",
+        move |addr: i64| -> Result<i64, Box<EvalAltResult>> {
+            let addr =
+                u8::try_from(addr).map_err(|_| runtime_error("IRAM 地址必须在 0..=255"))?;
+            let value = sim_peek_iram
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .peek_iram(addr);
+            Ok(i64::from(value))
+        },
+    );
+
+    let sim_peek_idata = Arc::clone(sim);
+    engine.register_fn(
+        "peek_idata",
+        move |addr: i64| -> Result<i64, Box<EvalAltResult>> {
+            let addr =
+                u8::try_from(addr).map_err(|_| runtime_error("IDATA 地址必须在 0..=255"))?;
+            let value = sim_peek_idata
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .peek_iram(addr);
+            Ok(i64::from(value))
+        },
+    );
+
+    let sim_peek_data = Arc::clone(sim);
+    engine.register_fn(
+        "peek_data",
+        move |addr: i64| -> Result<i64, Box<EvalAltResult>> {
+            let addr =
+                u8::try_from(addr).map_err(|_| runtime_error("DATA 地址必须在 0..=127"))?;
+            if addr > 0x7F {
+                return Err(runtime_error("DATA 地址必须在 0..=127"));
+            }
+            let value = sim_peek_data
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .peek_iram(addr);
+            Ok(i64::from(value))
+        },
+    );
+
+    let sim_poke_iram = Arc::clone(sim);
+    engine.register_fn(
+        "poke_iram",
+        move |addr: i64, value: i64| -> Result<(), Box<EvalAltResult>> {
+            let addr =
+                u8::try_from(addr).map_err(|_| runtime_error("IRAM 地址必须在 0..=255"))?;
+            let value =
+                u8::try_from(value).map_err(|_| runtime_error("IRAM 字节必须在 0..=255"))?;
+            sim_poke_iram
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .poke_iram(addr, value);
+            Ok(())
+        },
+    );
+
+    let sim_poke_idata = Arc::clone(sim);
+    engine.register_fn(
+        "poke_idata",
+        move |addr: i64, value: i64| -> Result<(), Box<EvalAltResult>> {
+            let addr =
+                u8::try_from(addr).map_err(|_| runtime_error("IDATA 地址必须在 0..=255"))?;
+            let value =
+                u8::try_from(value).map_err(|_| runtime_error("IDATA 字节必须在 0..=255"))?;
+            sim_poke_idata
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .poke_iram(addr, value);
+            Ok(())
+        },
+    );
+
+    let sim_poke_data = Arc::clone(sim);
+    engine.register_fn(
+        "poke_data",
+        move |addr: i64, value: i64| -> Result<(), Box<EvalAltResult>> {
+            let addr =
+                u8::try_from(addr).map_err(|_| runtime_error("DATA 地址必须在 0..=127"))?;
+            if addr > 0x7F {
+                return Err(runtime_error("DATA 地址必须在 0..=127"));
+            }
+            let value =
+                u8::try_from(value).map_err(|_| runtime_error("DATA 字节必须在 0..=255"))?;
+            sim_poke_data
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .poke_iram(addr, value);
+            Ok(())
+        },
+    );
+
+    let sim_peek_sfr = Arc::clone(sim);
+    engine.register_fn(
+        "peek_sfr",
+        move |addr: i64| -> Result<i64, Box<EvalAltResult>> {
+            let addr =
+                u8::try_from(addr).map_err(|_| runtime_error("SFR 地址必须在 0x80..=0xFF"))?;
+            let value = sim_peek_sfr
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .peek_sfr(addr)
+                .map_err(|err| runtime_error(err.to_string()))?;
+            Ok(i64::from(value))
+        },
+    );
+
+    let sim_peek_sfr_latch = Arc::clone(sim);
+    engine.register_fn(
+        "peek_sfr_latch",
+        move |addr: i64| -> Result<i64, Box<EvalAltResult>> {
+            let addr =
+                u8::try_from(addr).map_err(|_| runtime_error("SFR 地址必须在 0x80..=0xFF"))?;
+            let value = sim_peek_sfr_latch
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .peek_sfr_latch(addr)
+                .map_err(|err| runtime_error(err.to_string()))?;
+            Ok(i64::from(value))
+        },
+    );
+
+    let sim_poke_sfr = Arc::clone(sim);
+    engine.register_fn(
+        "poke_sfr",
+        move |addr: i64, value: i64| -> Result<(), Box<EvalAltResult>> {
+            let addr =
+                u8::try_from(addr).map_err(|_| runtime_error("SFR 地址必须在 0x80..=0xFF"))?;
+            let value =
+                u8::try_from(value).map_err(|_| runtime_error("SFR 字节必须在 0..=255"))?;
+            sim_poke_sfr
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .poke_sfr(addr, value)
+                .map_err(|err| runtime_error(err.to_string()))
+        },
+    );
+
+    let sim_peek_xdata = Arc::clone(sim);
+    engine.register_fn(
+        "peek_xdata",
+        move |addr: i64| -> Result<i64, Box<EvalAltResult>> {
+            let addr =
+                u16::try_from(addr).map_err(|_| runtime_error("XDATA 地址必须在 0..=65535"))?;
+            let value = sim_peek_xdata
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .peek_xdata(addr);
+            Ok(i64::from(value))
+        },
+    );
+
+    let sim_peek_pdata = Arc::clone(sim);
+    engine.register_fn(
+        "peek_pdata",
+        move |addr: i64| -> Result<i64, Box<EvalAltResult>> {
+            let addr =
+                u8::try_from(addr).map_err(|_| runtime_error("PDATA 地址必须在 0..=255"))?;
+            let value = sim_peek_pdata
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .peek_xdata(u16::from(addr));
+            Ok(i64::from(value))
+        },
+    );
+
+    let sim_poke_xdata = Arc::clone(sim);
+    engine.register_fn(
+        "poke_xdata",
+        move |addr: i64, value: i64| -> Result<(), Box<EvalAltResult>> {
+            let addr =
+                u16::try_from(addr).map_err(|_| runtime_error("XDATA 地址必须在 0..=65535"))?;
+            let value =
+                u8::try_from(value).map_err(|_| runtime_error("XDATA 字节必须在 0..=255"))?;
+            sim_poke_xdata
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .poke_xdata(addr, value);
+            Ok(())
+        },
+    );
+
+    let sim_poke_pdata = Arc::clone(sim);
+    engine.register_fn(
+        "poke_pdata",
+        move |addr: i64, value: i64| -> Result<(), Box<EvalAltResult>> {
+            let addr =
+                u8::try_from(addr).map_err(|_| runtime_error("PDATA 地址必须在 0..=255"))?;
+            let value =
+                u8::try_from(value).map_err(|_| runtime_error("PDATA 字节必须在 0..=255"))?;
+            sim_poke_pdata
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?
+                .poke_xdata(u16::from(addr), value);
+            Ok(())
+        },
+    );
+
     let sim_uart_take = Arc::clone(sim);
     engine.register_fn(
         "uart_take",
@@ -2855,6 +3057,34 @@ mod tests {
         assert_eq!(state.at24c02.memory[0x21], 0x02);
         assert_eq!(state.at24c02.memory[0x22], 0x03);
         assert_eq!(state.at24c02.memory[0x23], 0xFF);
+    }
+
+    #[test]
+    fn rhai_memory_access_supports_iram_sfr_and_xdata() {
+        let sim = Simulator::nop(false);
+        let script = r#"
+            assert_eq(peek_iram(0x30), 0, "IRAM 默认值错误");
+            poke_iram(0x30, 0x5A);
+            assert_eq(peek_iram(0x30), 0x5A, "IRAM 回读错误");
+            assert_eq(peek_idata(0x30), 0x5A, "IDATA 别名回读错误");
+            poke_data(0x31, 0x66);
+            assert_eq(peek_data(0x31), 0x66, "DATA 别名回读错误");
+
+            assert_eq(peek_sfr(0x8E), 0x01, "AUXR 默认值错误");
+            poke_sfr(0x8E, 0x34);
+            assert_eq(peek_sfr(0x8E), 0x34, "AUXR 回读错误");
+
+            poke_sfr(0x90, 0x55);
+            assert_eq(peek_sfr_latch(0x90), 0x55, "P1 锁存值错误");
+
+            assert_eq(peek_xdata(0x1234), 0, "XDATA 默认值错误");
+            poke_xdata(0x1234, 0xAB);
+            assert_eq(peek_xdata(0x1234), 0xAB, "XDATA 回读错误");
+            poke_pdata(0x32, 0x77);
+            assert_eq(peek_pdata(0x32), 0x77, "PDATA 别名回读错误");
+        "#;
+
+        eval_source(sim, "test:memory_access", script).expect("run memory access script");
     }
 
     #[test]

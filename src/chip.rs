@@ -598,6 +598,48 @@ impl Simulator {
         self.uart1_take_raw()
     }
 
+    pub fn peek_iram(&self, addr: u8) -> u8 {
+        self.cpu.internal_ram(addr)
+    }
+
+    pub fn poke_iram(&mut self, addr: u8, value: u8) {
+        self.cpu.internal_ram_write(addr, value);
+        self.capture_control_snapshot();
+    }
+
+    pub fn peek_sfr(&self, addr: u8) -> Result<u8> {
+        if addr < 0x80 {
+            bail!("SFR 地址必须在 0x80..=0xFF");
+        }
+        Ok(self.cpu.sfr(addr, &self.ctx))
+    }
+
+    pub fn peek_sfr_latch(&self, addr: u8) -> Result<u8> {
+        if addr < 0x80 {
+            bail!("SFR 地址必须在 0x80..=0xFF");
+        }
+        let view = (&self.cpu, &self.ctx);
+        Ok(self.ctx.ports.read_latch(&view, addr))
+    }
+
+    pub fn poke_sfr(&mut self, addr: u8, value: u8) -> Result<()> {
+        if addr < 0x80 {
+            bail!("SFR 地址必须在 0x80..=0xFF");
+        }
+        self.cpu.sfr_set(addr, value, &mut self.ctx);
+        self.capture_control_snapshot();
+        Ok(())
+    }
+
+    pub fn peek_xdata(&self, addr: u16) -> u8 {
+        self.ctx.xdata.raw_read(addr)
+    }
+
+    pub fn poke_xdata(&mut self, addr: u16, value: u8) {
+        self.ctx.xdata.raw_write(addr, value);
+        self.capture_control_snapshot();
+    }
+
     pub fn relay_on(&self) -> bool {
         self.ctx.board.outputs.relay_on
     }
@@ -1777,6 +1819,42 @@ impl BoardXdata {
 
     fn normalize_ram_addr(addr: u16) -> u16 {
         if addr < 0x8000 { addr & 0x07FF } else { addr }
+    }
+
+    fn raw_read(&self, addr: u16) -> u8 {
+        let index = usize::from(Self::normalize_ram_addr(addr));
+        self.ram.get(index).copied().unwrap_or(0)
+    }
+
+    fn raw_write(&mut self, addr: u16, value: u8) {
+        let index = usize::from(Self::normalize_ram_addr(addr));
+        if self.ram.len() <= index {
+            self.ram.resize(index + 1, 0);
+        }
+        self.ram[index] = value;
+        match addr & 0xE000 {
+            0x8000 => {
+                self.board_latches[0] = value;
+                self.board_latch_versions[0] = self.board_latch_versions[0].saturating_add(1);
+                self.latch_used = true;
+            }
+            0xA000 => {
+                self.board_latches[1] = value;
+                self.board_latch_versions[1] = self.board_latch_versions[1].saturating_add(1);
+                self.latch_used = true;
+            }
+            0xC000 => {
+                self.board_latches[2] = value;
+                self.board_latch_versions[2] = self.board_latch_versions[2].saturating_add(1);
+                self.latch_used = true;
+            }
+            0xE000 => {
+                self.board_latches[3] = value;
+                self.board_latch_versions[3] = self.board_latch_versions[3].saturating_add(1);
+                self.latch_used = true;
+            }
+            _ => {}
+        }
     }
 }
 
