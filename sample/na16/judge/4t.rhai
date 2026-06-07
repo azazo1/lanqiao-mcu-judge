@@ -20,6 +20,10 @@ fn bool_text(value) {
     }
 }
 
+fn read_display() {
+    display_text(30)
+}
+
 fn led_summary() {
     "L1=" + bool_text(led_on(L1))
         + ",L2=" + bool_text(led_on(L2))
@@ -532,8 +536,8 @@ ckpt(3, "无异常状态发生", "继电器断开", || {
 
 ckpt(4, "2s内频率在300hz->1700hz", "L8以0.2s为间隔闪烁", || {
     prepare_504_alarm_300_scene();
-    let stats = watch_led_stats(L8, 1000);
-    assert_int_window(stats.changes, 4, 6, "504 场景 L8 闪烁次数");
+    let stats = watch_led_stats(L8, 3000);
+    assert_int_window(stats.changes, 14, 16, "504 场景 L8 闪烁次数");
     "changes=" + stats.changes
 });
 
