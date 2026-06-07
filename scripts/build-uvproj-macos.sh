@@ -143,17 +143,51 @@ get_first_matching_file() {
     find "$dir_path" -maxdepth 1 -type f -name "$pattern" | sort | head -n 1
 }
 
+decode_file_to_utf8() {
+    local file_path="$1"
+    perl -MEncode -e '
+use strict;
+use warnings;
+
+my $path = shift @ARGV;
+open my $fh, "<:raw", $path or die "failed to open $path: $!";
+local $/;
+my $bytes = <$fh>;
+my $utf8_text = eval { Encode::decode("utf8", $bytes, Encode::FB_CROAK) };
+if (defined $utf8_text) {
+    print Encode::encode("UTF-8", $utf8_text);
+    exit 0;
+}
+
+my $normalized = $bytes;
+$normalized =~ s/\xB5(?=Vision)/\xA6\xCC/g;
+my $gb_text = eval { Encode::decode("cp936", $normalized, Encode::FB_CROAK) };
+if (defined $gb_text) {
+    print Encode::encode("UTF-8", $gb_text);
+    exit 0;
+}
+
+for my $encoding ("cp1252", "latin1") {
+    my $text = eval { Encode::decode($encoding, $bytes, Encode::FB_CROAK) };
+    if (defined $text) {
+        print Encode::encode("UTF-8", $text);
+        exit 0;
+    }
+}
+    ' "$file_path"
+}
+
 get_build_report() {
     local build_log_path="$1"
     local fallback_log_path="$2"
 
     if [ -n "$build_log_path" ] && [ -f "$build_log_path" ]; then
-        LC_ALL=C perl -0pe 's/<[^>]+>//g' "$build_log_path" | awk 'NF { print }'
+        decode_file_to_utf8 "$build_log_path" | perl -0pe 's/<[^>]+>//g' | awk 'NF { print }'
         return 0
     fi
 
     if [ -f "$fallback_log_path" ]; then
-        cat "$fallback_log_path"
+        decode_file_to_utf8 "$fallback_log_path"
         return 0
     fi
 

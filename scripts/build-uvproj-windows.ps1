@@ -4,6 +4,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+[System.Text.Encoding]::RegisterProvider([System.Text.CodePagesEncodingProvider]::Instance)
+$Utf8OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = $Utf8OutputEncoding
+$OutputEncoding = $Utf8OutputEncoding
 
 function Resolve-UvprojPath {
     param(
@@ -116,6 +120,65 @@ function Get-FirstMatchingFile {
     return $match.FullName
 }
 
+function Decode-BytesToString {
+    param(
+        [byte[]]$Bytes
+    )
+
+    $utf8Encoding = [System.Text.UTF8Encoding]::new($false, $true)
+    try {
+        return $utf8Encoding.GetString($Bytes).TrimStart([char]0xFEFF)
+    } catch {
+    }
+
+    $normalizedBytes = [byte[]]::new($Bytes.Length)
+    [System.Array]::Copy($Bytes, $normalizedBytes, $Bytes.Length)
+    for ($i = 0; $i -lt ($normalizedBytes.Length - 1); $i++) {
+        if ($normalizedBytes[$i] -eq 0xA6 -and $normalizedBytes[$i + 1] -eq 0xCC) {
+            $normalizedBytes[$i] = 0xB5
+            $normalizedBytes[$i + 1] = 0x20
+        }
+    }
+
+    $encodings = @(
+        [System.Text.Encoding]::GetEncoding(
+            'GB18030',
+            [System.Text.EncoderExceptionFallback]::new(),
+            [System.Text.DecoderExceptionFallback]::new()
+        ),
+        [System.Text.Encoding]::GetEncoding(
+            1252,
+            [System.Text.EncoderExceptionFallback]::new(),
+            [System.Text.DecoderExceptionFallback]::new()
+        ),
+        [System.Text.Encoding]::GetEncoding(
+            28591,
+            [System.Text.EncoderExceptionFallback]::new(),
+            [System.Text.DecoderExceptionFallback]::new()
+        )
+    )
+
+    $candidateBytesList = @($normalizedBytes, $Bytes)
+    foreach ($encoding in $encodings) {
+        foreach ($candidateBytes in $candidateBytesList) {
+            try {
+                return $encoding.GetString($candidateBytes).TrimStart([char]0xFEFF)
+            } catch {
+            }
+        }
+    }
+
+    return [System.Text.Encoding]::UTF8.GetString($Bytes).TrimStart([char]0xFEFF)
+}
+
+function Get-FileTextUtf8 {
+    param(
+        [string]$Path
+    )
+
+    return Decode-BytesToString ([System.IO.File]::ReadAllBytes($Path))
+}
+
 function Get-BuildLogReport {
     param(
         [string]$BuildLogPath,
@@ -126,7 +189,7 @@ function Get-BuildLogReport {
         -not [string]::IsNullOrWhiteSpace($BuildLogPath) -and
         (Test-Path -LiteralPath $BuildLogPath -PathType Leaf)
     ) {
-        $rawText = Get-Content -LiteralPath $BuildLogPath -Raw
+        $rawText = Get-FileTextUtf8 $BuildLogPath
         $plainText = [System.Net.WebUtility]::HtmlDecode(
             [regex]::Replace($rawText, '<[^>]+>', '')
         )
@@ -139,7 +202,7 @@ function Get-BuildLogReport {
     }
 
     if (Test-Path -LiteralPath $FallbackLogPath -PathType Leaf) {
-        return (Get-Content -LiteralPath $FallbackLogPath -Raw).Trim()
+        return (Get-FileTextUtf8 $FallbackLogPath).Trim()
     }
 
     return ''
@@ -222,7 +285,7 @@ if ([string]::IsNullOrWhiteSpace($errorProbePath)) {
     $errorProbePath = $logPath
 }
 if (Test-Path -LiteralPath $errorProbePath -PathType Leaf) {
-    $buildLogText = Get-Content -LiteralPath $errorProbePath -Raw
+    $buildLogText = Get-FileTextUtf8 $errorProbePath
     if ($buildLogText -match '0 Error\(s\)') {
         $buildHasZeroErrors = $true
     }
