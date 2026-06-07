@@ -456,27 +456,17 @@ fn prepare_504_alarm_400_scene() {
 }
 
 fn prepare_504_residual_034405_scene() {
-    set_frequency_hz(0);
-    reset(POWER_RESET);
-    key_mode(KEYBOARD);
-    ensure_sig_jumper();
-    run_ms(20);
-    clear_uart();
+    boot_with_sig();
     set_rtc(3, 44, 5);
-    run_ms(320);
+    settle();
     clear_uart();
-    set_frequency_hz(400);
-    run_ms(1000);
-    set_frequency_hz(1700);
-    run_ms(1000);
-    set_rtc(3, 44, 5);
-    run_ms(320);
 }
 
 fn prepare_504_residual_221842_scene() {
-    prepare_504_residual_034405_scene();
+    boot_with_sig();
     set_rtc(22, 18, 42);
-    run_ms(320);
+    settle();
+    clear_uart();
 }
 
 fn prepare_504_residual_2200_scene() {
@@ -1051,8 +1041,8 @@ ckpt(64, "发送(T:28:63:44)", "串口返回:ERROR, 数码管显示 23-33-44", |
     send_uart("(T:286344)");
     let reply = uart_take();
     let text = read_display();
-    assert_eq(first, "OK", "先设置合法时间: 串口回复错误");
-    assert_eq(reply, "ERROR", "非法时间设置: 串口回复错误");
+    assert_status_reply(first, "OK", "先设置合法时间: 串口回复错误");
+    assert_status_reply(reply, "ERROR", "非法时间设置: 串口回复错误");
     assert_time_text(text, 23, 33, 44, 44, "非法时间后保持原显示");
     reply + "," + text
 });

@@ -468,7 +468,8 @@ impl Simulator {
     }
 
     pub fn set_frequency_hz(&mut self, value: f32) {
-        self.ctx.board.ne555.set_frequency_hz(value);
+        let now_ns = self.ctx.board.sim_time_ns;
+        self.ctx.board.ne555.set_frequency_hz_at(now_ns, value);
         self.capture_control_snapshot();
     }
 
