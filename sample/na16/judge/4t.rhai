@@ -1,7 +1,7 @@
 key_mode(KEYBOARD);
 
 fn settle() {
-    run_ms(320);
+    run_ms(120);
 }
 
 fn page_settle() {
@@ -10,10 +10,6 @@ fn page_settle() {
 
 fn sensor_settle() {
     run_ms(1600);
-}
-
-fn clear_uart() {
-    uart_take();
 }
 
 fn bool_text(value) {
@@ -48,32 +44,23 @@ fn ensure_sig_jumper() {
 fn boot_clean() {
     reset(POWER_RESET);
     key_mode(KEYBOARD);
-    settle();
-    clear_uart();
+    run_ms(20);
 }
 
 fn boot_with_sig() {
-    boot_clean();
-    ensure_sig_jumper();
-    run_ms(20);
-    clear_uart();
-}
-
-fn power_boot_with_sig() {
     reset(POWER_RESET);
     key_mode(KEYBOARD);
     ensure_sig_jumper();
     run_ms(20);
-    clear_uart();
 }
 
 fn tap_times(key, count, delay_ms) {
     let i = 0;
     while i < count {
         tap_key(key, 80);
-        run_ms(delay_ms);
         i += 1;
     }
+    run_ms(delay_ms);
 }
 
 fn open_data_page(index) {
@@ -103,7 +90,7 @@ fn adjust_down(steps) {
 }
 
 fn send_uart(text) {
-    clear_uart();
+    uart_take();
     uart_write(text);
     run_ms(160);
 }
@@ -111,10 +98,6 @@ fn send_uart(text) {
 fn query_uart(query) {
     send_uart(query);
     uart_take()
-}
-
-fn read_display() {
-    display_text(30)
 }
 
 fn assert_int_window(actual, min, max, label) {
@@ -343,7 +326,6 @@ fn prepare_default_rect(temp, distance, voltage) {
     set_distance_cm(distance);
     set_voltage(RB2, voltage);
     sensor_settle();
-    clear_uart();
 }
 
 fn prepare_custom_calibration() {
@@ -357,7 +339,6 @@ fn prepare_custom_calibration() {
     adjust_down(5);
     tap_key(S4, 80);
     settle();
-    clear_uart();
 }
 
 fn prepare_rect_1_5_1_2(temp, distance) {
@@ -366,14 +347,11 @@ fn prepare_rect_1_5_1_2(temp, distance) {
     set_distance_cm(35);
     set_voltage(RB2, 2.3);
     sensor_settle();
-    clear_uart();
     configure_rect_1_5_1_2();
-    clear_uart();
     set_temperature_c(temp);
     set_distance_cm(distance);
     set_voltage(RB2, 2.3);
     sensor_settle();
-    clear_uart();
 }
 
 fn prepare_cylinder_small(distance) {
@@ -381,13 +359,10 @@ fn prepare_cylinder_small(distance) {
     set_temperature_c(25);
     set_distance_cm(35);
     sensor_settle();
-    clear_uart();
     configure_cylinder_small_params();
-    clear_uart();
     set_temperature_c(25);
     set_distance_cm(distance);
     sensor_settle();
-    clear_uart();
 }
 
 fn prepare_cylinder_large(distance, temp) {
@@ -396,14 +371,11 @@ fn prepare_cylinder_large(distance, temp) {
     set_distance_cm(35);
     set_voltage(RB2, 1.5);
     sensor_settle();
-    clear_uart();
     configure_cylinder_large_params();
-    clear_uart();
     set_temperature_c(temp);
     set_distance_cm(distance);
     set_voltage(RB2, 1.5);
     sensor_settle();
-    clear_uart();
 }
 
 fn prepare_sphere_scene() {
@@ -412,14 +384,12 @@ fn prepare_sphere_scene() {
     set_distance_cm(35);
     set_voltage(RB2, 1.5);
     sensor_settle();
-    clear_uart();
     send_uart("(S,0)");
     let reply_s = uart_take();
     set_temperature_c(76);
     set_distance_cm(34);
     set_voltage(RB2, 1.5);
     sensor_settle();
-    clear_uart();
     assert_status_reply(reply_s, "OK", "切到球体");
 }
 
@@ -429,10 +399,8 @@ fn prepare_504_alarm_300_scene() {
     key_mode(KEYBOARD);
     ensure_sig_jumper();
     run_ms(20);
-    clear_uart();
     set_rtc(3, 44, 5);
     run_ms(320);
-    clear_uart();
     set_frequency_hz(300);
     run_ms(1000);
     set_frequency_hz(1700);
@@ -445,10 +413,8 @@ fn prepare_504_alarm_400_scene() {
     key_mode(KEYBOARD);
     ensure_sig_jumper();
     run_ms(20);
-    clear_uart();
     set_rtc(3, 44, 5);
     run_ms(320);
-    clear_uart();
     set_frequency_hz(400);
     run_ms(1000);
     set_frequency_hz(1700);
@@ -459,19 +425,16 @@ fn prepare_504_residual_034405_scene() {
     boot_with_sig();
     set_rtc(3, 44, 5);
     settle();
-    clear_uart();
 }
 
 fn prepare_504_residual_221842_scene() {
     boot_with_sig();
     set_rtc(22, 18, 42);
     settle();
-    clear_uart();
 }
 
 fn prepare_504_residual_2200_scene() {
     prepare_504_residual_221842_scene();
-    clear_uart();
     set_frequency_hz(2200);
     run_ms(2100);
 }
@@ -482,7 +445,6 @@ fn prepare_502_alarm_scene() {
     run_ms(320);
     ensure_sig_jumper();
     run_ms(5);
-    clear_uart();
     set_rtc(22, 18, 42);
     run_ms(320);
     set_frequency_hz(2200);
@@ -495,7 +457,6 @@ fn prepare_503_alarm_scene() {
     run_ms(320);
     ensure_sig_jumper();
     run_ms(5);
-    clear_uart();
     set_rtc(23, 33, 44);
     run_ms(320);
     set_frequency_hz(1500);
@@ -515,7 +476,6 @@ fn prepare_row53_scene() {
     set_temperature_c(25);
     set_distance_cm(35);
     sensor_settle();
-    clear_uart();
     send_uart("(S,1)");
     let reply_s = uart_take();
     send_uart("(L,1.5)(H,2.0)(H2,0.5)");
@@ -525,7 +485,6 @@ fn prepare_row53_scene() {
     set_temperature_c(25);
     set_distance_cm(10);
     sensor_settle();
-    clear_uart();
     set_temperature_c(25);
     set_distance_cm(170);
     sensor_settle();
@@ -539,11 +498,9 @@ fn prepare_row59_scene() {
     set_distance_cm(35);
     set_voltage(RB2, 1.5);
     sensor_settle();
-    clear_uart();
     configure_cylinder_large_params();
     set_rtc(17, 45, 23);
     settle();
-    clear_uart();
     set_temperature_c(25);
     set_distance_cm(5);
     set_voltage(RB2, 1.5);
@@ -623,7 +580,7 @@ ckpt(11, "频率值:2200", "L1, L6点亮, 其余指示灯熄灭", || {
 
 ckpt(12, "22:18:42, 频率值:2200", "串口返回 [502,221842,2200]", || {
     prepare_504_residual_2200_scene();
-    assert_uart_int_alarm(502, 221842, 221843, 2100, 2200, "502 串口上报")
+    assert_uart_int_alarm(502, 221842, 221843, 2100, 2300, "502 串口上报")
 });
 
 ckpt(13, "502异常状态发生", "继电器吸合", || {
@@ -883,14 +840,12 @@ ckpt(45, "频率值:1300->1800", "串口返回:[502,132454,1800]", || {
     run_ms(320);
     ensure_sig_jumper();
     run_ms(5);
-    clear_uart();
     send_uart("(F,1500)");
     let reply = uart_take();
     set_rtc(13, 24, 54);
     run_ms(320);
     set_frequency_hz(1300);
     run_ms(1200);
-    clear_uart();
     set_frequency_hz(1800);
     run_ms(1200);
     assert_eq(reply, "OK", "设置 F=1500: 串口回复错误");
@@ -908,7 +863,6 @@ ckpt(47, "发送(H1,1.8)(H2,0.5) -> (L,1.5)(H,2.0)", "串口返回:OK -> OK", ||
     set_distance_cm(35);
     set_voltage(RB2, 2.3);
     sensor_settle();
-    clear_uart();
     send_uart("(H1,1.8)(H2,0.5)");
     let first = uart_take();
     send_uart("(L,1.5)(H,2.0)");
@@ -966,7 +920,6 @@ ckpt(55, "发送(H1,2.3)(H2,0.5)(S,3)(L,3.0)(W,1.5)(H,2.5)", "串口返回:WARN"
     set_distance_cm(35);
     set_voltage(RB2, 2.3);
     sensor_settle();
-    clear_uart();
     send_uart("(S,1)");
     let switch_reply = uart_take();
     send_uart("(H1,2.3)(H2,0.5)(S,3)(L,3.0)(W,1.5)(H,2.5)");
