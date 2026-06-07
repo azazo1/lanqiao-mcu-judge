@@ -1,11 +1,11 @@
 fn assert_sent_count(expected, label) {
-    let text = display_text(30);
+    let text = display_text();
     assert_eq(text[0..2], expected, label + ": 发送计数显示错误");
 }
 
 assert_eq(uart_take(), "", "上电检查: UART1 默认输出错误");
 
-run_ms(1000);
+run_ms(1100);
 assert_sent_count("04", "整队列读取前");
 assert_eq(
     uart_take(),
@@ -17,7 +17,7 @@ assert_eq(uart_take(), "", "整队列读取: 缓冲区清空错误");
 reset(POWER_RESET);
 assert_eq(uart_take(), "", "复位后: UART1 默认输出错误");
 
-run_ms(1000);
+run_ms(1100);
 assert_sent_count("04", "分段读取前");
 assert_eq(uart_peek(), "OKERROROKERROR", "peek 全量读取错误");
 assert_eq(uart_peek(10), "OK", "peek 首段读取错误");

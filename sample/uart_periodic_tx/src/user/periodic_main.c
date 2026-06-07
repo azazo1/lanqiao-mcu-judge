@@ -6,7 +6,7 @@
 #define SEND_START_MS 120
 #define SEND_INTERVAL_MS 280
 
-// 120 400 680 960
+// 120 400 680 960 1240
 
 idata u8 sg_pos = 0;
 idata u8 sg_tick = 0;
@@ -33,17 +33,25 @@ void send_frame() {
 }
 
 void uart_proc() {
+	uint temp_ms;
 	if (initial_ms < SEND_START_MS) return;
-	if (uptime_ms < SEND_INTERVAL_MS) return;
 
+	EA = 0;
+	temp_ms = uptime_ms;
+	EA = 1;
+
+	if (temp_ms < SEND_INTERVAL_MS) return;
+
+	EA = 0;
 	uptime_ms -= SEND_INTERVAL_MS;
+	EA = 1;
 	send_frame();
 }
 
 void Timer0_Isr(void) interrupt 1
 {
 	++sg_tick;
-	if (initial_ms < SEND_INTERVAL_MS) {
+	if (initial_ms < SEND_START_MS) {
 		initial_ms++;
 	} else {
 		++uptime_ms;
