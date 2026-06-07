@@ -2,10 +2,15 @@
 name = "lanqiao-mcu-judge"
 version = "0.1.0"
 edition = "2024"
+default-run = "stcjudge"
 
 [[bin]]
 name = "stcjudge"
 path = "src/main.rs"
+
+[[bin]]
+name = "analyze-objects"
+path = "src/bin/analyze_objects.rs"
 
 [dependencies]
 anyhow = "1.0.100"

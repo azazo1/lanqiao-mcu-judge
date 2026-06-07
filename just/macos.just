@@ -117,4 +117,12 @@ keil-doctor sample="arith_bench":
     bash scripts/keil-env-doctor.sh {{ quote(sample) }}
 
 analyze-objects sample pattern="":
-    bash scripts/analyze-objects.sh {{ quote(sample) }} {{ quote(pattern) }}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --quiet --release --bin analyze-objects
+    bin="target/release/analyze-objects"
+    if [ -n "{{ pattern }}" ]; then
+        "$bin" "{{ sample }}" "{{ pattern }}"
+    else
+        "$bin" "{{ sample }}"
+    fi

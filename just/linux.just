@@ -31,5 +31,10 @@ keil-doctor sample="arith_bench":
 analyze-objects sample pattern="":
     #!/usr/bin/env bash
     set -euo pipefail
-    echo "linux 暂不支持" >&2
-    exit 1
+    cargo build --quiet --release --bin analyze-objects
+    bin="target/release/analyze-objects"
+    if [ -n "{{ pattern }}" ]; then
+        "$bin" "{{ sample }}" "{{ pattern }}"
+    else
+        "$bin" "{{ sample }}"
+    fi

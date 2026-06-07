@@ -293,11 +293,16 @@ build-sample sample:
 
 [script("pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
 analyze-objects sample pattern="":
+    cargo build --quiet --release --bin analyze-objects
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+    $bin = 'target/release/analyze-objects.exe'
     $patternValue = {{quote(pattern)}}
     if ($patternValue -eq '') {
-        & pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/analyze-objects.ps1 {{quote(sample)}}
+        & $bin {{quote(sample)}}
     } else {
-        & pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/analyze-objects.ps1 {{quote(sample)}} $patternValue
+        & $bin {{quote(sample)}} $patternValue
     }
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
