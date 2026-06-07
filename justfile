@@ -1,7 +1,7 @@
 set dotenv-load := true
 set windows-shell := ["pwsh", "-NoProfile", "-Command"]
 
-platform_justfile := if os_family() == "windows" { "just/windows.just" } else if os() == "macos" { "just/macos.just" } else { "just/linux.just" }
+platform_justfile := if os_family() == "windows" { "scripts/just/windows.just" } else if os() == "macos" { "scripts/just/macos.just" } else { "scripts/just/linux.just" }
 
 default:
     @just --list
