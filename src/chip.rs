@@ -998,25 +998,27 @@ impl Simulator {
     }
 
     pub fn observe_display_text(&mut self, duration_ms: u64) -> Result<String> {
-        let initial = self.display_text();
         if duration_ms == 0 {
-            return Ok(initial);
+            return Ok(self.display_text());
         }
-        let initial_digits = self.ctx.board.outputs.digits;
 
-        let target = self
-            .ctx
-            .board
-            .sim_time_ns
-            .saturating_add(duration_ms.saturating_mul(NS_PER_MILLISECOND));
-        while self.ctx.board.sim_time_ns < target {
+        let stable_ns = duration_ms.saturating_mul(NS_PER_MILLISECOND);
+        let start_ns = self.ctx.board.sim_time_ns;
+        let mut stable_until_ns = start_ns.saturating_add(stable_ns);
+        let mut last_change_ns = self.ctx.board.outputs.last_digits_change_ns();
+        let mut text = self.display_text();
+
+        while self.ctx.board.sim_time_ns < stable_until_ns {
             self.step_once()?;
-            if self.ctx.board.outputs.digits != initial_digits {
-                let current = self.display_text();
-                bail!("display_text 在观察窗口内发生变化: 初始 `{initial}`, 后续 `{current}`");
+            let current_change_ns = self.ctx.board.outputs.last_digits_change_ns();
+            if current_change_ns != last_change_ns {
+                last_change_ns = current_change_ns;
+                text = self.display_text();
+                stable_until_ns = current_change_ns.saturating_add(stable_ns);
             }
         }
-        Ok(initial)
+
+        Ok(text)
     }
 
     pub fn display_number(&self) -> Result<DisplayNumber> {
@@ -1739,7 +1741,7 @@ impl MachineContext {
         let mut board = BoardModel::new_with_event_gate(Arc::clone(&event_gate));
         board
             .outputs
-            .sample_from_latches(&BOARD_POWER_ON_LATCHES, &[0; 4]);
+            .sample_from_latches(&BOARD_POWER_ON_LATCHES, &[0; 4], 0);
         Self {
             ports: MachinePorts::new_with_event_gate(event_gate),
             xdata: BoardXdata::default(),
@@ -2734,7 +2736,11 @@ impl Uart {
     }
 
     fn take_tx_string(&mut self) -> Result<String> {
-        let symbols = self.tx_queue.drain(..).map(|entry| entry.symbol).collect::<Vec<_>>();
+        let symbols = self
+            .tx_queue
+            .drain(..)
+            .map(|entry| entry.symbol)
+            .collect::<Vec<_>>();
         Self::symbols_to_string(&symbols)
     }
 
@@ -2756,7 +2762,11 @@ impl Uart {
     }
 
     fn peek_tx_string(&self) -> Result<String> {
-        let symbols = self.tx_queue.iter().map(|entry| entry.symbol).collect::<Vec<_>>();
+        let symbols = self
+            .tx_queue
+            .iter()
+            .map(|entry| entry.symbol)
+            .collect::<Vec<_>>();
         Self::symbols_to_string(&symbols)
     }
 
@@ -3055,7 +3065,7 @@ impl BoardModel {
             &mut self.at24c02,
         );
         self.outputs
-            .sample_from_latches(board_latches, board_latch_versions);
+            .sample_from_latches(board_latches, board_latch_versions, self.sim_time_ns);
     }
 
     fn apply_i2c_lines(&self, mut value: u8) -> u8 {
@@ -3437,6 +3447,32 @@ mod tests {
             (18.0..=22.0).contains(&increased_duty),
             "expected about 20% duty after S9, got {increased_duty}"
         );
+    }
+
+    #[test]
+    fn display_text_window_extends_wait_after_mid_window_change() {
+        let code = vec![
+            0x75, 0x80, 0x01, // MOV P0, #0x01
+            0x75, 0xA0, 0xC0, // MOV P2, #0xC0
+            0x75, 0x80, 0xA4, // MOV P0, #0xA4
+            0x75, 0xA0, 0xE0, // MOV P2, #0xE0
+            0x80, 0xFE, // SJMP $
+        ];
+        let mut sim = Simulator::from_code_with_options(
+            code,
+            false,
+            crate::wave::WaveCaptureOptions::default(),
+        );
+
+        assert_eq!(sim.display_text(), "");
+
+        let start_ns = sim.sim_time_ns();
+        let text = sim
+            .observe_display_text(30)
+            .expect("wait for display after mid-window change");
+        assert_eq!(text, "2");
+        assert_eq!(sim.display_text(), "2");
+        assert!(sim.sim_time_ns().saturating_sub(start_ns) > 30_000_000);
     }
 
     #[test]
@@ -3946,6 +3982,7 @@ mod tests {
         sim.ctx.board.outputs.sample_from_latches(
             &sim.ctx.ports.board_latches,
             &sim.ctx.ports.board_latch_versions,
+            sim.sim_time_ns(),
         );
 
         sim.run_us(100).expect("advance sim time");

@@ -9,6 +9,7 @@ pub(crate) struct Outputs {
     pub(crate) motor_on: bool,
     pub(crate) buzzer_on: bool,
     pub(crate) digits: [DigitSample; 8],
+    last_digits_change_ns: u64,
     segment_latch: u8,
     com_latch: u8,
     pending_com_latch: u8,
@@ -17,7 +18,12 @@ pub(crate) struct Outputs {
 }
 
 impl Outputs {
-    pub(crate) fn sample_from_latches(&mut self, latches: &[u8; 4], versions: &[u64; 4]) {
+    pub(crate) fn sample_from_latches(
+        &mut self,
+        latches: &[u8; 4],
+        versions: &[u64; 4],
+        time_ns: u64,
+    ) {
         let led = latches[0];
         for bit in 0..8 {
             self.leds[bit] = led & (1 << bit) == 0;
@@ -41,8 +47,15 @@ impl Outputs {
             if self.pending_com_latch != 0 {
                 for digit in 0..8 {
                     if self.pending_com_latch & (1 << digit) != 0 {
-                        self.digits[digit].segments = self.segment_latch;
-                        self.digits[digit].seen = true;
+                        let prev = self.digits[digit];
+                        let next = DigitSample {
+                            segments: self.segment_latch,
+                            seen: true,
+                        };
+                        self.digits[digit] = next;
+                        if prev != next {
+                            self.last_digits_change_ns = time_ns;
+                        }
                     }
                 }
                 self.pending_com_latch = 0;
@@ -93,6 +106,10 @@ impl Outputs {
 
     pub(crate) fn seg_pattern(&self, index: usize) -> Result<u8> {
         Ok(!self.seg_raw(index)?)
+    }
+
+    pub(crate) fn last_digits_change_ns(&self) -> u64 {
+        self.last_digits_change_ns
     }
 }
 
@@ -285,5 +302,19 @@ mod tests {
                 .expect("display range"),
             "1.2"
         );
+    }
+
+    #[test]
+    fn sample_from_latches_tracks_last_effective_digit_change_time() {
+        let mut outputs = Outputs::default();
+
+        outputs.sample_from_latches(&[0x00, 0x00, 0x01, !0x3F], &[0, 0, 1, 1], 100);
+        assert_eq!(outputs.last_digits_change_ns(), 100);
+
+        outputs.sample_from_latches(&[0x00, 0x00, 0x01, !0x3F], &[0, 0, 2, 2], 200);
+        assert_eq!(outputs.last_digits_change_ns(), 100);
+
+        outputs.sample_from_latches(&[0x00, 0x00, 0x01, !0x06], &[0, 0, 3, 3], 300);
+        assert_eq!(outputs.last_digits_change_ns(), 300);
     }
 }
