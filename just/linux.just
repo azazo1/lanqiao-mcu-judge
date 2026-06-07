@@ -27,3 +27,9 @@ keil-doctor sample="arith_bench":
     set -euo pipefail
     echo "linux 暂不支持" >&2
     exit 1
+
+analyze-objects sample pattern="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "linux 暂不支持" >&2
+    exit 1

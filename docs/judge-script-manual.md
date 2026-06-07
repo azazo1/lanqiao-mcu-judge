@@ -541,6 +541,8 @@ poke_pdata(0x32, 0x77);
 assert_eq(peek_xdata(0x32), 0x77, "页内 XDATA: 回读错误");
 ```
 
+如果需要根据 `Keil` 编译产物里的符号和段信息定位这些地址, 可参考 [peek-poke-debug.md](peek-poke-debug.md).
+
 ## 输出观察
 
 - `display_text()`

@@ -54,3 +54,9 @@ build-sample sample:
 # 检查 macOS 兼容层中的 Keil 和 STC15 资源是否齐全.
 keil-doctor sample="arith_bench":
     @just --justfile {{ quote(platform_justfile) }} --working-directory {{ quote(justfile_directory()) }} keil-doctor {{ quote(sample) }}
+
+# 示例: just analyze-objects arith_bench
+# 示例: just analyze-objects arith_bench sink
+# 自动分析 Keil 编译产物中适合 peek_* / poke_* 使用的固定地址符号.
+analyze-objects sample pattern="":
+    @just --justfile {{ quote(platform_justfile) }} --working-directory {{ quote(justfile_directory()) }} analyze-objects {{ quote(sample) }} {{ quote(pattern) }}

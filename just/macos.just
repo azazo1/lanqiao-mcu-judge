@@ -115,3 +115,6 @@ build-sample sample:
 
 keil-doctor sample="arith_bench":
     bash scripts/keil-env-doctor.sh {{ quote(sample) }}
+
+analyze-objects sample pattern="":
+    bash scripts/analyze-objects.sh {{ quote(sample) }} {{ quote(pattern) }}

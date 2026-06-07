@@ -218,3 +218,15 @@ build-sample sample:
     } else {
         Write-Output "build finished, hex not found. check log: $logPath"
     }
+
+[script("pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
+analyze-objects sample pattern="":
+    $patternValue = {{quote(pattern)}}
+    if ($patternValue -eq '') {
+        & pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/analyze-objects.ps1 {{quote(sample)}}
+    } else {
+        & pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/analyze-objects.ps1 {{quote(sample)}} $patternValue
+    }
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
