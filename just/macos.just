@@ -1,3 +1,5 @@
+set dotenv-load := true
+
 judge-sample sample script="":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -109,7 +111,7 @@ wave-sample sample script="smoke" start="0" end="" output="":
     echo "wave html: $output_path"
 
 build-sample sample:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    echo "build-sample is windows only" >&2
-    exit 1
+    bash scripts/build-sample-macos.sh {{ quote(sample) }}
+
+keil-doctor sample="arith_bench":
+    bash scripts/keil-env-doctor.sh {{ quote(sample) }}

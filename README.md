@@ -60,6 +60,8 @@ EOF
 - 波形导出说明见 [docs/wave-export.md](docs/wave-export.md).
 - 芯片与中断仿真说明见 [docs/chip.md](docs/chip.md).
 - C51 CLI 编译说明见 [docs/c51-cli-build.md](docs/c51-cli-build.md).
+- `just build-sample <sample>` 会自动读取项目根目录 `.env`, 然后调用现有 `uvproj` 工程做批量构建. Windows 直接调用 `UV4.exe`, macOS 通过 CrossOver 调用同一套工程. Linux 暂不支持.
+- `bash scripts/keil-env-doctor.sh <sample>` 和 `just keil-doctor` 可检查 macOS 兼容层中的 Keil 和 STC15 器件资源是否齐全.
 - 现在支持 `print(...)`, `watch_led_stats(...)`, `display_text(window_ms)`, `display_number(...)`, `key_mode(...)`, `jumper_on(...)`, `jumper_off(...)`, `jumper_installed(...)` 以及内置常量 `L1..L8`, `S4..S19`, `RB2/RB3/RB4/RD1`, `KEYBOARD/KBD`, `BUTTON/BTN`, `SIG_OUT/NET_SIG`.
 - `RUST_LOG=debug` 时会输出 Rhai 脚本逐语句执行进度, 包括步号, 行列号, 调用层级和当前源码行.
 - 默认跳帽状态按原理图建模, `NET_SIG` 不会自动连到 `SIG_OUT`. 如果题目需要把 NE555 输出送到 `P3.4/T0`, 需要在脚本里显式写 `jumper_on(NET_SIG, SIG_OUT)`.

@@ -1,6 +1,7 @@
+set dotenv-load := true
 set windows-shell := ["pwsh", "-NoProfile", "-Command"]
 
-platform_justfile := if os_family() == "windows" { "just/windows.just" } else { "just/unix.just" }
+platform_justfile := if os_family() == "windows" { "just/windows.just" } else if os() == "macos" { "just/macos.just" } else { "just/linux.just" }
 
 default:
     @just --list
@@ -44,6 +45,12 @@ wave-sample sample script="smoke" start="0" end="" output="":
     @just --justfile {{ quote(platform_justfile) }} --working-directory {{ quote(justfile_directory()) }} wave-sample {{ quote(sample) }} {{ quote(script) }} {{ quote(start) }} {{ quote(end) }} {{ quote(output) }}
 
 # 示例: just build-sample arith_bench
-# Windows only. 使用 UV4 批量编译指定 sample, 自动查找 prj/*.uvproj.
+# macOS 下使用 UV4 批量编译指定 sample, 自动查找 prj/*.uvproj.
 build-sample sample:
     @just --justfile {{ quote(platform_justfile) }} --working-directory {{ quote(justfile_directory()) }} build-sample {{ quote(sample) }}
+
+# 示例: just keil-doctor
+# 示例: just keil-doctor arith_bench
+# 检查 macOS 兼容层中的 Keil 和 STC15 资源是否齐全.
+keil-doctor sample="arith_bench":
+    @just --justfile {{ quote(platform_justfile) }} --working-directory {{ quote(justfile_directory()) }} keil-doctor {{ quote(sample) }}

@@ -6,3 +6,4 @@
 /outputs/
 /profile.json.gz
 /sample/*.zip
+.env
