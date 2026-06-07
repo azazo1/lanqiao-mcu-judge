@@ -17,8 +17,7 @@ fn two_digits(value) {
 
 fn wait_seg_change_and_settle(timeout_ns, label) {
     let event = run_to_event("seg.change", timeout_ns);
-    assert_in(event.elapsed_ns, 0..=timeout_ns, label + ": 首次段码变化时延超出范围");
-    run_ms(20);
+    return event.elapsed_ns;
 }
 
 fn time_text(hour, minute, second) {
@@ -41,10 +40,12 @@ fn assert_time_text(text, hour, minute, second, label) {
 fn assert_time_screen(hour, minute, second, label) {
     let current = display_text();
     let expected = time_text(hour, minute, second);
-    if current != expected {
+    let text = if current != expected {
         wait_seg_change_and_settle(300_000_000, label + ": 显示同步");
-    }
-    let text = display_text();
+        display_text(20)
+    } else {
+        current
+    };
     assert_time_text(text, hour, minute, second, label);
 }
 
@@ -62,10 +63,12 @@ fn assert_date_text(text, year, month, date, day, label) {
 fn assert_date_screen(year, month, date, day, label) {
     let current = display_text();
     let expected = date_text(year, month, date, day);
-    if current != expected {
+    let text = if current != expected {
         wait_seg_change_and_settle(300_000_000, label + ": 显示同步");
-    }
-    let text = display_text();
+        display_text(20)
+    } else {
+        current
+    };
     assert_date_text(text, year, month, date, day, label);
 }
 

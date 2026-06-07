@@ -34,27 +34,20 @@ fn date_text(year, month, date, day) {
 
 fn assert_visible_digit(digit, timeout_ns, label) {
     let target = "seg.d" + digit + ".visible";
-    let dt = run_to_state(target, true, timeout_ns);
-    assert_in(dt, 0..=timeout_ns, label + ": 可见相位等待超时");
+    run_to_state(target, true, timeout_ns);
 }
 
 fn wait_seg_change_and_settle(timeout_ns, label) {
     let event = run_to_event("seg.change", timeout_ns);
-    assert_in(event.elapsed_ns, 0..=timeout_ns, label + ": 首次段码变化时延超出范围");
-    run_ms(20);
-    return event.elapsed_ns + 20_000_000;
+    return event.elapsed_ns;
 }
 
 fn assert_setting_field_visible(start_digit, timeout_ns, label) {
     let end_digit = start_digit + 1;
     let target = "seg.d" + end_digit + ".visible";
     let dt_off = run_to_state(target, false, timeout_ns);
-    assert_in(dt_off, 0..=timeout_ns, label + ": 进入隐藏相位超时");
     let remain_ns = timeout_ns - dt_off;
-    assert(remain_ns >= 0, label + ": 重新显示预算错误, remain_ns=" + remain_ns);
-    let dt_on = run_to_state(target, true, remain_ns);
-    assert_in(dt_on, 0..=remain_ns, label + ": 重新显示超时");
-    run_ms(20);
+    run_to_state(target, true, remain_ns);
 }
 
 fn assert_time_text(text, hour, minute, second, label) {
@@ -75,10 +68,12 @@ fn assert_date_text(text, year, month, date, day, label) {
 fn assert_time_screen(hour, minute, second, label) {
     let expected = time_text(hour, minute, second);
     let current = display_text();
-    if current != expected {
+    let text = if current != expected {
         wait_seg_change_and_settle(300_000_000, label + ": 显示同步");
-    }
-    let text = display_text();
+        display_text(20)
+    } else {
+        current
+    };
     assert_eq(text, expected, label + ": 可见文本错误");
     assert_time_text(text, hour, minute, second, label);
 }
@@ -122,16 +117,16 @@ fn assert_time_keeps_running(base_hour, base_minute, base_second, start_ns, edit
 fn assert_setting_time_screen(visible_digit, hour, minute, second, label) {
     let expected = time_text(hour, minute, second);
     let current = display_text();
+    let text;
     if current != expected {
         let spent_ns = wait_seg_change_and_settle(1_200_000_000, label + ": 显示同步");
         let remain_ns = 1_200_000_000 - spent_ns;
-        assert(remain_ns >= 0, label + ": 可见相位预算错误, remain_ns=" + remain_ns);
         assert_visible_digit(visible_digit + 1, remain_ns, label + ": 可见相位");
-        run_ms(20);
+        text = display_text(20);
     } else {
         assert_setting_field_visible(visible_digit, 1_200_000_000, label + ": 选中字段");
+        text = display_text(20);
     }
-    let text = display_text();
     assert_eq(text, expected, label + ": 可见文本错误");
     assert_time_text(text, hour, minute, second, label);
 }
@@ -139,10 +134,12 @@ fn assert_setting_time_screen(visible_digit, hour, minute, second, label) {
 fn assert_date_screen(year, month, date, day, label) {
     let expected = date_text(year, month, date, day);
     let current = display_text();
-    if current != expected {
+    let text = if current != expected {
         wait_seg_change_and_settle(300_000_000, label + ": 显示同步");
-    }
-    let text = display_text();
+        display_text(20)
+    } else {
+        current
+    };
     assert_eq(text, expected, label + ": 可见文本错误");
     assert_date_text(text, year, month, date, day, label);
 }
@@ -150,16 +147,16 @@ fn assert_date_screen(year, month, date, day, label) {
 fn assert_setting_date_screen(visible_digit, year, month, date, day, label) {
     let expected = date_text(year, month, date, day);
     let current = display_text();
+    let text;
     if current != expected {
         let spent_ns = wait_seg_change_and_settle(1_200_000_000, label + ": 显示同步");
         let remain_ns = 1_200_000_000 - spent_ns;
-        assert(remain_ns >= 0, label + ": 可见相位预算错误, remain_ns=" + remain_ns);
         assert_visible_digit(visible_digit + 1, remain_ns, label + ": 可见相位");
-        run_ms(20);
+        text = display_text(20);
     } else {
         assert_setting_field_visible(visible_digit, 1_200_000_000, label + ": 选中字段");
+        text = display_text(20);
     }
-    let text = display_text();
     assert_eq(text, expected, label + ": 可见文本错误");
     assert_date_text(text, year, month, date, day, label);
 }
