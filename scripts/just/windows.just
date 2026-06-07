@@ -169,126 +169,16 @@ build-sample sample:
         exit 1
     }
 
-    $targetName = ''
-    $outputName = ''
-    try {
-        [xml]$project = Get-Content -LiteralPath $uvproj.FullName
-        $targetName = [string]$project.Project.Targets.Target.TargetName
-        $outputName = [string]$project.Project.Targets.Target.TargetOption.TargetCommonOption.OutputName
-    } catch {
+    & 'scripts/build-uvproj-windows.ps1' -Uvproj $uvproj.FullName
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
     }
 
-    if ([string]::IsNullOrWhiteSpace($targetName)) {
-        $targetName = [System.IO.Path]::GetFileNameWithoutExtension($uvproj.Name)
-    }
-    if ([string]::IsNullOrWhiteSpace($outputName)) {
-        $outputName = $targetName
-    }
-
-    $objectsDir = Join-Path $prjDir 'Objects'
-    New-Item -ItemType Directory -Path $objectsDir -Force | Out-Null
-    $logPath = Join-Path $objectsDir 'uv4.log'
-    $buildLogCandidates = @(
-        (Join-Path $objectsDir ($outputName + '.build_log.htm')),
-        (Join-Path $objectsDir ($targetName + '.build_log.htm'))
-    )
-
-    $uv4 = $null
-    $uv4Command = Get-Command 'UV4.exe' -ErrorAction SilentlyContinue
-    if ($null -ne $uv4Command) {
-        $uv4 = $uv4Command.Source
-    } elseif (Test-Path 'C:/Keil_v5/UV4/UV4.exe') {
-        $uv4 = 'C:/Keil_v5/UV4/UV4.exe'
-    } else {
-        [Console]::Error.WriteLine('UV4.exe not found in PATH or at C:/Keil_v5/UV4/UV4.exe')
-        exit 1
-    }
-
-    $arguments = @(
-        '-b', $uvproj.FullName,
-        '-j0',
-        '-t', $targetName,
-        '-o', $logPath
-    )
-
-    function Get-BuildLogReport {
-        param(
-            [string]$BuildLogPath,
-            [string]$FallbackLogPath
-        )
-
-        if (
-            -not [string]::IsNullOrWhiteSpace($BuildLogPath) -and
-            (Test-Path -LiteralPath $BuildLogPath -PathType Leaf)
-        ) {
-            $rawText = Get-Content -LiteralPath $BuildLogPath -Raw
-            $plainText = [System.Net.WebUtility]::HtmlDecode(
-                [regex]::Replace($rawText, '<[^>]+>', '')
-            )
-            $lines = $plainText -split "`r?`n" |
-                ForEach-Object { $_.TrimEnd() } |
-                Where-Object { $_ -ne '' }
-            if ($lines.Count -gt 0) {
-                return ($lines -join [Environment]::NewLine)
-            }
-        }
-
-        if (Test-Path -LiteralPath $FallbackLogPath -PathType Leaf) {
-            return (Get-Content -LiteralPath $FallbackLogPath -Raw).Trim()
-        }
-
-        return ''
-    }
-
-    $process = Start-Process -FilePath $uv4 -ArgumentList $arguments -Wait -PassThru -WindowStyle Hidden
-    $hexPath = Join-Path $objectsDir ($outputName + '.hex')
-    $buildLogPath = $buildLogCandidates |
-        Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
-        Select-Object -First 1
-
-    $buildHasZeroErrors = $false
-    if ($null -ne $buildLogPath) {
-        $buildLogText = Get-Content -LiteralPath $buildLogPath -Raw
-        if ($buildLogText -match '0 Error\(s\)') {
-            $buildHasZeroErrors = $true
-        }
-    }
-    $buildReport = Get-BuildLogReport -BuildLogPath $buildLogPath -FallbackLogPath $logPath
-
-    if (
-        $process.ExitCode -ne 0 -and
-        -not (
-            (Test-Path -LiteralPath $hexPath -PathType Leaf) -and
-            $buildHasZeroErrors
-        )
-    ) {
-        if ($null -ne $buildLogPath) {
-            [Console]::Error.WriteLine("UV4 exited with code $($process.ExitCode). check build log: $buildLogPath")
-        } else {
-            [Console]::Error.WriteLine("UV4 exited with code $($process.ExitCode). check log: $logPath")
-        }
-        if (-not [string]::IsNullOrWhiteSpace($buildReport)) {
-            Write-Output 'build log:'
-            Write-Output $buildReport
-        }
-        exit $process.ExitCode
-    }
-
-    if (-not [string]::IsNullOrWhiteSpace($buildReport)) {
-        Write-Output 'build log:'
-        Write-Output $buildReport
-    }
-
-    if (Test-Path -LiteralPath $hexPath -PathType Leaf) {
-        if ($process.ExitCode -ne 0) {
-            Write-Output "hex: $hexPath"
-            Write-Output "UV4 exited with code $($process.ExitCode), but build log reports 0 errors."
-        } else {
-            Write-Output "hex: $hexPath"
-        }
-    } else {
-        Write-Output "build finished, hex not found. check log: $logPath"
-        exit 1
+[script("pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
+build-uvproj uvproj:
+    & 'scripts/build-uvproj-windows.ps1' -Uvproj {{quote(uvproj)}}
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
     }
 
 [script("pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]

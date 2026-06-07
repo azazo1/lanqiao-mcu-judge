@@ -113,6 +113,9 @@ wave-sample sample script="smoke" start="0" end="" output="":
 build-sample sample:
     bash scripts/build-sample-macos.sh {{ quote(sample) }}
 
+build-uvproj uvproj:
+    bash scripts/build-uvproj-macos.sh {{ quote(uvproj) }}
+
 keil-doctor sample="arith_bench":
     bash scripts/keil-env-doctor.sh {{ quote(sample) }}
 

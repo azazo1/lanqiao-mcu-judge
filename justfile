@@ -53,6 +53,11 @@ wave-sample sample script="smoke" start="0" end="" output="":
 build-sample sample:
     @just --justfile {{ quote(platform_justfile) }} --working-directory {{ quote(justfile_directory()) }} build-sample {{ quote(sample) }}
 
+# 示例: just build-uvproj sample/arith_bench/prj/arith_bench.uvproj
+# 直接构建任意 uvproj, 不假设项目位于固定目录.
+build-uvproj uvproj:
+    @just --justfile {{ quote(platform_justfile) }} --working-directory {{ quote(justfile_directory()) }} build-uvproj {{ quote(uvproj) }}
+
 # 示例: just keil-doctor
 # 示例: just keil-doctor arith_bench
 # 检查 macOS 兼容层中的 Keil 和 STC15 资源是否齐全.

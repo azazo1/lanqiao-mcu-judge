@@ -22,6 +22,12 @@ build-sample sample:
     echo "linux 暂不支持" >&2
     exit 1
 
+build-uvproj uvproj:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "linux 暂不支持" >&2
+    exit 1
+
 keil-doctor sample="arith_bench":
     #!/usr/bin/env bash
     set -euo pipefail
