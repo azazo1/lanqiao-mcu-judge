@@ -46,8 +46,8 @@ use crate::{
     ids::{KeyId, KeyMode, LedId, ResetMode, SignalId, VoltageChannel},
     jumper::{BoardJumpers, LineDrive, resolve_line},
     peripherals::{
-        AnalogInputs, At24c02, Ds18b20, Ds1302, Ds1302State, I2cBus, Key, Ne555, Outputs, Pcf8591,
-        SegmentDecoder, UltrasonicDevice,
+        AnalogInputs, At24c02, Ds18b20, Ds1302, Ds1302State, I2cBus, Key, Ne555, Outputs,
+        Pcf8591, SegmentDecoder, SignalTransitionIter, UltrasonicDevice,
     },
     persistent_state::PersistentState,
     script::{
@@ -1329,13 +1329,14 @@ impl Simulator {
 
         let start_time_ns = self.ctx.board.sim_time_ns;
         let (elapsed_ns, system_cycles) = self.ctx.board.advance_cycles(u64::from(cycles));
-        let t0_falling_edges = self
-            .ctx
-            .board
-            .t0_falling_edges(&self.ctx.ports.port_latch, start_time_ns);
+        let t0_transitions = self.ctx.ports.t0_transition_iter(
+            &self.ctx.board,
+            start_time_ns,
+            self.ctx.board.sim_time_ns,
+        );
         self.ctx
             .ports
-            .tick_timers01_t2(&self.ctx.board, system_cycles, t0_falling_edges)?;
+            .tick_timers01_t2(&self.ctx.board, system_cycles, t0_transitions)?;
         self.ctx
             .ports
             .tick_ultrasonic(&mut self.ctx.board, elapsed_ns);
@@ -2102,16 +2103,40 @@ impl MachinePorts {
         &mut self,
         board: &BoardModel,
         ticks: u32,
-        t0_falling_edges: u32,
+        t0_transitions: SignalTransitionIter,
     ) -> Result<()> {
         let p3 = self.sample_port_p3(board);
         let auxr = self.generic_get(SFR_AUXR);
         self.timers
-            .tick_timers01_t2(p3, auxr, ticks, t0_falling_edges, &mut self.generic)
+            .tick_timers01_t2(p3, auxr, ticks, t0_transitions, &mut self.generic)
     }
 
     fn tick_pca(&mut self, ticks: u32) -> Result<()> {
         self.timers.tick_pca(ticks, &mut self.generic)
+    }
+
+    fn timer0_external_counter_enabled(&self) -> bool {
+        let tcon = self
+            .timers
+            .read(&self.generic, SFR_TCON)
+            .expect("TCON should be readable");
+        let tmod = self
+            .timers
+            .read(&self.generic, SFR_TMOD)
+            .expect("TMOD should be readable");
+        tcon & TCON_TR0 != 0 && tmod & TMOD_C_T0 != 0
+    }
+
+    fn t0_transition_iter(
+        &self,
+        board: &BoardModel,
+        start_time_ns: u64,
+        end_time_ns: u64,
+    ) -> SignalTransitionIter {
+        if !self.timer0_external_counter_enabled() {
+            return SignalTransitionIter::empty();
+        }
+        board.t0_transitions(&self.port_latch, start_time_ns, end_time_ns)
     }
 
     fn strobe_board_latch(&mut self, select: u8, value: u8) {
@@ -2945,6 +2970,7 @@ struct BoardModel {
     key_mode: KeyMode,
     analog: AnalogInputs,
     jumpers: BoardJumpers,
+    net_sig_sig_out_connected_since_ns: Option<u64>,
     p34_conflict_active: Cell<bool>,
 }
 
@@ -2980,6 +3006,7 @@ impl BoardModel {
             key_mode: KeyMode::default(),
             analog: AnalogInputs::default(),
             jumpers: BoardJumpers::default(),
+            net_sig_sig_out_connected_since_ns: None,
             p34_conflict_active: Cell::new(false),
         }
     }
@@ -3018,11 +3045,16 @@ impl BoardModel {
         self.key_mode = state.key_mode;
         self.analog = state.analog.clone();
         self.jumpers = state.jumpers.clone();
+        self.net_sig_sig_out_connected_since_ns = self
+            .jumpers
+            .is_installed(SignalId::NetSig, SignalId::SigOut)
+            .then_some(self.sim_time_ns);
         self.ds18b20.temperature_c = state.ds18b20_temperature_c;
         self.ds18b20
             .set_parasite_power(state.ds18b20_parasite_power);
         self.ultrasonic.distance_cm = state.ultrasonic_distance_cm.max(0.0);
-        self.ne555.set_frequency_hz(state.ne555_frequency_hz);
+        self.ne555
+            .set_frequency_hz_at(self.sim_time_ns, state.ne555_frequency_hz);
     }
 
     fn advance_cycles(&mut self, cycles: u64) -> (u64, u32) {
@@ -3130,11 +3162,21 @@ impl BoardModel {
     }
 
     fn jumper_on(&mut self, left: SignalId, right: SignalId) -> Result<()> {
-        self.jumpers.install(left, right)
+        self.jumpers.install(left, right)?;
+        if BoardJumpers::is_cap_pair(left, right, SignalId::NetSig, SignalId::SigOut)
+            && self.net_sig_sig_out_connected_since_ns.is_none()
+        {
+            self.net_sig_sig_out_connected_since_ns = Some(self.sim_time_ns);
+        }
+        Ok(())
     }
 
     fn jumper_off(&mut self, left: SignalId, right: SignalId) -> Result<()> {
-        self.jumpers.remove(left, right)
+        self.jumpers.remove(left, right)?;
+        if BoardJumpers::is_cap_pair(left, right, SignalId::NetSig, SignalId::SigOut) {
+            self.net_sig_sig_out_connected_since_ns = None;
+        }
+        Ok(())
     }
 
     fn jumper_installed(&self, left: SignalId, right: SignalId) -> bool {
@@ -3145,22 +3187,31 @@ impl BoardModel {
         self.ne555.level(self.sim_time_ns)
     }
 
-    fn t0_falling_edges(&self, all_latches: &[u8; 6], start_time_ns: u64) -> u32 {
-        let end_time_ns = self.sim_time_ns;
+    fn t0_transitions(
+        &self,
+        all_latches: &[u8; 6],
+        start_time_ns: u64,
+        end_time_ns: u64,
+    ) -> SignalTransitionIter {
         if end_time_ns <= start_time_ns {
-            return 0;
+            return SignalTransitionIter::empty();
         }
-        if !self.jumper_installed(SignalId::NetSig, SignalId::SigOut) {
-            return 0;
-        }
+        let Some(connected_since_ns) = self.net_sig_sig_out_connected_since_ns else {
+            return SignalTransitionIter::empty();
+        };
         if all_latches[3] & (1 << 4) == 0 {
-            return 0;
+            return SignalTransitionIter::empty();
         }
         if self.key_mode == KeyMode::Keyboard && self.keys.col_low(3, all_latches) {
-            return 0;
+            return SignalTransitionIter::empty();
         }
 
-        self.ne555.falling_edges_between(start_time_ns, end_time_ns)
+        let effective_start_ns = start_time_ns.max(connected_since_ns);
+        if end_time_ns <= effective_start_ns {
+            return SignalTransitionIter::empty();
+        }
+
+        self.ne555.transitions_between(effective_start_ns, end_time_ns)
     }
 
     fn read_hall_level(&self) -> bool {
@@ -3360,7 +3411,7 @@ mod tests {
     use crate::{
         event::track::EventTrack,
         ids::{KeyId, KeyMode, LedId, ResetMode, SignalId},
-        peripherals::I2cSlaveDevice,
+        peripherals::{I2cSlaveDevice, SignalEdge},
         wave::WaveCaptureOptions,
     };
 
@@ -3508,7 +3559,7 @@ mod tests {
     fn net_sig_requires_explicit_jumper_to_reach_p34() {
         let mut board = super::BoardModel::default();
         let latches = default_port_latches();
-        board.ne555.set_frequency_hz(2_200.0);
+        board.ne555.set_frequency_hz_at(0, 2_200.0);
 
         let saw_low_without_bridge = (0..20_000_u64).any(|index| {
             board.sim_time_ns = index * 100;
@@ -3527,10 +3578,111 @@ mod tests {
     }
 
     #[test]
+    fn t0_transitions_require_sig_out_jumper() {
+        let mut board = super::BoardModel::default();
+        let latches = default_port_latches();
+        board.ne555.set_frequency_hz_at(0, 2_200.0);
+        board.sim_time_ns = 1_000_000;
+
+        assert!(board.t0_transitions(&latches, 0, 1_000_000).next().is_none());
+
+        board
+            .jumper_on(SignalId::NetSig, SignalId::SigOut)
+            .expect("install NET_SIG to SIG_OUT jumper");
+        assert!(board.t0_transitions(&latches, 0, 1_000_000).next().is_none());
+
+        board.sim_time_ns = 2_000_000;
+        let transitions: Vec<_> = board.t0_transitions(&latches, 1_000_000, 2_000_000).collect();
+        assert!(transitions.iter().any(|transition| transition.edge == SignalEdge::Falling));
+        assert!(transitions.iter().any(|transition| transition.edge == SignalEdge::Rising));
+    }
+
+    #[test]
+    fn timer0_counter_mode_counts_only_while_sig_out_jumper_is_installed() {
+        let mut sim = Simulator::nop(false);
+        sim.set_frequency_hz(1_000.0);
+        assert!(sim.ctx.ports.timers.write(
+            &mut sim.ctx.ports.generic,
+            super::SFR_TMOD,
+            super::TMOD_C_T0 | 0x01,
+        ));
+        assert!(sim.ctx.ports.timers.write(
+            &mut sim.ctx.ports.generic,
+            super::SFR_TCON,
+            super::TCON_TR0,
+        ));
+
+        sim.tick_devices(12_000)
+            .expect("advance 1ms without SIG_OUT jumper");
+        let snapshot = sim.ctx.ports.timers.snapshot(&sim.ctx.ports.generic);
+        assert_eq!(snapshot.th0, 0);
+        assert_eq!(snapshot.tl0, 0);
+
+        sim.jumper_on(SignalId::NetSig, SignalId::SigOut)
+            .expect("install NET_SIG to SIG_OUT jumper");
+        sim.tick_devices(12_000)
+            .expect("advance 1ms with SIG_OUT jumper");
+        let snapshot = sim.ctx.ports.timers.snapshot(&sim.ctx.ports.generic);
+        assert_eq!(snapshot.th0, 0);
+        assert_eq!(snapshot.tl0, 1);
+
+        sim.jumper_off(SignalId::NetSig, SignalId::SigOut)
+            .expect("remove NET_SIG to SIG_OUT jumper");
+        sim.tick_devices(12_000)
+            .expect("advance 1ms after removing SIG_OUT jumper");
+        let snapshot = sim.ctx.ports.timers.snapshot(&sim.ctx.ports.generic);
+        assert_eq!(snapshot.th0, 0);
+        assert_eq!(snapshot.tl0, 1);
+    }
+
+    #[test]
+    fn power_reset_keeps_sig_out_jumper_without_replaying_old_t0_edges() {
+        let mut sim = Simulator::nop(false);
+        sim.set_frequency_hz(1_000.0);
+        sim.jumper_on(SignalId::NetSig, SignalId::SigOut)
+            .expect("install NET_SIG to SIG_OUT jumper");
+        assert!(sim.ctx.ports.timers.write(
+            &mut sim.ctx.ports.generic,
+            super::SFR_TMOD,
+            super::TMOD_C_T0 | 0x01,
+        ));
+        assert!(sim.ctx.ports.timers.write(
+            &mut sim.ctx.ports.generic,
+            super::SFR_TCON,
+            super::TCON_TR0,
+        ));
+
+        sim.tick_devices(12_000)
+            .expect("advance 1ms before power reset");
+        let snapshot = sim.ctx.ports.timers.snapshot(&sim.ctx.ports.generic);
+        assert_eq!(snapshot.tl0, 1);
+
+        sim.reset_with_mode(ResetMode::Power)
+            .expect("power reset simulator");
+        assert!(sim.ctx.board.jumper_installed(SignalId::NetSig, SignalId::SigOut));
+        assert!(sim.ctx.ports.timers.write(
+            &mut sim.ctx.ports.generic,
+            super::SFR_TMOD,
+            super::TMOD_C_T0 | 0x01,
+        ));
+        assert!(sim.ctx.ports.timers.write(
+            &mut sim.ctx.ports.generic,
+            super::SFR_TCON,
+            super::TCON_TR0,
+        ));
+
+        sim.tick_devices(12_000)
+            .expect("advance 1ms after power reset");
+        let snapshot = sim.ctx.ports.timers.snapshot(&sim.ctx.ports.generic);
+        assert_eq!(snapshot.th0, 0);
+        assert_eq!(snapshot.tl0, 1);
+    }
+
+    #[test]
     fn p34_conflict_prefers_low_when_key_column_and_ne555_disagree() {
         let mut board = super::BoardModel::default();
         let mut latches = default_port_latches();
-        board.ne555.set_frequency_hz(2_200.0);
+        board.ne555.set_frequency_hz_at(0, 2_200.0);
         board
             .jumper_on(SignalId::NetSig, SignalId::SigOut)
             .expect("install NET_SIG to SIG_OUT jumper");

@@ -1,8 +1,10 @@
 use anyhow::{Result, bail};
 
 use super::registers::*;
+use crate::peripherals::SignalEdge;
 
 const PCA_SYSCLK_DIVISOR_CYCLES: u64 = 12;
+const TIMER0_COUNTER_EDGE: SignalEdge = SignalEdge::Falling;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TimerSnapshot {
@@ -64,10 +66,10 @@ impl TimerBlock {
         p3: u8,
         auxr: u8,
         ticks: u32,
-        t0_falling_edges: u32,
+        t0_transitions: impl Iterator<Item = crate::peripherals::SignalTransition>,
         generic: &mut [u8; 128],
     ) -> Result<()> {
-        self.timer01.tick(p3, auxr, ticks, t0_falling_edges)?;
+        self.timer01.tick(p3, auxr, ticks, t0_transitions)?;
         self.timer2.tick(p3, auxr, ticks, generic)?;
         Ok(())
     }
@@ -148,14 +150,26 @@ impl Timer01 {
         }
     }
 
-    fn tick(&mut self, p3: u8, auxr: u8, ticks: u32, t0_falling_edges: u32) -> Result<()> {
-        self.tick_timer0(p3, auxr, ticks, t0_falling_edges)?;
+    fn tick(
+        &mut self,
+        p3: u8,
+        auxr: u8,
+        ticks: u32,
+        t0_transitions: impl Iterator<Item = crate::peripherals::SignalTransition>,
+    ) -> Result<()> {
+        self.tick_timer0(p3, auxr, ticks, t0_transitions)?;
         self.tick_timer1(p3, auxr, ticks);
         self.prev_p3 = p3;
         Ok(())
     }
 
-    fn tick_timer0(&mut self, p3: u8, auxr: u8, ticks: u32, t0_falling_edges: u32) -> Result<()> {
+    fn tick_timer0(
+        &mut self,
+        p3: u8,
+        auxr: u8,
+        ticks: u32,
+        t0_transitions: impl Iterator<Item = crate::peripherals::SignalTransition>,
+    ) -> Result<()> {
         if self.tcon & TCON_TR0 == 0 {
             self.div0 = 0;
             return Ok(());
@@ -165,50 +179,52 @@ impl Timer01 {
             return Ok(());
         }
 
-        let tick_count = if self.tmod & TMOD_C_T0 != 0 {
-            t0_falling_edges
-        } else {
-            timer_tick_count(auxr & AUXR_T0_X12 != 0, &mut self.div0, ticks)
-        };
-        if tick_count == 0 {
+        if self.tmod & TMOD_C_T0 != 0 {
+            for transition in t0_transitions {
+                if transition.edge == TIMER0_COUNTER_EDGE {
+                    self.increment_timer0_once()?;
+                }
+            }
             return Ok(());
         }
 
+        let tick_count = timer_tick_count(auxr & AUXR_T0_X12 != 0, &mut self.div0, ticks);
+        for _ in 0..tick_count {
+            self.increment_timer0_once()?;
+        }
+        Ok(())
+    }
+
+    fn increment_timer0_once(&mut self) -> Result<()> {
         match self.tmod & 0x03 {
             0x00 => {
-                for _ in 0..tick_count {
-                    let next = u16::from_be_bytes([self.th0, self.tl0]).wrapping_add(1);
-                    if next == 0 {
-                        self.th0 = self.rl_th0;
-                        self.tl0 = self.rl_tl0;
-                        self.tcon |= TCON_TF0;
-                    } else {
-                        let [th0, tl0] = next.to_be_bytes();
-                        self.th0 = th0;
-                        self.tl0 = tl0;
-                    }
+                let next = u16::from_be_bytes([self.th0, self.tl0]).wrapping_add(1);
+                if next == 0 {
+                    self.th0 = self.rl_th0;
+                    self.tl0 = self.rl_tl0;
+                    self.tcon |= TCON_TF0;
+                } else {
+                    let [th0, tl0] = next.to_be_bytes();
+                    self.th0 = th0;
+                    self.tl0 = tl0;
                 }
                 Ok(())
             }
             0x01 => {
-                for _ in 0..tick_count {
-                    let next = u16::from_be_bytes([self.th0, self.tl0]).wrapping_add(1);
-                    let [th0, tl0] = next.to_be_bytes();
-                    self.th0 = th0;
-                    self.tl0 = tl0;
-                    if next == 0 {
-                        self.tcon |= TCON_TF0;
-                    }
+                let next = u16::from_be_bytes([self.th0, self.tl0]).wrapping_add(1);
+                let [th0, tl0] = next.to_be_bytes();
+                self.th0 = th0;
+                self.tl0 = tl0;
+                if next == 0 {
+                    self.tcon |= TCON_TF0;
                 }
                 Ok(())
             }
             0x02 => {
-                for _ in 0..tick_count {
-                    self.tl0 = self.tl0.wrapping_add(1);
-                    if self.tl0 == 0 {
-                        self.tl0 = self.th0;
-                        self.tcon |= TCON_TF0;
-                    }
+                self.tl0 = self.tl0.wrapping_add(1);
+                if self.tl0 == 0 {
+                    self.tl0 = self.th0;
+                    self.tcon |= TCON_TF0;
                 }
                 Ok(())
             }
@@ -400,6 +416,11 @@ mod tests {
 
     use super::super::registers::*;
     use super::{PCA_SYSCLK_DIVISOR_CYCLES, TimerBlock, read_sfr, write_sfr};
+    use crate::peripherals::{SignalEdge, SignalTransition, SignalTransitionIter};
+
+    fn empty_transitions() -> SignalTransitionIter {
+        SignalTransitionIter::empty()
+    }
 
     fn generic() -> [u8; 128] {
         [0; 128]
@@ -416,7 +437,7 @@ mod tests {
         assert!(timers.write(&mut generic, SFR_TH0, 0xFF));
         assert!(timers.write(&mut generic, SFR_TL0, 0xFF));
 
-        timers.tick_timers01_t2(0xFF, AUXR_T0_X12, 1, 0, &mut generic)?;
+        timers.tick_timers01_t2(0xFF, AUXR_T0_X12, 1, empty_transitions(), &mut generic)?;
 
         let snapshot = timers.snapshot(&generic);
         assert_eq!(snapshot.th0, 0xFF);
@@ -434,7 +455,7 @@ mod tests {
         assert!(timers.write(&mut generic, SFR_TMOD, 0x20));
         assert!(timers.write(&mut generic, SFR_TCON, TCON_TR1));
 
-        timers.tick_timers01_t2(0xFF, AUXR_T1_X12, 1, 0, &mut generic)?;
+        timers.tick_timers01_t2(0xFF, AUXR_T1_X12, 1, empty_transitions(), &mut generic)?;
 
         let snapshot = timers.snapshot(&generic);
         assert_eq!(snapshot.tl1, 0xA5);
@@ -451,7 +472,13 @@ mod tests {
         write_sfr(&mut generic, SFR_T2H, 0xFF);
         write_sfr(&mut generic, SFR_T2L, 0xFF);
 
-        timers.tick_timers01_t2(0xFF, AUXR_T2_RUN | AUXR_T2_X12, 1, 0, &mut generic)?;
+        timers.tick_timers01_t2(
+            0xFF,
+            AUXR_T2_RUN | AUXR_T2_X12,
+            1,
+            empty_transitions(),
+            &mut generic,
+        )?;
 
         assert_eq!(read_sfr(&generic, SFR_T2H), 0x12);
         assert_eq!(read_sfr(&generic, SFR_T2L), 0x34);
@@ -466,7 +493,7 @@ mod tests {
         assert!(timers.write(&mut generic, SFR_TCON, TCON_TR0));
 
         let err = timers
-            .tick_timers01_t2(0xFF, AUXR_T0_X12, 1, 0, &mut generic)
+            .tick_timers01_t2(0xFF, AUXR_T0_X12, 1, empty_transitions(), &mut generic)
             .expect_err("mode3 should fail");
         assert!(err.to_string().contains("模式3"));
         Ok(())
@@ -479,7 +506,43 @@ mod tests {
         assert!(timers.write(&mut generic, SFR_TMOD, TMOD_C_T0));
         assert!(timers.write(&mut generic, SFR_TCON, TCON_TR0));
 
-        timers.tick_timers01_t2(0xFF, AUXR_T0_X12, 4, 3, &mut generic)?;
+        let transitions = [
+            SignalTransition {
+                time_ns: 100,
+                edge: SignalEdge::Rising,
+            },
+            SignalTransition {
+                time_ns: 200,
+                edge: SignalEdge::Falling,
+            },
+            SignalTransition {
+                time_ns: 300,
+                edge: SignalEdge::Rising,
+            },
+            SignalTransition {
+                time_ns: 400,
+                edge: SignalEdge::Falling,
+            },
+            SignalTransition {
+                time_ns: 500,
+                edge: SignalEdge::Rising,
+            },
+            SignalTransition {
+                time_ns: 600,
+                edge: SignalEdge::Falling,
+            },
+            SignalTransition {
+                time_ns: 700,
+                edge: SignalEdge::Rising,
+            },
+        ];
+        timers.tick_timers01_t2(
+            0xFF,
+            AUXR_T0_X12,
+            4,
+            transitions.into_iter(),
+            &mut generic,
+        )?;
 
         let snapshot = timers.snapshot(&generic);
         assert_eq!(snapshot.tl0, 3);

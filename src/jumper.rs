@@ -44,6 +44,15 @@ pub(crate) struct BoardJumpers {
 }
 
 impl BoardJumpers {
+    pub(crate) fn is_cap_pair(
+        left: SignalId,
+        right: SignalId,
+        expected_left: SignalId,
+        expected_right: SignalId,
+    ) -> bool {
+        JumperCap::new(left, right) == JumperCap::new(expected_left, expected_right)
+    }
+
     pub(crate) fn install(&mut self, left: SignalId, right: SignalId) -> Result<()> {
         if left == right {
             bail!("不能把跳帽扣在同一个信号上: {}", left.as_str());
