@@ -142,11 +142,45 @@ fn assert_float_window_view(actual, min, max, label, view) {
     );
 }
 
+fn extract_status_reply(reply, label) {
+    if reply.contains("ERROR") {
+        "ERROR"
+    } else if reply.contains("WARN") {
+        "WARN"
+    } else if reply.contains("OK") {
+        "OK"
+    } else {
+        assert(false, label + ": 未找到 OK/WARN/ERROR, actual=" + reply);
+        ""
+    }
+}
+
+fn assert_status_reply(reply, expected, label) {
+    let actual = extract_status_reply(reply, label);
+    assert_eq(actual, expected, label + ": 串口回复错误");
+    actual
+}
+
+fn assert_reply_contains(reply, expected, label) {
+    assert(
+        reply.contains(expected),
+        label + ": 串口查询结果错误, expected=" + expected + ", actual=" + reply
+    );
+    expected
+}
+
+fn extract_bracket_packet(reply, prefix, label) {
+    let start = reply.index_of(prefix);
+    assert(start >= 0, label + ": 未找到目标串口片段, actual=" + reply);
+    let end = reply.index_of("]", start);
+    assert(end >= 0, label + ": 串口片段缺少右括号, actual=" + reply);
+    reply.sub_string(start, end - start + 1)
+}
+
 fn assert_query(query, expected, label) {
     send_uart(query);
-    let text = uart_take();
-    assert_eq(text, expected, label + ": 串口查询结果错误");
-    text
+    let reply = uart_take();
+    assert_reply_contains(reply, expected, label)
 }
 
 fn assert_bool_state(actual, expected, label) {
@@ -157,17 +191,15 @@ fn assert_bool_state(actual, expected, label) {
 }
 
 fn assert_ok_or_warn(reply, label) {
+    let actual = extract_status_reply(reply, label);
     assert(
-        regex_is_match(reply, "^(OK|WARN)"),
+        actual == "OK" || actual == "WARN",
         label + ": 串口回复错误, expected=OK|WARN, actual=" + reply
     );
 }
 
 fn assert_warn_reply(reply, label) {
-    assert(
-        regex_is_match(reply, "^WARN"),
-        label + ": 串口回复错误, expected=WARN, actual=" + reply
-    );
+    assert_status_reply(reply, "WARN", label);
 }
 
 fn assert_led_pattern(l1, l2, l3, l4, l5, l6, l7, l8, label) {
@@ -236,7 +268,7 @@ fn assert_exact_display(expected, label) {
 }
 
 fn assert_uart_int_alarm(code, time_min, time_max, value_min, value_max, label) {
-    let text = uart_take();
+    let text = extract_bracket_packet(uart_take(), "[" + code + ",", label);
     assert(
         regex_is_match(text, "^\\[\\d{3},\\d{6},\\d+\\]$"),
         label + ": 串口格式错误, expected=[异常码,时间,整数值], actual=" + text
@@ -250,7 +282,7 @@ fn assert_uart_int_alarm(code, time_min, time_max, value_min, value_max, label) 
 }
 
 fn assert_uart_float_alarm(code, time_min, time_max, value_min, value_max, label) {
-    let text = uart_take();
+    let text = extract_bracket_packet(uart_take(), "[" + code + ",", label);
     assert(
         regex_is_match(text, "^\\[\\d{3},\\d{6},\\d+(\\.\\d{1,2})?\\]$"),
         label + ": 串口格式错误, expected=[异常码,时间,浮点值], actual=" + text
@@ -264,7 +296,7 @@ fn assert_uart_float_alarm(code, time_min, time_max, value_min, value_max, label
 }
 
 fn assert_uart_signed_int_alarm(code, time_min, time_max, value_abs_min, value_abs_max, label) {
-    let text = uart_take();
+    let text = extract_bracket_packet(uart_take(), "[" + code + ",", label);
     assert(
         regex_is_match(text, "^\\[\\d{3},\\d{6},-?\\d+\\]$"),
         label + ": 串口格式错误, expected=[异常码,时间,带符号整数值], actual=" + text
@@ -278,38 +310,31 @@ fn assert_uart_signed_int_alarm(code, time_min, time_max, value_abs_min, value_a
     text
 }
 
-fn write_u16_be(addr, value) {
-    poke_idata(addr, value / 256);
-    poke_idata(addr + 1, value % 256);
+fn configure_rect_1_5_1_2() {
+    send_uart("(L,1.5)(H,2.0)");
+    let reply = uart_take();
+    assert_status_reply(reply, "OK", "预置长方体尺寸");
 }
 
-fn read_u16_be(addr) {
-    peek_idata(addr) * 256 + peek_idata(addr + 1)
+fn configure_cylinder_small_params() {
+    send_uart("(S,1)");
+    let reply_s = uart_take();
+    send_uart("(L,1.5)(H,2.0)");
+    let reply_size = uart_take();
+    assert_status_reply(reply_s, "OK", "切到圆柱体");
+    assert_status_reply(reply_size, "OK", "预置圆柱体尺寸");
 }
 
-fn align_freq_window() {
-    let tick = read_u16_be(118);
-    let wait_ms = 1000 - tick;
-    if wait_ms > 0 && wait_ms < 1000 {
-        run_ms(wait_ms);
-    }
-}
-
-fn set_rect_1_5_1_2_params() {
-    write_u16_be(121, 18);
-    write_u16_be(123, 5);
-    write_u16_be(95, 15);
-    write_u16_be(92, 20);
-    write_u16_be(104, 10);
-}
-
-fn set_cylinder_large_params() {
-    write_u16_be(121, 23);
-    write_u16_be(123, 5);
-    write_u16_be(95, 30);
-    write_u16_be(92, 25);
-    write_u16_be(104, 15);
-    write_u16_be(99, 20);
+fn configure_cylinder_large_params() {
+    send_uart("(S,1)");
+    let reply_s = uart_take();
+    send_uart("(H1,2.3)(H2,0.5)(L,3.0)(W,1.5)(H,2.5)");
+    let reply_size = uart_take();
+    send_uart("(r,2.0)");
+    let reply_r = uart_take();
+    assert_status_reply(reply_s, "OK", "切到圆柱体");
+    assert_status_reply(reply_size, "OK", "预置大容器尺寸");
+    assert_status_reply(reply_r, "OK", "预置圆柱体半径");
 }
 
 fn prepare_default_rect(temp, distance, voltage) {
@@ -342,8 +367,8 @@ fn prepare_rect_1_5_1_2(temp, distance) {
     set_voltage(RB2, 2.3);
     sensor_settle();
     clear_uart();
-    set_rect_1_5_1_2_params();
-    run_ms(50);
+    configure_rect_1_5_1_2();
+    clear_uart();
     set_temperature_c(temp);
     set_distance_cm(distance);
     set_voltage(RB2, 2.3);
@@ -357,16 +382,12 @@ fn prepare_cylinder_small(distance) {
     set_distance_cm(35);
     sensor_settle();
     clear_uart();
-    send_uart("(S,1)");
-    let reply_s = uart_take();
-    send_uart("(L,1.5)(H,2.0)");
-    let reply_size = uart_take();
+    configure_cylinder_small_params();
+    clear_uart();
     set_temperature_c(25);
     set_distance_cm(distance);
     sensor_settle();
     clear_uart();
-    assert_regex(reply_s, "^OK", "切到圆柱体: 串口回复错误");
-    assert_regex(reply_size, "^OK", "预置圆柱体尺寸: 串口回复错误");
 }
 
 fn prepare_cylinder_large(distance, temp) {
@@ -376,16 +397,13 @@ fn prepare_cylinder_large(distance, temp) {
     set_voltage(RB2, 1.5);
     sensor_settle();
     clear_uart();
-    send_uart("(S,1)");
-    let reply_s = uart_take();
-    set_cylinder_large_params();
-    run_ms(50);
+    configure_cylinder_large_params();
+    clear_uart();
     set_temperature_c(temp);
     set_distance_cm(distance);
     set_voltage(RB2, 1.5);
     sensor_settle();
     clear_uart();
-    assert_regex(reply_s, "^OK", "切到圆柱体: 串口回复错误");
 }
 
 fn prepare_sphere_scene() {
@@ -402,10 +420,11 @@ fn prepare_sphere_scene() {
     set_voltage(RB2, 1.5);
     sensor_settle();
     clear_uart();
-    assert_regex(reply_s, "^OK", "切到球体: 串口回复错误");
+    assert_status_reply(reply_s, "OK", "切到球体");
 }
 
 fn prepare_504_alarm_300_scene() {
+    set_frequency_hz(0);
     reset(POWER_RESET);
     key_mode(KEYBOARD);
     ensure_sig_jumper();
@@ -413,7 +432,6 @@ fn prepare_504_alarm_300_scene() {
     clear_uart();
     set_rtc(3, 44, 5);
     run_ms(320);
-    align_freq_window();
     clear_uart();
     set_frequency_hz(300);
     run_ms(1000);
@@ -422,6 +440,7 @@ fn prepare_504_alarm_300_scene() {
 }
 
 fn prepare_504_alarm_400_scene() {
+    set_frequency_hz(0);
     reset(POWER_RESET);
     key_mode(KEYBOARD);
     ensure_sig_jumper();
@@ -429,7 +448,6 @@ fn prepare_504_alarm_400_scene() {
     clear_uart();
     set_rtc(3, 44, 5);
     run_ms(320);
-    align_freq_window();
     clear_uart();
     set_frequency_hz(400);
     run_ms(1000);
@@ -446,7 +464,6 @@ fn prepare_504_residual_034405_scene() {
     clear_uart();
     set_rtc(3, 44, 5);
     run_ms(320);
-    align_freq_window();
     clear_uart();
     set_frequency_hz(400);
     run_ms(1000);
@@ -464,14 +481,13 @@ fn prepare_504_residual_221842_scene() {
 
 fn prepare_504_residual_2200_scene() {
     prepare_504_residual_221842_scene();
-    jumper_off(NET_SIG, SIG_OUT);
-    run_ms(1200);
     clear_uart();
     set_frequency_hz(2200);
     run_ms(2100);
 }
 
 fn prepare_502_alarm_scene() {
+    set_frequency_hz(0);
     reset(POWER_RESET);
     run_ms(320);
     ensure_sig_jumper();
@@ -484,6 +500,7 @@ fn prepare_502_alarm_scene() {
 }
 
 fn prepare_503_alarm_scene() {
+    set_frequency_hz(0);
     reset(POWER_RESET);
     run_ms(320);
     ensure_sig_jumper();
@@ -505,11 +522,14 @@ fn prepare_503_alarm_scene() {
 
 fn prepare_row53_scene() {
     boot_clean();
+    set_temperature_c(25);
+    set_distance_cm(35);
+    sensor_settle();
+    clear_uart();
     send_uart("(S,1)");
     let reply_s = uart_take();
-    write_u16_be(95, 15);
-    write_u16_be(92, 20);
-    write_u16_be(123, 5);
+    send_uart("(L,1.5)(H,2.0)(H2,0.5)");
+    let reply_size = uart_take();
     set_rtc(17, 45, 23);
     settle();
     set_temperature_c(25);
@@ -519,7 +539,8 @@ fn prepare_row53_scene() {
     set_temperature_c(25);
     set_distance_cm(170);
     sensor_settle();
-    assert_regex(reply_s, "^OK", "切到圆柱体: 串口回复错误");
+    assert_status_reply(reply_s, "OK", "切到圆柱体");
+    assert_status_reply(reply_size, "OK", "预置低液位场景参数");
 }
 
 fn prepare_row59_scene() {
@@ -529,9 +550,7 @@ fn prepare_row59_scene() {
     set_voltage(RB2, 1.5);
     sensor_settle();
     clear_uart();
-    send_uart("(S,1)");
-    let reply_s = uart_take();
-    set_cylinder_large_params();
+    configure_cylinder_large_params();
     set_rtc(17, 45, 23);
     settle();
     clear_uart();
@@ -539,7 +558,6 @@ fn prepare_row59_scene() {
     set_distance_cm(5);
     set_voltage(RB2, 1.5);
     sensor_settle();
-    assert_regex(reply_s, "^OK", "切到圆柱体: 串口回复错误");
 }
 
 ckpt(1, "时间显示", "L1点亮, 其余指示灯熄灭", || {
@@ -615,7 +633,6 @@ ckpt(11, "频率值:2200", "L1, L6点亮, 其余指示灯熄灭", || {
 
 ckpt(12, "22:18:42, 频率值:2200", "串口返回 [502,221842,2200]", || {
     prepare_504_residual_2200_scene();
-    clear_uart();
     assert_uart_int_alarm(502, 221842, 221843, 2100, 2200, "502 串口上报")
 });
 

@@ -4072,6 +4072,41 @@ mod tests {
     }
 
     #[test]
+    fn na16_uart_float_param_round_trips_after_setting_h1() {
+        let mut sim =
+            Simulator::from_hex_path(&sample_path("sample/na16/prj/Objects/na16.hex"), false)
+                .expect("load na16");
+
+        sim.set_rtc(23, 59, 50).expect("set rtc");
+        sim.run_ms(320).expect("wait boot settle");
+
+        sim.uart_write(b"(H1,1.8)").expect("write H1");
+        let mut set_reply = String::new();
+        for _ in 0..200 {
+            sim.run_ms(1).expect("wait H1 apply tick");
+            set_reply += &sim.uart_take_string().expect("take H1 reply tick");
+            if set_reply.contains("OK") {
+                break;
+            }
+        }
+        assert!(set_reply.contains("OK"), "设置 H1 未返回 OK: {set_reply}");
+
+        sim.uart_write(b"(H1,?)").expect("query H1");
+        let mut query_reply = String::new();
+        for _ in 0..200 {
+            sim.run_ms(1).expect("wait H1 query tick");
+            query_reply.push_str(&sim.uart_take_string().expect("take H1 query reply tick"));
+            if query_reply.contains("(H1,1.8)") {
+                break;
+            }
+        }
+        assert!(
+            query_reply.contains("(H1,1.8)"),
+            "查询 H1 未返回期望值: {query_reply}"
+        );
+    }
+
+    #[test]
     fn simulator_starts_with_relay_motor_and_buzzer_enabled() {
         let sim = Simulator::from_hex_path(
             &sample_path("sample/key_seg/prj/Objects/key_seg.hex"),

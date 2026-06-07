@@ -1,0 +1,17 @@
+[package]
+name = "i8051"
+description = "An emulator for the i8051 (MCS-51) microcontroller."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+categories.workspace = true
+keywords.workspace = true
+
+[dependencies]
+i8051-proc-macro.workspace = true
+bytemuck = { version = "1.23", features = ["derive"] }
+type-mapper = "0.1.2"
+bin_file = "0.1.4"
+tracing = "0.1"

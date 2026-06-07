@@ -295,8 +295,6 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 [[package]]
 name = "i8051"
 version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d0953680eba7de6cd6045d58c33e6e84f335415d8f6890b4c3dfc6f883e7c4a"
 dependencies = [
  "bin_file",
  "bytemuck",
