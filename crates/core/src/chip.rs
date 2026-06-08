@@ -193,6 +193,10 @@ impl LedWatchStats {
     }
 
     pub(crate) fn change_frequency_hz(&self) -> Result<Option<f64>> {
+        self.ensure_positive_observed_time()?;
+        if self.changes == 0 {
+            return Ok(Some(0.0));
+        }
         let Some(mean_interval_ns) = self.stable_change_interval_ns()? else {
             return Ok(None);
         };
@@ -3509,6 +3513,23 @@ mod tests {
         assert!(
             (9.9..=10.1).contains(&change_frequency_hz),
             "expected about 10Hz after ignoring stable head and tail, got {change_frequency_hz}"
+        );
+    }
+
+    #[test]
+    fn change_frequency_is_zero_when_led_never_changes() {
+        let stats = LedWatchStats {
+            observed_time_ns: NS_PER_SECOND,
+            ..LedWatchStats::default()
+        };
+
+        let change_frequency_hz = stats
+            .change_frequency_hz()
+            .expect("measure change frequency")
+            .expect("steady LED should map to 0Hz");
+        assert_eq!(
+            change_frequency_hz, 0.0,
+            "steady LED should report 0Hz instead of NaN"
         );
     }
 
