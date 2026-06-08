@@ -437,6 +437,16 @@ label {
   padding: 0 16px;
   background: #0d1324;
   border-bottom: 1px solid #1f2744;
+  overflow: hidden;
+}
+.ruler-layer,
+.viewer-wave {
+  position: relative;
+}
+.overlay-canvas {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
 }
 .sidebar,
 .toolbar-actions,
@@ -513,9 +523,15 @@ canvas {
     </div>
     <div class="viewer" id="viewer">
       <div class="viewer-ruler" id="viewer-ruler">
-        <canvas id="ruler-canvas"></canvas>
+        <div class="ruler-layer">
+          <canvas id="ruler-canvas"></canvas>
+          <canvas id="ruler-cursor-canvas" class="overlay-canvas"></canvas>
+        </div>
       </div>
-      <canvas id="canvas"></canvas>
+      <div class="viewer-wave" id="viewer-wave">
+        <canvas id="canvas"></canvas>
+        <canvas id="cursor-canvas" class="overlay-canvas"></canvas>
+      </div>
     </div>
   </section>
 </div>
@@ -1388,6 +1404,19 @@ function viewerWaveMetrics() {
   return { rect, waveLeft, waveWidth };
 }
 
+function viewerLogicalPointAtClient(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  const logicalWidth = canvas.width / window.devicePixelRatio;
+  const logicalHeight = canvas.height / window.devicePixelRatio;
+  return {
+    rect,
+    logicalWidth,
+    logicalHeight,
+    logicalX: (clientX - rect.left) * canvas.width / Math.max(1, rect.width) / window.devicePixelRatio,
+    logicalY: (clientY - rect.top) * canvas.height / Math.max(1, rect.height) / window.devicePixelRatio,
+  };
+}
+
 function viewerRatioAtClientX(clientX) {
   const { rect, waveLeft, waveWidth } = viewerWaveMetrics();
   return clampUnit((clientX - rect.left - waveLeft) / waveWidth);
@@ -1402,14 +1431,17 @@ function zoomViewAroundViewerCursor(event) {
 function handleViewerWheelGesture(event) {
   if (event.ctrlKey) {
     zoomViewAroundViewerCursor(event);
+    hoverState = hoverStateFromClientPoint(event.clientX, event.clientY);
     return true;
   }
   if (event.shiftKey) {
     panViewFromWheel(event, viewerWaveMetrics().waveWidth);
+    hoverState = hoverStateFromClientPoint(event.clientX, event.clientY);
     return true;
   }
   if (event.altKey) {
     zoomViewAroundCenter(event);
+    hoverState = hoverStateFromClientPoint(event.clientX, event.clientY);
     return true;
   }
   return false;
@@ -2228,6 +2260,12 @@ function xOf(timeNs, waveLeft, waveWidth) {
   return waveLeft + (timeNs - viewStart) * waveWidth / span;
 }
 
+function snapStrokeX(x) {
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  const offset = Math.round(dpr) % 2 === 0 ? 0 : 0.5 / dpr;
+  return Math.round((x - offset) * dpr) / dpr + offset;
+}
+
 function columnRangeForTimeSpan(startNs, endNs, pixelCount, extraPixels = 0) {
   if (endNs <= startNs || pixelCount <= 0) {
     return null;
@@ -2531,11 +2569,11 @@ function renderTimeRuler(width, leftLabel, waveWidth, grid, timeUnit) {
   rulerCtx.textAlign = "center";
   rulerCtx.textBaseline = "middle";
   for (const time of grid.marks) {
-    const x = xOf(time, leftLabel, waveWidth);
+    const x = snapStrokeX(xOf(time, leftLabel, waveWidth));
     rulerCtx.strokeStyle = "#39456b";
     rulerCtx.beginPath();
-    rulerCtx.moveTo(x + 0.5, VIEWER_RULER_HEIGHT - 13);
-    rulerCtx.lineTo(x + 0.5, VIEWER_RULER_HEIGHT - 1);
+    rulerCtx.moveTo(x, VIEWER_RULER_HEIGHT - 13);
+    rulerCtx.lineTo(x, VIEWER_RULER_HEIGHT - 1);
     rulerCtx.stroke();
     rulerCtx.fillStyle = "#9aa4d6";
     rulerCtx.fillText(formatTimeNs(time, grid.stepNs, timeUnit), x, 12);
@@ -2543,8 +2581,12 @@ function renderTimeRuler(width, leftLabel, waveWidth, grid, timeUnit) {
   if (!hoverState) {
     return;
   }
-  const timeNs = clampTimeNs(hoverState.timeNs);
-  const x = xOf(timeNs, leftLabel, waveWidth);
+  const resolved = resolvedHoverState(leftLabel, waveWidth);
+  if (!resolved) {
+    return;
+  }
+  const timeNs = resolved.timeNs;
+  const x = snapStrokeX(resolved.x);
   const text = formatTimeNs(timeNs, grid.stepNs, timeUnit);
   const textWidth = rulerCtx.measureText(text).width;
   const boxWidth = Math.max(52, textWidth + 10);
@@ -2554,8 +2596,8 @@ function renderTimeRuler(width, leftLabel, waveWidth, grid, timeUnit) {
   );
   rulerCtx.strokeStyle = "#ffd166";
   rulerCtx.beginPath();
-  rulerCtx.moveTo(x + 0.5, 0);
-  rulerCtx.lineTo(x + 0.5, VIEWER_RULER_HEIGHT);
+  rulerCtx.moveTo(x, 0);
+  rulerCtx.lineTo(x, VIEWER_RULER_HEIGHT);
   rulerCtx.stroke();
   rulerCtx.fillStyle = "#182234";
   rulerCtx.fillRect(boxLeft, VIEWER_RULER_HEIGHT - 22, boxWidth, 16);
@@ -2570,6 +2612,45 @@ function timeAtViewerLogicalX(logicalX, logicalWidth) {
   const waveWidth = Math.max(1, logicalWidth - waveLeft);
   const ratio = clampUnit((logicalX - waveLeft) / waveWidth);
   return clampTimeNs(viewStart + viewSpanNs() * ratio);
+}
+
+function hoverStateFromViewerLogicalPoint(logicalX, logicalY, logicalWidth) {
+  const waveLeft = SIGNAL_LABEL_WIDTH;
+  const waveWidth = Math.max(1, logicalWidth - waveLeft);
+  return {
+    logicalX,
+    y: logicalY,
+    ratio: clampUnit((logicalX - waveLeft) / waveWidth),
+  };
+}
+
+function hoverStateFromClientPoint(clientX, clientY) {
+  const point = viewerLogicalPointAtClient(clientX, clientY);
+  return hoverStateFromViewerLogicalPoint(point.logicalX, point.logicalY, point.logicalWidth);
+}
+
+function resolvedHoverState(leftLabel, waveWidth) {
+  if (!hoverState) {
+    return null;
+  }
+  const fallbackTimeNs = Number.isFinite(Number(hoverState.timeNs))
+    ? clampTimeNs(Number(hoverState.timeNs))
+    : viewStart;
+  const ratio = Number.isFinite(Number(hoverState.ratio))
+    ? clampUnit(Number(hoverState.ratio))
+    : clampUnit((fallbackTimeNs - viewStart) / Math.max(1, viewSpanNs()));
+  return {
+    x: leftLabel + ratio * waveWidth,
+    y: hoverState.y,
+    timeNs: clampTimeNs(viewStart + viewSpanNs() * ratio),
+  };
+}
+
+function hoverTimeNs() {
+  const width = Math.max(SIGNAL_LABEL_WIDTH + 1, viewer.clientWidth - VIEWER_SIDE_PADDING_X);
+  const waveWidth = Math.max(1, width - SIGNAL_LABEL_WIDTH);
+  const resolved = resolvedHoverState(SIGNAL_LABEL_WIDTH, waveWidth);
+  return resolved ? resolved.timeNs : null;
 }
 
 function markerAtViewerLogicalPoint(logicalX, logicalY, logicalWidth, logicalHeight) {
@@ -2595,12 +2676,8 @@ function markerAtViewerLogicalPoint(logicalX, logicalY, logicalWidth, logicalHei
 }
 
 function viewerMarkerAtClientPoint(clientX, clientY) {
-  const rect = canvas.getBoundingClientRect();
-  const logicalWidth = canvas.width / window.devicePixelRatio;
-  const logicalHeight = canvas.height / window.devicePixelRatio;
-  const logicalX = (clientX - rect.left) * canvas.width / Math.max(1, rect.width) / window.devicePixelRatio;
-  const logicalY = (clientY - rect.top) * canvas.height / Math.max(1, rect.height) / window.devicePixelRatio;
-  return markerAtViewerLogicalPoint(logicalX, logicalY, logicalWidth, logicalHeight);
+  const point = viewerLogicalPointAtClient(clientX, clientY);
+  return markerAtViewerLogicalPoint(point.logicalX, point.logicalY, point.logicalWidth, point.logicalHeight);
 }
 
 function eventPathContainsSelector(event, selector) {
@@ -2996,11 +3073,16 @@ function renderCursor(rowHeight, top, leftLabel, waveWidth, height) {
     cursorInfo.textContent = "";
     return;
   }
+  const resolved = resolvedHoverState(leftLabel, waveWidth);
+  if (!resolved) {
+    cursorInfo.textContent = "";
+    return;
+  }
   const span = Math.max(1, viewEnd - viewStart);
   const referenceStepNs = niceTimeStepNs(span / Math.max(4, Math.round(waveWidth / 160)));
   const timeUnit = chooseTimeUnit(referenceStepNs);
-  const timeNs = hoverState.timeNs;
-  const x = xOf(timeNs, leftLabel, waveWidth);
+  const timeNs = resolved.timeNs;
+  const x = snapStrokeX(resolved.x);
   ctx.strokeStyle = "#ffd166";
   ctx.lineWidth = 1;
   ctx.beginPath();
@@ -3008,7 +3090,7 @@ function renderCursor(rowHeight, top, leftLabel, waveWidth, height) {
   ctx.lineTo(x, height);
   ctx.stroke();
 
-  const row = rowLayout.find(item => hoverState.y >= item.top && hoverState.y < item.bottom);
+  const row = rowLayout.find(item => resolved.y >= item.top && resolved.y < item.bottom);
   if (!row) {
     cursorInfo.textContent = `t=${formatTimeNs(timeNs, referenceStepNs, timeUnit)}`;
     return;
@@ -3340,13 +3422,14 @@ window.addEventListener("keydown", event => {
   const target = event.target;
   const editing = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
   if (!editing && (event.key === "m" || event.key === "M")) {
-    if (!hoverState) {
+    const timeNs = hoverTimeNs();
+    if (timeNs === null) {
       setMarkerStatus("Move the cursor over the wave first");
       return;
     }
     event.preventDefault();
-    addMarker(hoverState.timeNs, markerLabelInput.value);
-    markerTimeInput.value = formatPreciseTimeNs(hoverState.timeNs);
+    addMarker(timeNs, markerLabelInput.value);
+    markerTimeInput.value = formatPreciseTimeNs(timeNs);
     return;
   }
   if ((event.key === "Delete" || event.key === "Backspace") && activeMarkerId !== null) {
@@ -3368,19 +3451,23 @@ header.addEventListener("wheel", event => {
   event.preventDefault();
   if (event.shiftKey) {
     panViewFromWheel(event, coverageRect().width);
+    hoverState = hoverStateFromClientPoint(event.clientX, event.clientY);
     return;
   }
   zoomViewAroundCenter(event);
+  hoverState = hoverStateFromClientPoint(event.clientX, event.clientY);
 }, { passive: false });
 
 coverageInfo.addEventListener("wheel", event => {
   event.preventDefault();
   if (event.shiftKey) {
     panViewFromWheel(event, coverageRect().width);
+    hoverState = hoverStateFromClientPoint(event.clientX, event.clientY);
     return;
   }
   if (event.altKey) {
     zoomViewAroundCenter(event);
+    hoverState = hoverStateFromClientPoint(event.clientX, event.clientY);
     return;
   }
   const anchorRatio = coverageRatioAtClientX(event.clientX);
@@ -3404,6 +3491,7 @@ coverageInfo.addEventListener("wheel", event => {
     Math.max(0, Math.min(nextStartRatio, 1 - minViewSpanRatio())),
     Math.min(1, Math.max(nextEndRatio, minViewSpanRatio()))
   );
+  hoverState = hoverStateFromClientPoint(event.clientX, event.clientY);
 }, { passive: false });
 
 coverageWindow.addEventListener("mousedown", event => {
@@ -3455,11 +3543,11 @@ viewer.addEventListener("scroll", () => {
 }, { passive: true });
 
 viewer.addEventListener("mousedown", event => {
-  const rect = canvas.getBoundingClientRect();
-  const logicalWidth = canvas.width / window.devicePixelRatio;
-  const logicalHeight = canvas.height / window.devicePixelRatio;
-  const logicalX = (event.clientX - rect.left) * canvas.width / Math.max(1, rect.width) / window.devicePixelRatio;
-  const logicalY = (event.clientY - rect.top) * canvas.height / Math.max(1, rect.height) / window.devicePixelRatio;
+  const point = viewerLogicalPointAtClient(event.clientX, event.clientY);
+  const logicalWidth = point.logicalWidth;
+  const logicalHeight = point.logicalHeight;
+  const logicalX = point.logicalX;
+  const logicalY = point.logicalY;
   if (event.button === 0) {
     const marker = markerAtViewerLogicalPoint(logicalX, logicalY, logicalWidth, logicalHeight);
     if (marker) {
@@ -3512,7 +3600,7 @@ viewer.addEventListener("mousedown", event => {
   event.preventDefault();
   hoverActionSignalId = null;
   hoverHandleSignalId = null;
-  hoverState = null;
+  hoverState = hoverStateFromViewerLogicalPoint(logicalX, logicalY, logicalWidth);
   dragState = {
     kind: "viewer-pan",
     startClientX: event.clientX,
@@ -3544,28 +3632,22 @@ viewer.addEventListener("mousemove", event => {
   if (dragState && (dragState.kind === "viewer-pan" || dragState.kind === "reorder" || dragState.kind === "marker-move")) {
     return;
   }
-  const rect = canvas.getBoundingClientRect();
-  const logicalWidth = canvas.width / window.devicePixelRatio;
-  const logicalHeight = canvas.height / window.devicePixelRatio;
-  const logicalX = (event.clientX - rect.left) * canvas.width / Math.max(1, rect.width) / window.devicePixelRatio;
-  const logicalY = (event.clientY - rect.top) * canvas.height / Math.max(1, rect.height) / window.devicePixelRatio;
+  const point = viewerLogicalPointAtClient(event.clientX, event.clientY);
+  const logicalWidth = point.logicalWidth;
+  const logicalHeight = point.logicalHeight;
+  const logicalX = point.logicalX;
+  const logicalY = point.logicalY;
   const marker = markerAtViewerLogicalPoint(logicalX, logicalY, logicalWidth, logicalHeight);
   const handleRow = rowHandleAt(logicalX, logicalY);
   const actionRow = actionRowHit(logicalX, logicalY);
   const nextHoverHandleSignalId = handleRow ? handleRow.signal.id : null;
   const nextHoverActionSignalId = actionRow ? actionRow.signal.id : null;
   viewer.style.cursor = marker ? "ew-resize" : (handleRow ? "grab" : (actionRow ? "pointer" : "default"));
-  const waveLeft = SIGNAL_LABEL_WIDTH;
-  const waveWidth = Math.max(1, rect.width - waveLeft);
-  const ratio = Math.max(0, Math.min(1, (logicalX - waveLeft) / waveWidth));
-  const nextHoverState = {
-    timeNs: viewStart + (viewEnd - viewStart) * ratio,
-    y: logicalY,
-  };
+  const nextHoverState = hoverStateFromViewerLogicalPoint(logicalX, logicalY, logicalWidth);
   const hoverRowChanged = hoverState === null
     || nextHoverHandleSignalId !== hoverHandleSignalId
     || nextHoverActionSignalId !== hoverActionSignalId
-    || Math.abs(nextHoverState.timeNs - hoverState.timeNs) >= Math.max(1, viewSpanNs() / Math.max(200, waveWidth))
+    || Math.abs(nextHoverState.logicalX - (hoverState.logicalX ?? nextHoverState.logicalX)) >= 0.5
     || Math.abs(nextHoverState.y - hoverState.y) >= 1;
   hoverHandleSignalId = nextHoverHandleSignalId;
   hoverActionSignalId = nextHoverActionSignalId;
@@ -3577,11 +3659,11 @@ viewer.addEventListener("mousemove", event => {
 });
 
 viewer.addEventListener("click", event => {
-  const rect = canvas.getBoundingClientRect();
-  const logicalWidth = canvas.width / window.devicePixelRatio;
-  const logicalHeight = canvas.height / window.devicePixelRatio;
-  const logicalX = (event.clientX - rect.left) * canvas.width / Math.max(1, rect.width) / window.devicePixelRatio;
-  const logicalY = (event.clientY - rect.top) * canvas.height / Math.max(1, rect.height) / window.devicePixelRatio;
+  const point = viewerLogicalPointAtClient(event.clientX, event.clientY);
+  const logicalWidth = point.logicalWidth;
+  const logicalHeight = point.logicalHeight;
+  const logicalX = point.logicalX;
+  const logicalY = point.logicalY;
   const marker = markerAtViewerLogicalPoint(logicalX, logicalY, logicalWidth, logicalHeight);
   if (!marker && !rowHandleAt(logicalX, logicalY) && logicalX >= SIGNAL_LABEL_WIDTH) {
     markerTimeInput.value = formatPreciseTimeNs(timeAtViewerLogicalX(logicalX, logicalWidth));
@@ -3625,6 +3707,7 @@ window.addEventListener("mousemove", event => {
     viewStart = dragState.startViewStart + deltaNs;
     viewEnd = dragState.startViewEnd + deltaNs;
     clampView();
+    hoverState = hoverStateFromClientPoint(event.clientX, event.clientY);
     scheduleRender({ interactive: true });
     return;
   }
@@ -3633,6 +3716,7 @@ window.addEventListener("mousemove", event => {
       coverageRatioAtClientX(event.clientX),
       dragState.fixedEndRatio - minViewSpanRatio()
     );
+    hoverState = hoverStateFromClientPoint(event.clientX, event.clientY);
     setViewFromRatios(
       Math.max(0, nextStartRatio),
       dragState.fixedEndRatio
@@ -3645,10 +3729,8 @@ window.addEventListener("mousemove", event => {
       updateMarkerTime(dragState.markerId, data.start_ns + ratio * totalSpanNs());
       return;
     }
-    const rect = canvas.getBoundingClientRect();
-    const logicalWidth = canvas.width / window.devicePixelRatio;
-    const logicalX = (event.clientX - rect.left) * canvas.width / Math.max(1, rect.width) / window.devicePixelRatio;
-    updateMarkerTime(dragState.markerId, timeAtViewerLogicalX(logicalX, logicalWidth));
+    const point = viewerLogicalPointAtClient(event.clientX, event.clientY);
+    updateMarkerTime(dragState.markerId, timeAtViewerLogicalX(point.logicalX, point.logicalWidth));
     return;
   }
   if (dragState.kind === "viewer-pan") {
@@ -3657,6 +3739,7 @@ window.addEventListener("mousemove", event => {
     viewStart = dragState.startViewStart + deltaNs;
     viewEnd = dragState.startViewEnd + deltaNs;
     clampView();
+    hoverState = hoverStateFromClientPoint(event.clientX, event.clientY);
     scheduleRender({ interactive: true });
     return;
   }
@@ -3664,6 +3747,7 @@ window.addEventListener("mousemove", event => {
     coverageRatioAtClientX(event.clientX),
     dragState.fixedStartRatio + minViewSpanRatio()
   );
+  hoverState = hoverStateFromClientPoint(event.clientX, event.clientY);
   setViewFromRatios(
     dragState.fixedStartRatio,
     Math.min(1, nextEndRatio)
