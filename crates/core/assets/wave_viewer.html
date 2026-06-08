@@ -857,6 +857,10 @@ let sidebarCollapsed = false;
 let renderScheduled = false;
 let markerStripScrollLeft = 0;
 let markerStripRevealTail = false;
+let markerStripDirty = true;
+let lastRenderAtMs = 0;
+let interactionRenderUntilMs = 0;
+let settleRenderTimer = null;
 
 sortMarkers();
 
@@ -897,15 +901,43 @@ function toggleSidebarCollapsed() {
   applySidebarCollapsed(!sidebarCollapsed);
 }
 
-function scheduleRender() {
+function interactionRenderActive() {
+  return performance.now() < interactionRenderUntilMs;
+}
+
+function scheduleSettledRender(delayMs = 140) {
+  if (settleRenderTimer !== null) {
+    window.clearTimeout(settleRenderTimer);
+  }
+  settleRenderTimer = window.setTimeout(() => {
+    settleRenderTimer = null;
+    scheduleRender();
+  }, delayMs);
+}
+
+function scheduleRender(options = {}) {
+  const { interactive = false } = options;
+  if (interactive) {
+    interactionRenderUntilMs = performance.now() + 120;
+    scheduleSettledRender();
+  }
   if (renderScheduled) {
     return;
   }
+  const minDelayMs = interactive ? Math.max(0, 40 - (performance.now() - lastRenderAtMs)) : 0;
   renderScheduled = true;
-  window.requestAnimationFrame(() => {
-    renderScheduled = false;
-    render();
-  });
+  const scheduleFrame = () => {
+    window.requestAnimationFrame(() => {
+      renderScheduled = false;
+      lastRenderAtMs = performance.now();
+      render();
+    });
+  };
+  if (minDelayMs > 0) {
+    window.setTimeout(scheduleFrame, minDelayMs);
+    return;
+  }
+  scheduleFrame();
 }
 
 function searchQuery() {
@@ -1068,7 +1100,11 @@ function sortMarkers() {
 }
 
 function setMarkerStatus(text) {
-  markerStatus.textContent = text || "";
+  const nextText = text || "";
+  if (markerStatus.textContent === nextText) {
+    return;
+  }
+  markerStatus.textContent = nextText;
   updateMarkerStripInsets();
 }
 
@@ -1095,11 +1131,15 @@ function focusMarker(markerId, options = {}) {
   if (!marker) {
     if (activeMarkerId !== null) {
       activeMarkerId = null;
+      markerStripDirty = true;
       if (shouldRender) {
-        render();
+        scheduleRender();
       }
     }
     return false;
+  }
+  if (activeMarkerId !== marker.id) {
+    markerStripDirty = true;
   }
   activeMarkerId = marker.id;
   if (ensureVisible && !markerInView(marker)) {
@@ -1107,7 +1147,7 @@ function focusMarker(markerId, options = {}) {
   }
   setMarkerStatus("");
   if (shouldRender) {
-    render();
+    scheduleRender();
   }
   return true;
 }
@@ -1118,8 +1158,9 @@ function clearActiveMarker(options = {}) {
     return;
   }
   activeMarkerId = null;
+  markerStripDirty = true;
   if (shouldRender) {
-    render();
+    scheduleRender();
   }
 }
 
@@ -1134,6 +1175,7 @@ function addMarker(timeNs, label) {
   sortMarkers();
   setMarkerStatus("");
   markerStripRevealTail = true;
+  markerStripDirty = true;
   focusMarker(markerId, { ensureVisible: true });
 }
 
@@ -1144,7 +1186,8 @@ function updateMarkerTime(markerId, timeNs) {
   }
   marker.t = clampTimeNs(timeNs);
   sortMarkers();
-  render();
+  markerStripDirty = true;
+  scheduleRender();
 }
 
 function removeMarker(markerId) {
@@ -1153,7 +1196,8 @@ function removeMarker(markerId) {
     activeMarkerId = null;
   }
   setMarkerStatus("");
-  render();
+  markerStripDirty = true;
+  scheduleRender();
 }
 
 function updateMarkerStripInsets() {
@@ -1197,8 +1241,8 @@ function renderMarkerStrip() {
     const text = document.createElement("span");
     text.className = "marker-chip-text";
     text.textContent = marker.label
-      ? `${marker.label} @ ${formatMarkerTime(marker.t)}`
-      : formatMarkerTime(marker.t);
+      ? `${marker.label} @ ${formatPreciseTimeNs(marker.t)}`
+      : formatPreciseTimeNs(marker.t);
     chip.appendChild(text);
 
     const removeButton = document.createElement("button");
@@ -1266,7 +1310,7 @@ function setViewFromRatios(startRatio, endRatio) {
   viewStart = data.start_ns + startRatio * total;
   viewEnd = data.start_ns + endRatio * total;
   clampView();
-  render();
+  scheduleRender({ interactive: true });
 }
 
 function viewSpanNs() {
@@ -1292,14 +1336,14 @@ function setViewFromAnchor(anchorNs, anchorRatio, spanNs) {
   viewStart = anchorNs - safeSpan * clampedRatio;
   viewEnd = viewStart + safeSpan;
   clampView();
-  render();
+  scheduleRender({ interactive: true });
 }
 
 function panViewByNs(deltaNs) {
   viewStart += deltaNs;
   viewEnd += deltaNs;
   clampView();
-  render();
+  scheduleRender({ interactive: true });
 }
 
 function wheelDeltaScale(deltaMode) {
@@ -2992,6 +3036,7 @@ function renderCursor(rowHeight, top, leftLabel, waveWidth, height) {
 }
 
 function render() {
+  const interactive = interactionRenderActive();
   const visible = visibleSignals();
   const visibleIds = visible.map(signal => signal.id);
   const visibleKey = visibleIds.join("\n");
@@ -3008,10 +3053,22 @@ function render() {
   const grid = buildGridMarks(waveWidth);
   const timeUnit = chooseTimeUnit(grid.stepNs);
   renderTimeRuler(width, leftLabel, waveWidth, grid, timeUnit);
-  canvas.width = width * window.devicePixelRatio;
-  canvas.height = height * window.devicePixelRatio;
-  canvas.style.width = `${width}px`;
-  canvas.style.height = `${height}px`;
+  const deviceWidth = width * window.devicePixelRatio;
+  const deviceHeight = height * window.devicePixelRatio;
+  if (canvas.width !== deviceWidth) {
+    canvas.width = deviceWidth;
+  }
+  if (canvas.height !== deviceHeight) {
+    canvas.height = deviceHeight;
+  }
+  const cssWidth = `${width}px`;
+  const cssHeight = `${height}px`;
+  if (canvas.style.width !== cssWidth) {
+    canvas.style.width = cssWidth;
+  }
+  if (canvas.style.height !== cssHeight) {
+    canvas.style.height = cssHeight;
+  }
   ctx.setTransform(window.devicePixelRatio, 0, 0, window.devicePixelRatio, 0, 0);
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = "#0b0f1d";
@@ -3027,16 +3084,20 @@ function render() {
   const endPx = startPx + renderedSpanRatio * coverageRect().width;
   coverageWindow.style.left = `${startRatio * 100}%`;
   coverageWindow.style.width = `${renderedSpanRatio * 100}%`;
-  renderCoverageRangeLabels(startPx, endPx, coverageRect().width, grid.stepNs, timeUnit);
+  if (!interactive) {
+    renderCoverageRangeLabels(startPx, endPx, coverageRect().width, grid.stepNs, timeUnit);
+  }
   renderCoverageMarkers();
-  coverageInfo.title =
-    markers.length
-      ? `coverage ${formatPercent(startRatio)} .. ${formatPercent(endRatio)} (span ${formatPercent(spanRatio)}), ${markers.length} markers`
-      : `coverage ${formatPercent(startRatio)} .. ${formatPercent(endRatio)} (span ${formatPercent(spanRatio)})`;
-  coverageInfo.setAttribute(
-    "aria-label",
-    `coverage ${formatPercent(startRatio)} to ${formatPercent(endRatio)}, span ${formatPercent(spanRatio)}`
-  );
+  if (!interactive) {
+    coverageInfo.title =
+      markers.length
+        ? `coverage ${formatPercent(startRatio)} .. ${formatPercent(endRatio)} (span ${formatPercent(spanRatio)}), ${markers.length} markers`
+        : `coverage ${formatPercent(startRatio)} .. ${formatPercent(endRatio)} (span ${formatPercent(spanRatio)})`;
+    coverageInfo.setAttribute(
+      "aria-label",
+      `coverage ${formatPercent(startRatio)} to ${formatPercent(endRatio)}, span ${formatPercent(spanRatio)}`
+    );
+  }
   for (const time of grid.marks) {
     const x = xOf(time, leftLabel, waveWidth);
     ctx.strokeStyle = "#202847";
@@ -3163,13 +3224,18 @@ function render() {
   }
 
   renderCursor(rowHeight, top, leftLabel, waveWidth, height);
-  renderMarkerStrip();
+  if (!interactive && markerStripDirty) {
+    renderMarkerStrip();
+    markerStripDirty = false;
+  }
   const previewCount = query
     ? visible.filter(signal => !selected.has(signal.id)).length
     : 0;
-  stats.textContent = query
-    ? `${visible.length} matched signals, ${previewCount} preview, ${events.length} events, ${markers.length} markers`
-    : `${visible.length} visible signals, ${events.length} events, ${markers.length} markers`;
+  if (!interactive) {
+    stats.textContent = query
+      ? `${visible.length} matched signals, ${previewCount} preview, ${events.length} events, ${markers.length} markers`
+      : `${visible.length} visible signals, ${events.length} events, ${markers.length} markers`;
+  }
 }
 
 document.getElementById("zoom-in").addEventListener("click", () => {
@@ -3486,16 +3552,27 @@ viewer.addEventListener("mousemove", event => {
   const marker = markerAtViewerLogicalPoint(logicalX, logicalY, logicalWidth, logicalHeight);
   const handleRow = rowHandleAt(logicalX, logicalY);
   const actionRow = actionRowHit(logicalX, logicalY);
-  hoverHandleSignalId = handleRow ? handleRow.signal.id : null;
-  hoverActionSignalId = actionRow ? actionRow.signal.id : null;
+  const nextHoverHandleSignalId = handleRow ? handleRow.signal.id : null;
+  const nextHoverActionSignalId = actionRow ? actionRow.signal.id : null;
   viewer.style.cursor = marker ? "ew-resize" : (handleRow ? "grab" : (actionRow ? "pointer" : "default"));
   const waveLeft = SIGNAL_LABEL_WIDTH;
   const waveWidth = Math.max(1, rect.width - waveLeft);
   const ratio = Math.max(0, Math.min(1, (logicalX - waveLeft) / waveWidth));
-  hoverState = {
+  const nextHoverState = {
     timeNs: viewStart + (viewEnd - viewStart) * ratio,
     y: logicalY,
   };
+  const hoverRowChanged = hoverState === null
+    || nextHoverHandleSignalId !== hoverHandleSignalId
+    || nextHoverActionSignalId !== hoverActionSignalId
+    || Math.abs(nextHoverState.timeNs - hoverState.timeNs) >= Math.max(1, viewSpanNs() / Math.max(200, waveWidth))
+    || Math.abs(nextHoverState.y - hoverState.y) >= 1;
+  hoverHandleSignalId = nextHoverHandleSignalId;
+  hoverActionSignalId = nextHoverActionSignalId;
+  hoverState = nextHoverState;
+  if (!hoverRowChanged) {
+    return;
+  }
   scheduleRender();
 });
 
@@ -3548,7 +3625,7 @@ window.addEventListener("mousemove", event => {
     viewStart = dragState.startViewStart + deltaNs;
     viewEnd = dragState.startViewEnd + deltaNs;
     clampView();
-    scheduleRender();
+    scheduleRender({ interactive: true });
     return;
   }
   if (dragState.kind === "left") {
@@ -3580,7 +3657,7 @@ window.addEventListener("mousemove", event => {
     viewStart = dragState.startViewStart + deltaNs;
     viewEnd = dragState.startViewEnd + deltaNs;
     clampView();
-    scheduleRender();
+    scheduleRender({ interactive: true });
     return;
   }
   const nextEndRatio = Math.max(
