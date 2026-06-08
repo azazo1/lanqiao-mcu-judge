@@ -1,25 +1,20 @@
-[package]
-name = "lanqiao-mcu-judge"
-version = "0.1.0"
+[workspace]
+members = [
+    "crates/core",
+    "crates/gui",
+]
+default-members = ["crates/core"]
+resolver = "3"
+
+[workspace.package]
 edition = "2024"
-default-run = "stcjudge"
+version = "0.1.0"
 
-[[bin]]
-name = "stcjudge"
-path = "src/main.rs"
-
-[[bin]]
-name = "analyze-objects"
-path = "src/bin/analyze_objects.rs"
-
-[[bench]]
-name = "sim"
-harness = false
-
-[dependencies]
+[workspace.dependencies]
 anyhow = "1.0.100"
 base64 = "0.22.1"
 clap = { version = "4.5.53", features = ["derive"] }
+criterion = "0.8.2"
 i8051 = "0.13.0"
 ihex = "3.0.0"
 regex = "1.12.2"
@@ -29,9 +24,6 @@ serde = { version = "1.0.228", features = ["derive"] }
 tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
-
-[dev-dependencies]
-criterion = "0.8.2"
 
 [patch.crates-io]
 i8051 = { path = "vendor/i8051" }

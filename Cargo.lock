@@ -495,25 +495,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lanqiao-mcu-judge"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64",
- "clap",
- "criterion",
- "i8051",
- "ihex",
- "regex",
- "rhai",
- "rmp-serde",
- "serde",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -872,6 +853,29 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "stcjudge"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "clap",
+ "criterion",
+ "i8051",
+ "ihex",
+ "regex",
+ "rhai",
+ "rmp-serde",
+ "serde",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "stcjudge-gui"
+version = "0.1.0"
 
 [[package]]
 name = "strsim"

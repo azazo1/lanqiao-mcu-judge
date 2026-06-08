@@ -14,7 +14,7 @@
 
 ```bash
 stcjudge run \
-  --hex sample/led_pwm/prj/Objects/led_pwm.hex \
+  --hex samples/led_pwm/prj/Objects/led_pwm.hex \
   --stdin \
   --wave-start 20ms \
   --wave-end 180ms \
@@ -37,8 +37,8 @@ EOF
 
 ```bash
 RUST_LOG=debug stcjudge run \
-  --hex sample/led_pwm/prj/Objects/led_pwm.hex \
-  --script sample/led_pwm/judge/smoke.rhai
+  --hex samples/led_pwm/prj/Objects/led_pwm.hex \
+  --script samples/led_pwm/judge/smoke.rhai
 ```
 
 2. 在日志里找到目标现象附近的 `sim_time_ns`, 比如某次按键后显示异常, 某次 `IIC` 读写, 某次中断进入.
@@ -47,8 +47,8 @@ RUST_LOG=debug stcjudge run \
 
 ```bash
 stcjudge run \
-  --hex sample/led_pwm/prj/Objects/led_pwm.hex \
-  --script sample/led_pwm/judge/smoke.rhai \
+  --hex samples/led_pwm/prj/Objects/led_pwm.hex \
+  --script samples/led_pwm/judge/smoke.rhai \
   --wave-start 12.4ms \
   --wave-end 13.6ms \
   --wave-html /tmp/led_pwm_wave.html

@@ -3418,7 +3418,9 @@ mod tests {
     use super::{DisplayNumber, Simulator};
 
     fn sample_path(relative: &str) -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(relative)
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(relative)
     }
 
     fn default_port_latches() -> [u8; 6] {
@@ -3434,7 +3436,7 @@ mod tests {
     #[test]
     fn led_flicker_counts_expected_toggles_per_second() {
         let mut sim = Simulator::from_hex_path(
-            &sample_path("sample/led_flicker/prj/Objects/led_flicker.hex"),
+            &sample_path("samples/led_flicker/prj/Objects/led_flicker.hex"),
             false,
         )
         .expect("load led_flicker");
@@ -3453,7 +3455,7 @@ mod tests {
     #[test]
     fn led_pwm_reports_expected_frequency_and_duty() {
         let mut sim = Simulator::from_hex_path(
-            &sample_path("sample/led_pwm/prj/Objects/led_pwm.hex"),
+            &sample_path("samples/led_pwm/prj/Objects/led_pwm.hex"),
             false,
         )
         .expect("load led_pwm");
@@ -3529,7 +3531,7 @@ mod tests {
     #[test]
     fn run_to_ns_advances_to_absolute_timestamp() {
         let mut sim = Simulator::from_hex_path(
-            &sample_path("sample/key_seg/prj/Objects/key_seg.hex"),
+            &sample_path("samples/key_seg/prj/Objects/key_seg.hex"),
             false,
         )
         .expect("load key_seg");
@@ -3542,7 +3544,7 @@ mod tests {
     #[test]
     fn run_to_target_detects_ne555_flip() {
         let mut sim = Simulator::from_hex_path(
-            &sample_path("sample/key_seg/prj/Objects/key_seg.hex"),
+            &sample_path("samples/key_seg/prj/Objects/key_seg.hex"),
             false,
         )
         .expect("load key_seg");
@@ -4048,7 +4050,7 @@ mod tests {
     #[test]
     fn delay_sample_delay5ms_matches_run_to_timing() {
         let mut sim =
-            Simulator::from_hex_path(&sample_path("sample/delay/prj/Objects/delay.hex"), false)
+            Simulator::from_hex_path(&sample_path("samples/delay/prj/Objects/delay.hex"), false)
                 .expect("load delay");
 
         let mut startup_off_ns = None;
@@ -4181,7 +4183,7 @@ mod tests {
     #[test]
     fn seg_change_event_tracks_ignore_refresh_without_effective_change() {
         let mut sim = Simulator::from_hex_path(
-            &sample_path("sample/key_seg/prj/Objects/key_seg.hex"),
+            &sample_path("samples/key_seg/prj/Objects/key_seg.hex"),
             false,
         )
         .expect("load key_seg");
@@ -4213,7 +4215,7 @@ mod tests {
     #[test]
     fn seg_change_events_flow_to_wave_without_touching_script_tracker() {
         let mut sim = Simulator::from_hex_path_with_options(
-            &sample_path("sample/key_seg/prj/Objects/key_seg.hex"),
+            &sample_path("samples/key_seg/prj/Objects/key_seg.hex"),
             false,
             WaveCaptureOptions {
                 json_path: Some(std::env::temp_dir().join("seg-change-test.json")),
@@ -4261,7 +4263,7 @@ mod tests {
     #[test]
     fn key_seg_detects_s4_and_toggles_l1() {
         let mut sim = Simulator::from_hex_path(
-            &sample_path("sample/key_seg/prj/Objects/key_seg.hex"),
+            &sample_path("samples/key_seg/prj/Objects/key_seg.hex"),
             false,
         )
         .expect("load key_seg");
@@ -4278,7 +4280,7 @@ mod tests {
     #[test]
     fn key_seg_clears_high_digits_after_release() {
         let mut sim = Simulator::from_hex_path(
-            &sample_path("sample/key_seg/prj/Objects/key_seg.hex"),
+            &sample_path("samples/key_seg/prj/Objects/key_seg.hex"),
             false,
         )
         .expect("load key_seg");
@@ -4296,7 +4298,7 @@ mod tests {
     #[test]
     fn key_seg_btn_reads_independent_keys_without_matrix_scan() {
         let mut sim = Simulator::from_hex_path(
-            &sample_path("sample/key_seg_btn/prj/Objects/key_seg_btn.hex"),
+            &sample_path("samples/key_seg_btn/prj/Objects/key_seg_btn.hex"),
             false,
         )
         .expect("load key_seg_btn");
@@ -4319,7 +4321,7 @@ mod tests {
 
     #[test]
     fn us_sample_tracks_distance_and_speed_setting() {
-        let mut sim = Simulator::from_hex_path(&sample_path("sample/us/prj/Objects/us.hex"), false)
+        let mut sim = Simulator::from_hex_path(&sample_path("samples/us/prj/Objects/us.hex"), false)
             .expect("load us");
 
         sim.run_ms(220).expect("run us to idle");
@@ -4383,7 +4385,7 @@ mod tests {
     #[test]
     fn display_number_range_uses_physical_digit_positions() {
         let mut sim = Simulator::from_hex_path(
-            &sample_path("sample/ds18b20/prj/Objects/ds18b20.hex"),
+            &sample_path("samples/ds18b20/prj/Objects/ds18b20.hex"),
             false,
         )
         .expect("load ds18b20");
@@ -4405,7 +4407,7 @@ mod tests {
     #[test]
     fn na16_shows_boot_time_after_display_refresh() {
         let mut sim =
-            Simulator::from_hex_path(&sample_path("sample/na16/prj/Objects/na16.hex"), false)
+            Simulator::from_hex_path(&sample_path("samples/na16/prj/Objects/na16.hex"), false)
                 .expect("load na16");
 
         sim.run_ms(200).expect("run na16 to stable boot display");
@@ -4415,7 +4417,7 @@ mod tests {
     #[test]
     fn na16_uart_float_param_round_trips_after_setting_h1() {
         let mut sim =
-            Simulator::from_hex_path(&sample_path("sample/na16/prj/Objects/na16.hex"), false)
+            Simulator::from_hex_path(&sample_path("samples/na16/prj/Objects/na16.hex"), false)
                 .expect("load na16");
 
         sim.set_rtc(23, 59, 50).expect("set rtc");
@@ -4450,7 +4452,7 @@ mod tests {
     #[test]
     fn simulator_starts_with_relay_motor_and_buzzer_enabled() {
         let sim = Simulator::from_hex_path(
-            &sample_path("sample/key_seg/prj/Objects/key_seg.hex"),
+            &sample_path("samples/key_seg/prj/Objects/key_seg.hex"),
             false,
         )
         .expect("load key_seg");

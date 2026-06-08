@@ -7,7 +7,7 @@ use std::{
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
-use lanqiao_mcu_judge::{BenchHarness, Simulator, WaveCaptureOptions, run_script_source};
+use stcjudge::{BenchHarness, Simulator, WaveCaptureOptions, run_script_source};
 
 const TOGGLE_P34_LOOP: &[u8] = &[0xB2, 0xB4, 0x80, 0xFC];
 static FILE_COUNTER: AtomicU64 = AtomicU64::new(0);

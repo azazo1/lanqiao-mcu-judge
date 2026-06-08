@@ -1,0 +1,34 @@
+[package]
+name = "stcjudge"
+version.workspace = true
+edition.workspace = true
+default-run = "stcjudge"
+
+[[bin]]
+name = "stcjudge"
+path = "src/main.rs"
+
+[[bin]]
+name = "analyze-objects"
+path = "src/bin/analyze_objects.rs"
+
+[[bench]]
+name = "sim"
+harness = false
+
+[dependencies]
+anyhow.workspace = true
+base64.workspace = true
+clap.workspace = true
+i8051.workspace = true
+ihex.workspace = true
+regex.workspace = true
+rhai.workspace = true
+rmp-serde.workspace = true
+serde.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true

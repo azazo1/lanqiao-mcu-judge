@@ -7,26 +7,26 @@ default:
     @just --list
 
 clippy:
-    cargo clippy
+    cargo clippy -p stcjudge --all-targets
 
 test:
-    cargo test --release
+    cargo test --release -p stcjudge
     just judge-samples
 
 alias sj := stcjudge
 stcjudge *args:
-    cargo run --release -- {{ args }}
+    cargo run --release -p stcjudge -- {{ args }}
 
-# 示例: just run-sample sample/key_seg/prj/Objects/key_seg.hex sample/key_seg/judge/smoke.rhai
+# 示例: just run-sample samples/key_seg/prj/Objects/key_seg.hex samples/key_seg/judge/smoke.rhai
 # 运行任意脚本文件, 需要显式给出 hex 和 script 路径.
 run-sample hex script:
-    cargo run --release -- run --hex {{ quote(hex) }} --script {{ quote(script) }}
+    cargo run --release -p stcjudge -- run --hex {{ quote(hex) }} --script {{ quote(script) }}
 
 run-stdin hex:
-    cargo run --release -- run --hex {{ quote(hex) }} --stdin
+    cargo run --release -p stcjudge -- run --hex {{ quote(hex) }} --stdin
 
 repl hex:
-    cargo run --release -- repl --hex {{ quote(hex) }}
+    cargo run --release -p stcjudge -- repl --hex {{ quote(hex) }}
 
 # 示例: just judge-sample ds1302
 # 示例: just judge-sample ds1302 smoke
@@ -50,7 +50,7 @@ wave-sample sample script="smoke" start="0" end="" output="":
 build-sample sample:
     @just --justfile {{ quote(platform_justfile) }} --working-directory {{ quote(justfile_directory()) }} build-sample {{ quote(sample) }}
 
-# 示例: just build-uvproj sample/arith_bench/prj/arith_bench.uvproj
+# 示例: just build-uvproj samples/arith_bench/prj/arith_bench.uvproj
 # 直接构建任意 uvproj, 不假设项目位于固定目录.
 build-uvproj uvproj:
     @just --justfile {{ quote(platform_justfile) }} --working-directory {{ quote(justfile_directory()) }} build-uvproj {{ quote(uvproj) }}
@@ -70,4 +70,4 @@ analyze-objects sample pattern="":
 # 示例: just bench
 # 运行 criterion 仿真基准.
 bench:
-    cargo bench --bench sim
+    cargo bench -p stcjudge --bench sim

@@ -1,6 +1,6 @@
 # C51 CLI 编译
 
-本文说明如何在命令行下把 sample 工程编译成 `hex`.
+本文说明如何在命令行下把 samples 工程编译成 `hex`.
 
 ## Windows
 
@@ -14,7 +14,7 @@
 命令结构可以写成:
 
 ```powershell
-C:/Keil_v5/UV4/UV4.exe -b .\sample\arith_bench\prj\arith_bench.uvproj -j0 -t arith_bench -o .\sample\arith_bench\prj\Objects\uv4.log
+C:/Keil_v5/UV4/UV4.exe -b .\samples\arith_bench\prj\arith_bench.uvproj -j0 -t arith_bench -o .\samples\arith_bench\prj\Objects\uv4.log
 ```
 
 这几个参数的作用如下:
@@ -29,13 +29,13 @@ C:/Keil_v5/UV4/UV4.exe -b .\sample\arith_bench\prj\arith_bench.uvproj -j0 -t ari
 构建成功后, `hex` 默认会输出到:
 
 ```text
-sample\arith_bench\prj\Objects\arith_bench.hex
+samples\arith_bench\prj\Objects\arith_bench.hex
 ```
 
 日志文件也会输出到:
 
 ```text
-sample\arith_bench\prj\Objects\uv4.log
+samples\arith_bench\prj\Objects\uv4.log
 ```
 
 如果要编译别的 sample, 一般只需要同时替换这几项:
@@ -49,13 +49,13 @@ sample\arith_bench\prj\Objects\uv4.log
 可以直接检查 `hex` 是否存在:
 
 ```powershell
-Get-ChildItem .\sample\arith_bench\prj\Objects\arith_bench.hex
+Get-ChildItem .\samples\arith_bench\prj\Objects\arith_bench.hex
 ```
 
 也可以查看日志, 确认是否为 `0 Error(s), 0 Warning(s)`:
 
 ```powershell
-Get-Content .\sample\arith_bench\prj\Objects\uv4.log
+Get-Content .\samples\arith_bench\prj\Objects\uv4.log
 ```
 
 ## 后续仿真
@@ -63,7 +63,7 @@ Get-Content .\sample\arith_bench\prj\Objects\uv4.log
 拿到 `hex` 之后, 可以直接运行评测:
 
 ```powershell
-stcjudge.exe run --hex .\sample\arith_bench\prj\Objects\arith_bench.hex --script .\sample\arith_bench\judge\smoke.rhai
+stcjudge.exe run --hex .\samples\arith_bench\prj\Objects\arith_bench.hex --script .\samples\arith_bench\judge\smoke.rhai
 ```
 
 ## macOS
@@ -97,7 +97,7 @@ CDB0=UV4\STC.CDB ("STC MCU Database")
 ~/Library/Application Support/CrossOver/Bottles/c51/drive_c/Keil_v5
 ```
 
-这个仓库的 sample 工程已经依赖了 STC 的器件定义. 例如 `sample/arith_bench/prj/arith_bench.uvproj` 里会引用:
+这个仓库的 sample 工程已经依赖了 STC 的器件定义. 例如 `samples/arith_bench/prj/arith_bench.uvproj` 里会引用:
 
 - `Vendor = STC`
 - `Device = STC15F2K60S2 Series`
@@ -149,10 +149,10 @@ just build-sample arith_bench
 
 它会调用 `bash scripts/build-sample-macos.sh arith_bench`, 自动完成:
 
-- 查找 `sample/<name>/prj/*.uvproj`
+- 查找 `samples/<name>/prj/*.uvproj`
 - 解析 target 名称
 - 调用 `UV4.exe -b ... -j0 -t ... -o ...`
-- 检查 `sample/<name>/prj/Objects/*.hex`
+- 检查 `samples/<name>/prj/Objects/*.hex`
 
 ### 自检脚本
 
@@ -190,8 +190,8 @@ just keil-doctor
 成功后会在 sample 自己的工程目录下看到:
 
 ```text
-sample/arith_bench/prj/Objects/arith_bench.hex
-sample/arith_bench/prj/Objects/uv4.log
+samples/arith_bench/prj/Objects/arith_bench.hex
+samples/arith_bench/prj/Objects/uv4.log
 ```
 
 ### 常见问题
@@ -199,7 +199,7 @@ sample/arith_bench/prj/Objects/uv4.log
 - `未找到可执行文件`: 说明 `KEIL_UV4_LAUNCHER` 或 `KEIL_WINE` 路径不对.
 - `未能自动定位 drive_c`: 先设置 `KEIL_CROSSOVER_BOTTLE`, `KEIL_WINEPREFIX` 或 `KEIL_DRIVE_C`.
 - `.env` 改了但命令没生效: 检查变量名是否和 `.env.example` 一致, 路径里有空格时保留引号.
-- `未找到 hex`: 先检查 `sample/<name>/prj/Objects/uv4.log`.
+- `未找到 hex`: 先检查 `samples/<name>/prj/Objects/uv4.log`.
 - 器件或头文件报错: 重新检查 `STC.CDB`, `C51\INC\STC\`, 以及 `TOOLS.INI` 的 `[UV2]` 章节是否都已从 Windows Keil 正确复制过来.
 - 器件库仍未生效: 检查 `Keil_v5/UV4/STC.CDB`, `Keil_v5/C51/INC/STC/STC15F2K60S2.H`, 以及 `TOOLS.INI` 是否包含 `CDB0=UV4\STC.CDB ("STC MCU Database")`.
 - 工程能打开但不能批量构建: 在 uVision 里手动打开一次工程, 确认 target 名称和器件库都已生效.

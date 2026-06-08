@@ -5,9 +5,9 @@
 先看结论:
 
 - 先跑 `just analyze-objects <sample> [pattern]`.
-- 地址定位主要看 `sample/<name>/prj/Listings/<target>.m51`.
-- 源码声明和局部变量分配主要看 `sample/<name>/prj/Listings/*.lst`.
-- `sample/<name>/prj/Objects/*.hex` 主要用于运行仿真, 不是定位变量地址的主入口.
+- 地址定位主要看 `samples/<name>/prj/Listings/<target>.m51`.
+- 源码声明和局部变量分配主要看 `samples/<name>/prj/Listings/*.lst`.
+- `samples/<name>/prj/Objects/*.hex` 主要用于运行仿真, 不是定位变量地址的主入口.
 
 ## 为什么 `ad_da` 没有那些文件
 
@@ -56,7 +56,7 @@ just analyze-objects arith_bench sink
 - `sbit` 最终映射到哪个 `SFR` 位.
 - 链接后的整体内存布局.
 
-例如 `sample/ad_da/prj/Listings/ad_da.m51` 里可以直接看到:
+例如 `samples/ad_da/prj/Listings/ad_da.m51` 里可以直接看到:
 
 - `I:000DH PUBLIC key_sd`
 - `I:0011H PUBLIC ad_da_sd`
@@ -72,7 +72,7 @@ peek_pdata(0x00)
 peek_data(0x20) & 0x01
 ```
 
-再比如 `sample/arith_bench/prj/Listings/arith_bench.m51` 里可以直接看到:
+再比如 `samples/arith_bench/prj/Listings/arith_bench.m51` 里可以直接看到:
 
 - `D:0036H PUBLIC sink_u8`
 - `D:003DH PUBLIC sink_int`
@@ -96,7 +96,7 @@ peek_sfr(0xB0) & 0x10
 - 变量本来是 `idata`, `pdata`, `bit` 还是别的类型.
 - 某个局部变量是不是被分到了寄存器, 栈, 或 overlay 区.
 
-例如 `sample/ad_da/prj/Listings/main.lst` 里可以直接看到:
+例如 `samples/ad_da/prj/Listings/main.lst` 里可以直接看到:
 
 ```c
 idata u8 sg_sd;
@@ -155,7 +155,7 @@ just analyze-objects ad_da
 例如:
 
 ```bash
-rg -n 'PUBLIC        key_sd|PUBLIC        sg_buf|PUBLIC        detect_rb' sample/ad_da/prj/Listings/ad_da.m51
+rg -n 'PUBLIC        key_sd|PUBLIC        sg_buf|PUBLIC        detect_rb' samples/ad_da/prj/Listings/ad_da.m51
 ```
 
 ### 3. 最后看 `lst`
@@ -165,8 +165,8 @@ rg -n 'PUBLIC        key_sd|PUBLIC        sg_buf|PUBLIC        detect_rb' sample
 例如:
 
 ```bash
-rg -n 'idata u8 key_sd|pdata u8 sg_buf|bit detect_rb' sample/ad_da/prj/Listings/main.lst
-rg -n 'Allocated to stack|Allocated to registers' sample/ad_da/prj/Listings/main.lst
+rg -n 'idata u8 key_sd|pdata u8 sg_buf|bit detect_rb' samples/ad_da/prj/Listings/main.lst
+rg -n 'Allocated to stack|Allocated to registers' samples/ad_da/prj/Listings/main.lst
 ```
 
 ## 怎样判断能不能写进长期 judge

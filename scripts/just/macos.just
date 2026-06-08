@@ -4,7 +4,7 @@ judge-sample sample script="":
     #!/usr/bin/env bash
     set -euo pipefail
     bin="target/release/stcjudge"
-    sample_dir="sample/{{ sample }}"
+    sample_dir="samples/{{ sample }}"
     hex_dir="$sample_dir/prj/Objects"
     hex_candidates=()
     judges=()
@@ -28,7 +28,7 @@ judge-sample sample script="":
         echo "no judge scripts found in $sample_dir/judge" >&2
         exit 1
     fi
-    cargo build --release --bin stcjudge
+    cargo build --release -p stcjudge --bin stcjudge
     for judge in "${judges[@]}"; do
         echo "==> $judge"
         if [ "${#hex_candidates[@]}" -eq 1 ]; then
@@ -46,7 +46,7 @@ judge-samples:
     #!/usr/bin/env bash
     set -euo pipefail
     bin="target/release/stcjudge"
-    cargo build --release --bin stcjudge
+    cargo build --release -p stcjudge --bin stcjudge
     while IFS= read -r judge; do
         sample_dir=$(dirname "$(dirname "$judge")")
         hex_dir="$sample_dir/prj/Objects"
@@ -66,13 +66,13 @@ judge-samples:
             echo "expected exactly one hex in $hex_dir, found ${#hex_candidates[@]}" >&2
             exit 1
         fi
-    done < <(find sample -type f -path '*/judge/*.rhai' | sort)
+    done < <(find samples -type f -path '*/judge/*.rhai' | sort)
 
 wave-sample sample script="smoke" start="0" end="" output="":
     #!/usr/bin/env bash
     set -euo pipefail
     bin="target/release/stcjudge"
-    sample_dir="sample/{{ sample }}"
+    sample_dir="samples/{{ sample }}"
     script_name="{{ script }}"
     if [[ "$script_name" != *.rhai ]]; then
         script_name="$script_name.rhai"
@@ -94,7 +94,7 @@ wave-sample sample script="smoke" start="0" end="" output="":
     else
         mkdir -p "$(dirname "$output_path")"
     fi
-    cargo build --release --bin stcjudge
+    cargo build --release -p stcjudge --bin stcjudge
     cmd=("$bin" run --script "$judge" --wave-start "{{ start }}" --wave-html "$output_path")
     if [ "${#hex_candidates[@]}" -eq 1 ]; then
         cmd=("$bin" run --hex "${hex_candidates[0]}" --script "$judge" --wave-start "{{ start }}" --wave-html "$output_path")
@@ -122,7 +122,7 @@ keil-doctor sample="arith_bench":
 analyze-objects sample pattern="":
     #!/usr/bin/env bash
     set -euo pipefail
-    cargo build --quiet --release --bin analyze-objects
+    cargo build --quiet --release -p stcjudge --bin analyze-objects
     bin="target/release/analyze-objects"
     if [ -n "{{ pattern }}" ]; then
         "$bin" "{{ sample }}" "{{ pattern }}"

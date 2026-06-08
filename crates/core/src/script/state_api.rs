@@ -223,7 +223,8 @@ mod tests {
 
     fn sample_hex_path(sample: &str) -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("sample")
+            .join("../..")
+            .join("samples")
             .join(sample)
             .join("prj")
             .join("Objects")

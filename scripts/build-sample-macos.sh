@@ -18,7 +18,7 @@ if [ "$#" -ne 1 ]; then
 fi
 
 sample="$1"
-sample_dir="sample/$sample"
+sample_dir="samples/$sample"
 prj_dir="$sample_dir/prj"
 
 if [ ! -d "$sample_dir" ]; then
@@ -37,5 +37,5 @@ if [ -z "$uvproj" ]; then
     exit 1
 fi
 
-echo "==> 构建 sample/$sample"
+echo "==> 构建 samples/$sample"
 bash "$script_dir/build-uvproj-macos.sh" "$uvproj"

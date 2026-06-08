@@ -3623,7 +3623,7 @@ mod tests {
 
     #[test]
     fn checkpoint_failure_summary_drops_rhai_stack_frames() {
-        let detail = "Runtime error: 圆柱体 76cm 体积页 剩余空间 @ 'file:sample/na16/judge/4t.rhai' (line 172, position 5) / in call to function 'assert_volume_page' (from 'file:sample/na16/judge/4t.rhai') @ 'file:sample/na16/judge/4t.rhai' (line 801, position 5) / in closure call (from 'file:sample/na16/judge/4t.rhai') (line 798, position 1)";
+        let detail = "Runtime error: 圆柱体 76cm 体积页 剩余空间 @ 'file:samples/na16/judge/4t.rhai' (line 172, position 5) / in call to function 'assert_volume_page' (from 'file:samples/na16/judge/4t.rhai') @ 'file:samples/na16/judge/4t.rhai' (line 801, position 5) / in closure call (from 'file:samples/na16/judge/4t.rhai') (line 798, position 1)";
         assert_eq!(
             super::checkpoint_failure_summary(detail),
             "圆柱体 76cm 体积页 剩余空间"

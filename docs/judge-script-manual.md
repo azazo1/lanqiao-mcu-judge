@@ -2,7 +2,7 @@
 
 ## 目录约定
 
-- 每个题目的评测脚本放在 `sample/xxx/judge/`.
+- 每个题目的评测脚本放在 `samples/xxx/judge/`.
 - 推荐把冒烟脚本命名为 `smoke.rhai`.
 
 ## 运行方式
@@ -12,25 +12,25 @@
 脚本文件:
 
 ```bash
-stcjudge run --hex sample/key_seg/prj/Objects/key_seg.hex --script sample/key_seg/judge/smoke.rhai
+stcjudge run --hex samples/key_seg/prj/Objects/key_seg.hex --script samples/key_seg/judge/smoke.rhai
 ```
 
 标准输入:
 
 ```bash
-stcjudge run --hex sample/key_seg/prj/Objects/key_seg.hex --stdin < sample/key_seg/judge/smoke.rhai
+stcjudge run --hex samples/key_seg/prj/Objects/key_seg.hex --stdin < samples/key_seg/judge/smoke.rhai
 ```
 
 交互式 REPL:
 
 ```bash
-stcjudge repl --hex sample/key_seg/prj/Objects/key_seg.hex
+stcjudge repl --hex samples/key_seg/prj/Objects/key_seg.hex
 ```
 
 脚本逐语句 tracing:
 
 ```bash
-RUST_LOG=debug stcjudge run --hex sample/key_seg/prj/Objects/key_seg.hex --script sample/key_seg/judge/smoke.rhai
+RUST_LOG=debug stcjudge run --hex samples/key_seg/prj/Objects/key_seg.hex --script samples/key_seg/judge/smoke.rhai
 ```
 
 省略 `--hex` 时, 评测器会加载一个只会持续执行 `NOP` 的空程序. 这适合单独调试 Rhai 脚本, 输入注入, 波形捕获, 或仅依赖板级外设模型的脚本.
@@ -38,7 +38,7 @@ RUST_LOG=debug stcjudge run --hex sample/key_seg/prj/Objects/key_seg.hex --scrip
 例如:
 
 ```bash
-stcjudge run --script sample/ne555/judge/smoke.rhai
+stcjudge run --script samples/ne555/judge/smoke.rhai
 ```
 
 ```bash

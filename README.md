@@ -10,43 +10,48 @@
 
 可执行文件名为 `stcjudge`. 例如执行 `cargo build --release` 之后, 可以直接运行 `target/release/stcjudge`.
 
+当前仓库使用 workspace 结构:
+
+- `crates/core`: `stcjudge` 核心 crate.
+- `crates/gui`: GUI crate 占位目录, 暂未实现.
+
 > [!note]
 > 使用 `--release` 运行会比开发中运行快上不少.
 
 按脚本文件执行:
 
 ```bash
-stcjudge run --hex sample/key_seg/prj/Objects/key_seg.hex --script sample/key_seg/judge/smoke.rhai
+stcjudge run --hex samples/key_seg/prj/Objects/key_seg.hex --script samples/key_seg/judge/smoke.rhai
 ```
 
 从标准输入执行 Rhai:
 
 ```bash
-stcjudge run --hex sample/key_seg/prj/Objects/key_seg.hex --stdin < sample/key_seg/judge/smoke.rhai
+stcjudge run --hex samples/key_seg/prj/Objects/key_seg.hex --stdin < samples/key_seg/judge/smoke.rhai
 ```
 
 交互式执行:
 
 ```bash
-stcjudge repl --hex sample/key_seg/prj/Objects/key_seg.hex
+stcjudge repl --hex samples/key_seg/prj/Objects/key_seg.hex
 ```
 
 查看 Rhai 脚本逐语句 tracing:
 
 ```bash
-RUST_LOG=debug stcjudge run --hex sample/key_seg/prj/Objects/key_seg.hex --script sample/key_seg/judge/smoke.rhai
+RUST_LOG=debug stcjudge run --hex samples/key_seg/prj/Objects/key_seg.hex --script samples/key_seg/judge/smoke.rhai
 ```
 
 固定时刻抓取快照:
 
 ```bash
-stcjudge dump --hex sample/key_seg/prj/Objects/key_seg.hex --ms 220
+stcjudge dump --hex samples/key_seg/prj/Objects/key_seg.hex --ms 220
 ```
 
 导出交互式波形:
 
 ```bash
-stcjudge run --hex sample/led_pwm/prj/Objects/led_pwm.hex --stdin --wave-html /tmp/led_pwm_wave.html <<'EOF'
+stcjudge run --hex samples/led_pwm/prj/Objects/led_pwm.hex --stdin --wave-html /tmp/led_pwm_wave.html <<'EOF'
 run_ms(100);
 tap_key(S9, 80);
 run_ms(100);
@@ -77,11 +82,11 @@ cargo bench --bench sim
 
 这意味着后续独立 GUI crate 可以直接调用仿真核心 API, 不需要通过启动 `stcjudge` CLI 的方式间接实现功能.
 
-当前的 criterion 基准不依赖 sample 目录下的 HEX 文件, 而是使用内建的稳定代码镜像, 并按单个功能拆分为执行, 输入注入, 状态读取, wave 导出等微基准, 便于长期跟踪性能变化.
+当前的 criterion 基准不依赖 samples 目录下的 HEX 文件, 而是使用内建的稳定代码镜像, 并按单个功能拆分为执行, 输入注入, 状态读取, wave 导出等微基准, 便于长期跟踪性能变化.
 
 ## 评测脚本
 
-- 评测脚本约定放在 `sample/xxx/judge/`.
+- 评测脚本约定放在 `samples/xxx/judge/`.
 - 详细手册见 [docs/judge-script-manual.md](docs/judge-script-manual.md).
 - 波形导出说明见 [docs/wave-export.md](docs/wave-export.md).
 - 芯片与中断仿真说明见 [docs/chip.md](docs/chip.md).
@@ -111,6 +116,6 @@ cargo bench --bench sim
 - chip.md: 芯片与中断仿真相关说明.
 - Datasheet: 板上各个外设的用户手册.
 
-## sample
+## samples
 
 评测真题示例.

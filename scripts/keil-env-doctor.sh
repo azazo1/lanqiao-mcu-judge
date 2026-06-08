@@ -115,7 +115,7 @@ else
     print_item missing 'Keil 根目录' '未能自动定位. 可设置 KEIL_ROOT_HOST'
 fi
 
-sample_dir="sample/$sample"
+sample_dir="samples/$sample"
 prj_dir="$sample_dir/prj"
 uvproj="$(find "$prj_dir" -maxdepth 1 -type f -name '*.uvproj' | sort | head -n 1)"
 if [ -n "$uvproj" ]; then

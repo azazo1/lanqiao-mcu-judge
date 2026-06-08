@@ -90,13 +90,14 @@ fn run() -> Result<()> {
     let cli = Cli::parse();
     let pattern = cli.pattern.unwrap_or_default();
 
-    let sample_dir = PathBuf::from("sample").join(&cli.sample);
+    let workspace_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let sample_dir = workspace_dir.join("samples").join(&cli.sample);
     let prj_dir = sample_dir.join("prj");
     let objects_dir = prj_dir.join("Objects");
     let listings_dir = prj_dir.join("Listings");
 
     if !sample_dir.is_dir() {
-        bail!("sample 不存在: {}", display_path(&sample_dir));
+        bail!("samples 目录不存在: {}", display_path(&sample_dir));
     }
 
     if !listings_dir.is_dir() {

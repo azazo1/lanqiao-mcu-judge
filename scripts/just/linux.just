@@ -37,7 +37,7 @@ keil-doctor sample="arith_bench":
 analyze-objects sample pattern="":
     #!/usr/bin/env bash
     set -euo pipefail
-    cargo build --quiet --release --bin analyze-objects
+    cargo build --quiet --release -p stcjudge --bin analyze-objects
     bin="target/release/analyze-objects"
     if [ -n "{{ pattern }}" ]; then
         "$bin" "{{ sample }}" "{{ pattern }}"

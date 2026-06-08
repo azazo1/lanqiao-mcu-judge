@@ -6,7 +6,9 @@ use std::{
 };
 
 fn sample_path(relative: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(relative)
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(relative)
 }
 
 fn temp_script_path() -> PathBuf {
@@ -16,7 +18,7 @@ fn temp_script_path() -> PathBuf {
         .expect("system time")
         .as_nanos();
     path.push(format!(
-        "lanqiao_mcu_judge_print_{}_{}.rhai",
+        "stcjudge_print_{}_{}.rhai",
         std::process::id(),
         nonce
     ));
@@ -47,7 +49,7 @@ fn rhai_print_writes_to_stdout() {
         .args([
             "run",
             "--hex",
-            sample_path("sample/key_seg/prj/Objects/key_seg.hex")
+            sample_path("samples/key_seg/prj/Objects/key_seg.hex")
                 .to_str()
                 .expect("hex path"),
             "--script",
@@ -162,7 +164,7 @@ fn cli_accepts_stdin_script_and_builtin_constants() {
         .args([
             "run",
             "--hex",
-            sample_path("sample/key_seg/prj/Objects/key_seg.hex")
+            sample_path("samples/key_seg/prj/Objects/key_seg.hex")
                 .to_str()
                 .expect("hex path"),
             "--stdin",
@@ -208,7 +210,7 @@ fn debug_tracing_keeps_script_execution_working() {
         .args([
             "run",
             "--hex",
-            sample_path("sample/key_seg/prj/Objects/key_seg.hex")
+            sample_path("samples/key_seg/prj/Objects/key_seg.hex")
                 .to_str()
                 .expect("hex path"),
             "--script",
@@ -239,7 +241,7 @@ fn rhai_regex_and_native_string_slice_work() {
         .args([
             "run",
             "--hex",
-            sample_path("sample/key_seg/prj/Objects/key_seg.hex")
+            sample_path("samples/key_seg/prj/Objects/key_seg.hex")
                 .to_str()
                 .expect("hex path"),
             "--script",
@@ -270,7 +272,7 @@ fn rhai_led_pwm_watchers_work() {
         .args([
             "run",
             "--hex",
-            sample_path("sample/led_pwm/prj/Objects/led_pwm.hex")
+            sample_path("samples/led_pwm/prj/Objects/led_pwm.hex")
                 .to_str()
                 .expect("hex path"),
             "--script",
@@ -301,7 +303,7 @@ fn rhai_da_value_reports_pcf8591_output() {
         .args([
             "run",
             "--hex",
-            sample_path("sample/ad_da/prj/Objects/ad_da.hex")
+            sample_path("samples/ad_da/prj/Objects/ad_da.hex")
                 .to_str()
                 .expect("hex path"),
             "--script",
@@ -332,7 +334,7 @@ fn rhai_voltage_aliases_drive_pcf8591_inputs() {
         .args([
             "run",
             "--hex",
-            sample_path("sample/ad_da/prj/Objects/ad_da.hex")
+            sample_path("samples/ad_da/prj/Objects/ad_da.hex")
                 .to_str()
                 .expect("hex path"),
             "--script",
@@ -369,7 +371,7 @@ fn rhai_ds18b20_resolution_levels_follow_float_temperature() {
         .args([
             "run",
             "--hex",
-            sample_path("sample/ds18b20/prj/Objects/ds18b20.hex")
+            sample_path("samples/ds18b20/prj/Objects/ds18b20.hex")
                 .to_str()
                 .expect("hex path"),
             "--script",
@@ -400,7 +402,7 @@ fn rhai_ds18b20_temperature_range_handles_negative_and_high_values() {
         .args([
             "run",
             "--hex",
-            sample_path("sample/ds18b20/prj/Objects/ds18b20.hex")
+            sample_path("samples/ds18b20/prj/Objects/ds18b20.hex")
                 .to_str()
                 .expect("hex path"),
             "--script",

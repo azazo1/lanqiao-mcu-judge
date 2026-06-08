@@ -1,6 +1,6 @@
 [script("pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
 judge-sample sample script="":
-    $sampleDir = Join-Path 'sample' {{quote(sample)}}
+    $sampleDir = Join-Path 'samples' {{quote(sample)}}
     $hexDir = Join-Path $sampleDir 'prj/Objects'
     $judgeDir = Join-Path $sampleDir 'judge'
     $hexCandidates = @()
@@ -29,7 +29,7 @@ judge-sample sample script="":
         exit 1
     }
 
-    cargo build --release --bin stcjudge
+    cargo build --release -p stcjudge --bin stcjudge
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }
@@ -54,14 +54,14 @@ judge-sample sample script="":
 
 [script("pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
 judge-samples:
-    cargo build --release --bin stcjudge
+    cargo build --release -p stcjudge --bin stcjudge
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }
 
     $bin = 'target/release/stcjudge.exe'
-    if (Test-Path -LiteralPath 'sample' -PathType Container) {
-        $judges = @(Get-ChildItem -LiteralPath 'sample' -File -Recurse -Filter '*.rhai' |
+    if (Test-Path -LiteralPath 'samples' -PathType Container) {
+        $judges = @(Get-ChildItem -LiteralPath 'samples' -File -Recurse -Filter '*.rhai' |
             Where-Object { $_.Directory.Name -eq 'judge' } |
             Sort-Object FullName |
             ForEach-Object { Resolve-Path -LiteralPath $_.FullName -Relative })
@@ -97,7 +97,7 @@ judge-samples:
 
 [script("pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
 wave-sample sample script="smoke" start="0" end="" output="":
-    $sampleDir = Join-Path 'sample' {{quote(sample)}}
+    $sampleDir = Join-Path 'samples' {{quote(sample)}}
     $scriptName = {{quote(script)}}
     $waveStart = {{quote(start)}}
     $waveEnd = {{quote(end)}}
@@ -126,7 +126,7 @@ wave-sample sample script="smoke" start="0" end="" output="":
         }
     }
 
-    cargo build --release --bin stcjudge
+    cargo build --release -p stcjudge --bin stcjudge
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }
@@ -154,7 +154,7 @@ wave-sample sample script="smoke" start="0" end="" output="":
 
 [script("pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
 build-sample sample:
-    $sampleDir = Join-Path 'sample' {{quote(sample)}}
+    $sampleDir = Join-Path 'samples' {{quote(sample)}}
     $prjDir = Join-Path $sampleDir 'prj'
     if (-not (Test-Path -LiteralPath $prjDir -PathType Container)) {
         [Console]::Error.WriteLine("project directory not found: $prjDir")
@@ -183,7 +183,7 @@ build-uvproj uvproj:
 
 [script("pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
 analyze-objects sample pattern="":
-    cargo build --quiet --release --bin analyze-objects
+    cargo build --quiet --release -p stcjudge --bin analyze-objects
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }
