@@ -145,12 +145,15 @@ fn enter_cpu_interrupt(cpu: &mut Cpu, pending: PendingInterrupt) -> bool {
     entered
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+const LED_CHANGE_INTERVAL_MAX_RELATIVE_DEVIATION: f64 = 0.25;
+
+#[derive(Debug, Clone, Default)]
 pub(crate) struct LedWatchStats {
     pub(crate) on_time_ns: u64,
     pub(crate) observed_time_ns: u64,
     pub(crate) changes: u64,
     pub(crate) rising_edges: u64,
+    pub(crate) change_intervals_ns: Vec<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -163,24 +166,46 @@ pub(crate) struct ObservedEvent {
 }
 
 impl LedWatchStats {
-    pub(crate) fn change_frequency_hz(self) -> Result<f64> {
+    fn ensure_positive_observed_time(&self) -> Result<()> {
         if self.observed_time_ns == 0 {
             bail!("统计时长必须 > 0");
         }
-        Ok(self.changes as f64 * NS_PER_SECOND as f64 / self.observed_time_ns as f64)
+        Ok(())
     }
 
-    pub(crate) fn pwm_frequency_hz(self) -> Result<f64> {
-        if self.observed_time_ns == 0 {
-            bail!("统计时长必须 > 0");
+    fn stable_change_interval_ns(&self) -> Result<Option<f64>> {
+        self.ensure_positive_observed_time()?;
+        if self.change_intervals_ns.is_empty() {
+            return Ok(None);
         }
+        let total_interval_ns: u128 = self.change_intervals_ns.iter().map(|&it| u128::from(it)).sum();
+        if total_interval_ns == 0 {
+            return Ok(None);
+        }
+        let mean_interval_ns = total_interval_ns as f64 / self.change_intervals_ns.len() as f64;
+        for &interval_ns in &self.change_intervals_ns {
+            let relative_deviation = (interval_ns as f64 - mean_interval_ns).abs() / mean_interval_ns;
+            if relative_deviation > LED_CHANGE_INTERVAL_MAX_RELATIVE_DEVIATION {
+                return Ok(None);
+            }
+        }
+        Ok(Some(mean_interval_ns))
+    }
+
+    pub(crate) fn change_frequency_hz(&self) -> Result<Option<f64>> {
+        let Some(mean_interval_ns) = self.stable_change_interval_ns()? else {
+            return Ok(None);
+        };
+        Ok(Some(NS_PER_SECOND as f64 / mean_interval_ns))
+    }
+
+    pub(crate) fn pwm_frequency_hz(&self) -> Result<f64> {
+        self.ensure_positive_observed_time()?;
         Ok(self.rising_edges as f64 * NS_PER_SECOND as f64 / self.observed_time_ns as f64)
     }
 
-    pub(crate) fn duty_percent(self) -> Result<f64> {
-        if self.observed_time_ns == 0 {
-            bail!("统计时长必须 > 0");
-        }
+    pub(crate) fn duty_percent(&self) -> Result<f64> {
+        self.ensure_positive_observed_time()?;
         Ok(self.on_time_ns as f64 * 100.0 / self.observed_time_ns as f64)
     }
 }
@@ -969,6 +994,7 @@ impl Simulator {
         let start = self.ctx.board.sim_time_ns;
         let target = start.saturating_add(duration_ms.saturating_mul(NS_PER_MILLISECOND));
         let mut stats = LedWatchStats::default();
+        let mut last_change_time_ns = None;
 
         while self.ctx.board.sim_time_ns < target {
             let window_start = self.ctx.board.sim_time_ns;
@@ -982,7 +1008,14 @@ impl Simulator {
                     .saturating_add(window_end.saturating_sub(window_start));
             }
             if self.ctx.board.sim_time_ns <= target && was_on != is_on {
+                let change_time_ns = window_end;
                 stats.changes = stats.changes.saturating_add(1);
+                if let Some(prev_change_time_ns) = last_change_time_ns {
+                    stats
+                        .change_intervals_ns
+                        .push(change_time_ns.saturating_sub(prev_change_time_ns));
+                }
+                last_change_time_ns = Some(change_time_ns);
                 if !was_on && is_on {
                     stats.rising_edges = stats.rising_edges.saturating_add(1);
                 }
@@ -3415,7 +3448,7 @@ mod tests {
         wave::WaveCaptureOptions,
     };
 
-    use super::{DisplayNumber, Simulator};
+    use super::{DisplayNumber, LedWatchStats, NS_PER_SECOND, Simulator};
 
     fn sample_path(relative: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -3449,6 +3482,51 @@ mod tests {
             (9..=11).contains(&stats.changes),
             "expected about 10 changes, got {}",
             stats.changes
+        );
+        let change_frequency_hz = stats
+            .change_frequency_hz()
+            .expect("measure change frequency")
+            .expect("stable flicker should have valid change frequency");
+        assert!(
+            (9.5..=10.5).contains(&change_frequency_hz),
+            "expected about 10Hz change frequency, got {change_frequency_hz}"
+        );
+    }
+
+    #[test]
+    fn change_frequency_ignores_stable_head_and_tail_gaps() {
+        let stats = LedWatchStats {
+            observed_time_ns: NS_PER_SECOND,
+            changes: 4,
+            change_intervals_ns: vec![100_000_000, 100_000_000, 100_000_000],
+            ..LedWatchStats::default()
+        };
+
+        let change_frequency_hz = stats
+            .change_frequency_hz()
+            .expect("measure change frequency")
+            .expect("uniform intervals should produce valid change frequency");
+        assert!(
+            (9.9..=10.1).contains(&change_frequency_hz),
+            "expected about 10Hz after ignoring stable head and tail, got {change_frequency_hz}"
+        );
+    }
+
+    #[test]
+    fn change_frequency_is_invalid_when_mid_window_intervals_diverge_too_much() {
+        let stats = LedWatchStats {
+            observed_time_ns: NS_PER_SECOND,
+            changes: 4,
+            change_intervals_ns: vec![100_000_000, 100_000_000, 400_000_000],
+            ..LedWatchStats::default()
+        };
+
+        assert!(
+            stats
+                .change_frequency_hz()
+                .expect("measure change frequency")
+                .is_none(),
+            "widely different mid-window intervals should not yield a numeric frequency"
         );
     }
 

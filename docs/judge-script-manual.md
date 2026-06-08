@@ -822,7 +822,10 @@ assert_eq(text[4..9], "00000", "TI 计数页: 后 5 位数值显示错误");
 - `stats.duty_percent`
 - `watch_led_stats` 同样会推进仿真时间. 对高频 PWM 建议至少观察多个周期, 并给结果留出范围余量.
 - 对 "每 0.1s / 0.2s 切换一次亮灭状态" 这类固定节奏闪烁, 优先断言 `stats.change_frequency_hz`.
-- `stats.change_frequency_hz` 统计的是 "状态切换次数 / 秒". 如果题面写的是完整闪烁周期频率, 需要先换算到状态切换频率再断言.
+- `stats.change_frequency_hz` 现在按"相邻状态切换间隔是否稳定"来估算. 只有中间那段切换间隔足够接近时它才有效.
+- 观察窗口前后的稳定亮 / 稳定灭不会被算作频率突变. 也就是说, 先静止再规律闪烁, 或规律闪烁后再停住, 仍然可以得到有效频率.
+- 如果中间各次切换间隔差异过大, `stats.change_frequency_hz` 会是 `NaN`.
+- 如果题面写的是完整闪烁周期频率, 需要先换算到状态切换频率再断言.
 - `stats.changes` 更适合判断 "完全不闪烁" 这类场景, 例如 `assert_eq(stats.changes, 0, "...")`.
 - `stats.pwm_frequency_hz` 和 `stats.duty_percent` 只用于 PWM, 不要拿来判断普通闪烁.
 

@@ -590,13 +590,13 @@ fn led_stats_map(stats: LedWatchStats) -> Result<Map, Box<EvalAltResult>> {
         i64::try_from(stats.changes).map_err(|_| runtime_error("LED 变化次数超出脚本整数范围"))?;
     let rising_edges = i64::try_from(stats.rising_edges)
         .map_err(|_| runtime_error("LED 上升沿次数超出脚本整数范围"))?;
+    let change_frequency_hz = stats
+        .change_frequency_hz()
+        .map_err(|err| runtime_error(err.to_string()))?;
     map.insert("changes".into(), changes.into());
     map.insert(
         "change_frequency_hz".into(),
-        stats
-            .change_frequency_hz()
-            .map_err(|err| runtime_error(err.to_string()))?
-            .into(),
+        change_frequency_hz.unwrap_or(f64::NAN).into(),
     );
     map.insert("rising_edges".into(), rising_edges.into());
     map.insert(
