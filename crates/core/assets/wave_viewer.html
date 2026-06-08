@@ -536,45 +536,84 @@ function base64ToUint8Array(text) {
 }
 
 function normalizeWaveSample(entry) {
-  if (!Array.isArray(entry) || entry.length < 2) {
+  if (Array.isArray(entry)) {
+    if (entry.length < 2) {
+      return { t: 0, v: null };
+    }
+    return {
+      t: Number(entry[0]),
+      v: entry[1],
+    };
+  }
+  if (!entry || typeof entry !== "object") {
     return { t: 0, v: null };
   }
   return {
-    t: Number(entry[0]),
-    v: entry[1],
+    t: Number(entry.t ?? 0),
+    v: entry.v ?? null,
   };
 }
 
 function normalizeWaveEvent(entry, signals) {
-  if (!Array.isArray(entry) || entry.length < 4) {
+  if (Array.isArray(entry)) {
+    if (entry.length < 4) {
+      return null;
+    }
+    const track = signals[Number(entry[0])];
+    if (!track) {
+      return null;
+    }
+    return {
+      track_id: track.id,
+      t: Number(entry[1]),
+      label: String(entry[2]),
+      detail: entry[3] == null ? null : String(entry[3]),
+    };
+  }
+  if (!entry || typeof entry !== "object") {
     return null;
   }
-  const track = signals[Number(entry[0])];
-  if (!track) {
+  if (entry.track_id == null) {
     return null;
   }
   return {
-    track_id: track.id,
-    t: Number(entry[1]),
-    label: String(entry[2]),
-    detail: entry[3] == null ? null : String(entry[3]),
+    track_id: String(entry.track_id),
+    t: Number(entry.t ?? 0),
+    label: String(entry.label ?? ""),
+    detail: entry.detail == null ? null : String(entry.detail),
   };
 }
 
 function normalizeWaveSignal(entry) {
-  if (!Array.isArray(entry) || entry.length < 9) {
-    return entry;
+  if (Array.isArray(entry)) {
+    if (entry.length < 9) {
+      return null;
+    }
+    return {
+      id: String(entry[0]),
+      label: String(entry[1]),
+      category: String(entry[2]),
+      group: String(entry[3]),
+      aliases: Array.isArray(entry[4]) ? entry[4].map(alias => String(alias)) : [],
+      kind: String(entry[5]),
+      format: String(entry[6]),
+      unit: entry[7] == null ? null : String(entry[7]),
+      default_visible: Boolean(entry[8]),
+    };
+  }
+  if (!entry || typeof entry !== "object") {
+    return null;
   }
   return {
-    id: String(entry[0]),
-    label: String(entry[1]),
-    category: String(entry[2]),
-    group: String(entry[3]),
-    aliases: Array.isArray(entry[4]) ? entry[4].map(alias => String(alias)) : [],
-    kind: String(entry[5]),
-    format: String(entry[6]),
-    unit: entry[7] == null ? null : String(entry[7]),
-    default_visible: Boolean(entry[8]),
+    id: String(entry.id ?? ""),
+    label: String(entry.label ?? entry.id ?? ""),
+    category: String(entry.category ?? ""),
+    group: String(entry.group ?? ""),
+    aliases: Array.isArray(entry.aliases) ? entry.aliases.map(alias => String(alias)) : [],
+    kind: String(entry.kind ?? "digital"),
+    format: String(entry.format ?? "bool"),
+    unit: entry.unit == null ? null : String(entry.unit),
+    default_visible: Boolean(entry.default_visible),
   };
 }
 
@@ -597,23 +636,65 @@ function normalizeWaveMarker(entry) {
   };
 }
 
-function normalizeWaveData(raw) {
-  if (raw && !Array.isArray(raw?.samples)) {
-    return raw;
-  }
+function compareTimedEntries(left, right) {
+  return left.t - right.t;
+}
 
+function canonicalizeWaveSamples(entries) {
+  const normalized = entries
+    .map(normalizeWaveSample)
+    .filter(point => Number.isFinite(point.t));
+  let needsSort = false;
+  for (let index = 1; index < normalized.length; index += 1) {
+    if (normalized[index].t < normalized[index - 1].t) {
+      needsSort = true;
+      break;
+    }
+  }
+  if (needsSort) {
+    normalized.sort(compareTimedEntries);
+  }
+  const canonical = [];
+  for (const point of normalized) {
+    const last = canonical[canonical.length - 1];
+    if (!last) {
+      canonical.push(point);
+      continue;
+    }
+    if (point.t === last.t) {
+      last.v = point.v;
+      if (canonical.length >= 2 && Object.is(last.v, canonical[canonical.length - 2].v)) {
+        canonical.pop();
+      }
+      continue;
+    }
+    if (Object.is(point.v, last.v)) {
+      continue;
+    }
+    canonical.push(point);
+  }
+  return canonical;
+}
+
+function normalizeWaveData(raw) {
   const signals = Array.isArray(raw?.signals)
     ? raw.signals.map(normalizeWaveSignal)
+      .filter(Boolean)
     : [];
-  const encodedSamples = Array.isArray(raw?.samples) ? raw.samples : [];
+  const encodedSamples = Array.isArray(raw?.samples) ? raw.samples : null;
+  const sampleMap = raw?.samples && typeof raw.samples === "object" && !Array.isArray(raw.samples)
+    ? raw.samples
+    : null;
   const encodedEvents = Array.isArray(raw?.events) ? raw.events : [];
   const encodedMarkers = Array.isArray(raw?.markers) ? raw.markers : [];
   const samples = {};
 
   for (let index = 0; index < signals.length; index += 1) {
     const signal = signals[index];
-    const sampleList = Array.isArray(encodedSamples[index]) ? encodedSamples[index] : [];
-    samples[signal.id] = sampleList.map(normalizeWaveSample);
+    const sampleList = encodedSamples
+      ? (Array.isArray(encodedSamples[index]) ? encodedSamples[index] : [])
+      : (sampleMap && Array.isArray(sampleMap[signal.id]) ? sampleMap[signal.id] : []);
+    samples[signal.id] = canonicalizeWaveSamples(sampleList);
   }
 
   return {
@@ -623,10 +704,12 @@ function normalizeWaveData(raw) {
     samples,
     events: encodedEvents
       .map(entry => normalizeWaveEvent(entry, signals))
-      .filter(Boolean),
+      .filter(event => event && event.track_id && Number.isFinite(event.t))
+      .sort(compareTimedEntries),
     markers: encodedMarkers
       .map(normalizeWaveMarker)
-      .filter(marker => marker && Number.isFinite(marker.t)),
+      .filter(marker => marker && Number.isFinite(marker.t))
+      .sort(compareTimedEntries),
   };
 }
 
@@ -2064,17 +2147,15 @@ function pointRangeForView(points) {
   const firstAfterStart = firstTimedIndexGreaterThan(points, viewStart);
   const firstAfterEnd = firstTimedIndexGreaterThan(points, viewEnd);
   const startIndex = Math.max(0, firstAfterStart - 1);
-  const hasLeftNeighbor = startIndex < firstAfterStart;
-  const hasRightNeighbor = firstAfterEnd < points.length;
   const endExclusive = Math.max(
     startIndex + 1,
-    Math.min(points.length, firstAfterEnd + (hasRightNeighbor ? 1 : 0))
+    Math.min(points.length, firstAfterEnd)
   );
   return {
     startIndex,
     endExclusive,
-    startTime: hasLeftNeighbor ? points[startIndex].t : viewStart,
-    endTime: hasRightNeighbor ? points[firstAfterEnd].t : viewEnd,
+    startTime: viewStart,
+    endTime: viewEnd,
   };
 }
 
