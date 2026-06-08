@@ -101,6 +101,10 @@ impl WaveCaptureWindow {
     pub(crate) fn includes(self, time_ns: u64) -> bool {
         self.enabled && self.start_ns <= time_ns && time_ns <= self.end_ns
     }
+
+    pub(crate) fn overlaps(self, start_ns: u64, end_ns: u64) -> bool {
+        self.enabled && start_ns <= self.end_ns && self.start_ns <= end_ns
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -528,7 +532,9 @@ impl WaveRecorder {
             observed_start_ns: None,
             observed_end_ns: None,
         };
-        recorder.signal_slots = recorder.register_defaults();
+        if recorder.enabled() {
+            recorder.signal_slots = recorder.register_defaults();
+        }
         recorder
     }
 

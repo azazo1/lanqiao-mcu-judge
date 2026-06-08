@@ -11,6 +11,7 @@ use crate::{event::track::EventTrack, wave::WaveCaptureWindow};
 #[derive(Debug)]
 pub(crate) struct EventGate {
     wave_window: WaveCaptureWindow,
+    script_total_refcount: AtomicU32,
     script_refcounts: [AtomicU32; EventTrack::COUNT],
 }
 
@@ -32,6 +33,7 @@ impl EventGate {
     pub(crate) fn shared(wave_window: WaveCaptureWindow) -> SharedEventGate {
         Arc::new(Self {
             wave_window,
+            script_total_refcount: AtomicU32::new(0),
             script_refcounts: array::from_fn(|_| AtomicU32::new(0)),
         })
     }
@@ -40,8 +42,16 @@ impl EventGate {
         self.wave_window.includes(time_ns)
     }
 
+    pub(crate) fn need_any_direct_event_between(&self, start_ns: u64, end_ns: u64) -> bool {
+        self.need_any_script_track() || self.wave_window.overlaps(start_ns, end_ns)
+    }
+
     pub(crate) fn need_script_track(&self, track: EventTrack) -> bool {
         self.script_refcounts[track.index()].load(Ordering::Relaxed) > 0
+    }
+
+    pub(crate) fn need_any_script_track(&self) -> bool {
+        self.script_total_refcount.load(Ordering::Relaxed) > 0
     }
 
     pub(crate) fn need_direct_event(&self, track: EventTrack, time_ns: u64) -> bool {
@@ -52,6 +62,7 @@ impl EventGate {
         self: &SharedEventGate,
         track: EventTrack,
     ) -> ScriptTrackGuard {
+        self.script_total_refcount.fetch_add(1, Ordering::Relaxed);
         self.script_refcounts[track.index()].fetch_add(1, Ordering::Relaxed);
         ScriptTrackGuard {
             gate: Arc::clone(self),
@@ -64,6 +75,7 @@ impl EventGate {
         debug_assert!(count > 0, "script track refcount underflow: {track:?}");
         if count > 0 {
             self.script_refcounts[track.index()].fetch_sub(1, Ordering::Relaxed);
+            self.script_total_refcount.fetch_sub(1, Ordering::Relaxed);
         }
     }
 }
@@ -79,13 +91,18 @@ mod tests {
         let gate = EventGate::shared(WaveCaptureWindow::bounded(100, Some(200)));
         assert!(!gate.need_direct_event(EventTrack::Uart1, 50));
         assert!(gate.need_direct_event(EventTrack::Uart1, 150));
+        assert!(gate.need_any_direct_event_between(50, 150));
+        assert!(!gate.need_any_direct_event_between(50, 99));
 
         {
             let _guard0 = gate.enable_script_track(EventTrack::Uart1);
             let _guard1 = gate.enable_script_track(EventTrack::Uart1);
+            assert!(gate.need_any_script_track());
             assert!(gate.need_direct_event(EventTrack::Uart1, 50));
+            assert!(gate.need_any_direct_event_between(50, 99));
         }
 
+        assert!(!gate.need_any_script_track());
         assert!(!gate.need_direct_event(EventTrack::Uart1, 50));
     }
 }

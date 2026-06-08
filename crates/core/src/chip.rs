@@ -46,8 +46,8 @@ use crate::{
     ids::{KeyId, KeyMode, LedId, ResetMode, SignalId, VoltageChannel},
     jumper::{BoardJumpers, LineDrive, resolve_line},
     peripherals::{
-        AnalogInputs, At24c02, Ds18b20, Ds1302, Ds1302State, I2cBus, Key, Ne555, Outputs,
-        Pcf8591, SegmentDecoder, SignalTransitionIter, UltrasonicDevice,
+        AnalogInputs, At24c02, Ds18b20, Ds1302, Ds1302State, I2cBus, Key, KeyboardLows, Ne555,
+        Outputs, Pcf8591, SegmentDecoder, SignalTransitionIter, UltrasonicDevice,
     },
     persistent_state::PersistentState,
     script::{
@@ -1395,7 +1395,7 @@ impl Simulator {
         self.capture_wave_snapshot();
         self.observe_i2c_events();
         self.observe_seg_events();
-        self.drain_event_notes();
+        self.drain_event_notes(start_time_ns, self.ctx.board.sim_time_ns);
         Ok(())
     }
 
@@ -1447,11 +1447,12 @@ impl Simulator {
     }
 
     fn capture_control_snapshot(&mut self) {
+        let time_ns = self.ctx.board.sim_time_ns;
         self.ctx.ports.refresh_inputs(&self.ctx.board);
         self.capture_wave_snapshot();
         self.observe_i2c_events();
         self.observe_seg_events();
-        self.drain_event_notes();
+        self.drain_event_notes(time_ns, time_ns);
     }
 
     fn current_i2c_lines(&self) -> (bool, bool, bool, bool) {
@@ -1572,15 +1573,20 @@ impl Simulator {
 
     fn observe_seg_events(&mut self) {
         let time_ns = self.ctx.board.sim_time_ns;
-        let mut need_seg_events = self
-            .event_gate
-            .need_direct_event(EventTrack::SegChange, time_ns);
+        let need_wave_event = self.event_gate.need_wave_event(time_ns);
+        if !need_wave_event && !self.event_gate.need_any_script_track() {
+            self.seg_event_detector.reset();
+            return;
+        }
+
+        let mut need_seg_events =
+            need_wave_event || self.event_gate.need_script_track(EventTrack::SegChange);
         if !need_seg_events {
             for digit in 1..=8 {
                 let Some(track) = EventTrack::seg_digit(digit) else {
                     continue;
                 };
-                if self.event_gate.need_direct_event(track, time_ns) {
+                if self.event_gate.need_script_track(track) {
                     need_seg_events = true;
                     break;
                 }
@@ -1624,7 +1630,13 @@ impl Simulator {
         }
     }
 
-    fn drain_event_notes(&mut self) {
+    fn drain_event_notes(&mut self, start_time_ns: u64, end_time_ns: u64) {
+        if !self
+            .event_gate
+            .need_any_direct_event_between(start_time_ns, end_time_ns)
+        {
+            return;
+        }
         for note in self.ctx.board.ds18b20.take_event_notes() {
             self.record_observed_event(note);
         }
@@ -2109,10 +2121,7 @@ impl MachinePorts {
     }
 
     fn sync_inputs(&mut self, board: &BoardModel) {
-        for index in 0..self.port_input.len() {
-            self.port_input[index] =
-                board.read_port(index, self.port_latch[index], &self.port_latch);
-        }
+        self.port_input = board.read_ports(&self.port_latch);
     }
 
     fn refresh_inputs(&mut self, board: &BoardModel) {
@@ -2660,9 +2669,7 @@ impl Uart {
         }
     }
 
-    fn tick_ns(&mut self, start_time_ns: u64, elapsed_ns: u64) -> Vec<u16> {
-        let mut sent = Vec::new();
-
+    fn tick_ns(&mut self, start_time_ns: u64, elapsed_ns: u64) {
         if self.tx_frame.is_none()
             && let Some(symbol) = self.tx_pending.pop_front()
         {
@@ -2699,7 +2706,6 @@ impl Uart {
                     started_at_ns,
                     completed_at_ns,
                 });
-                sent.push(symbol);
             } else {
                 self.tx_line_high = frame.current_level();
             }
@@ -2748,8 +2754,6 @@ impl Uart {
                 self.rx_line_high = frame.current_level();
             }
         }
-
-        sent
     }
 
     fn configure(&mut self, config: UartConfig) -> Result<()> {
@@ -3102,17 +3106,18 @@ impl BoardModel {
 
     fn advance_cycles(&mut self, cycles: u64) -> (u64, u32) {
         self.cpu_cycles = self.cpu_cycles.saturating_add(cycles);
-        let total_ns = u128::from(self.sim_time_ns_remainder)
-            .saturating_add(u128::from(cycles).saturating_mul(u128::from(NS_PER_SECOND)));
-        let elapsed_ns = (total_ns / u128::from(CPU_EXEC_HZ)).min(u128::from(u64::MAX)) as u64;
-        self.sim_time_ns_remainder = (total_ns % u128::from(CPU_EXEC_HZ)) as u64;
+        let total_ns = self
+            .sim_time_ns_remainder
+            .saturating_add(cycles.saturating_mul(NS_PER_SECOND));
+        let elapsed_ns = total_ns / CPU_EXEC_HZ;
+        self.sim_time_ns_remainder = total_ns % CPU_EXEC_HZ;
         self.sim_time_ns = self.sim_time_ns.saturating_add(elapsed_ns);
         self.ds1302.tick_ns(elapsed_ns);
-        let total_system_cycles = u128::from(self.system_cycle_remainder)
-            .saturating_add(u128::from(cycles).saturating_mul(u128::from(SYSTEM_HZ)));
-        let system_cycles =
-            (total_system_cycles / u128::from(CPU_EXEC_HZ)).min(u128::from(u32::MAX)) as u32;
-        self.system_cycle_remainder = (total_system_cycles % u128::from(CPU_EXEC_HZ)) as u64;
+        let total_system_cycles = self
+            .system_cycle_remainder
+            .saturating_add(cycles.saturating_mul(SYSTEM_HZ));
+        let system_cycles = (total_system_cycles / CPU_EXEC_HZ).min(u64::from(u32::MAX)) as u32;
+        self.system_cycle_remainder = total_system_cycles % CPU_EXEC_HZ;
         (elapsed_ns, system_cycles)
     }
 
@@ -3161,39 +3166,110 @@ impl BoardModel {
         )
     }
 
+    fn read_ports(&self, latches: &[u8; 6]) -> [u8; 6] {
+        let mut values = *latches;
+        values[1] = self.read_port1(latches[1]);
+        values[2] = self.read_port2(latches[2]);
+        match self.key_mode {
+            KeyMode::Keyboard => {
+                let lows = self.keys.keyboard_lows(latches);
+                values[3] =
+                    self.read_port3_with_keyboard_lows(latches[3], latches, &lows, lows.cols[3]);
+                values[4] = self.read_port4_with_keyboard_lows(latches[4], &lows);
+            }
+            KeyMode::Button => {
+                let row_lows = self.keys.button_row_lows();
+                values[3] = self.read_port3_with_button_lows(latches[3], latches, &row_lows);
+            }
+        }
+        values
+    }
+
     fn read_port(&self, index: usize, latch: u8, all_latches: &[u8; 6]) -> u8 {
-        let mut value = latch;
         match index {
-            1 => {
-                value = apply_open_drain_bit(value, 4, self.ds18b20.drive_low);
-                value = apply_push_pull_bit(value, 0, true);
-                value = apply_push_pull_bit(value, 1, self.ultrasonic.rx_level());
-            }
-            2 => {
-                value = self.apply_i2c_lines(value);
-                value = apply_push_pull_bit(value, 3, self.ds1302.io_level);
-                value = apply_push_pull_bit(value, 4, self.read_hall_level());
-            }
-            3 => {
-                value = set_bit_level(value, 4, self.read_p34_level(latch, all_latches));
-                let rows = [(0_u8, 0_u8), (1, 1), (2, 2), (3, 3)];
-                for (bit, row) in rows {
-                    let low = match self.key_mode {
-                        KeyMode::Keyboard => self.keys.row_low(row, all_latches),
-                        KeyMode::Button => self.keys.button_row_low(row),
-                    };
-                    value = set_bit_level(value, bit, !low);
+            1 => self.read_port1(latch),
+            2 => self.read_port2(latch),
+            3 => match self.key_mode {
+                KeyMode::Keyboard => {
+                    let lows = self.keys.keyboard_lows(all_latches);
+                    self.read_port3_with_keyboard_lows(latch, all_latches, &lows, lows.cols[3])
                 }
-                value = set_bit_level(value, 5, true);
-            }
+                KeyMode::Button => self.read_port3_with_button_lows(
+                    latch,
+                    all_latches,
+                    &self.keys.button_row_lows(),
+                ),
+            },
             4 if self.key_mode == KeyMode::Keyboard => {
-                value = apply_open_drain_bit(value, 2, self.keys.col_low(1, all_latches));
-                value = apply_open_drain_bit(value, 4, self.keys.col_low(0, all_latches));
+                self.read_port4_with_keyboard_lows(latch, &self.keys.keyboard_lows(all_latches))
             }
-            4 => {}
-            _ => {}
+            _ => latch,
+        }
+    }
+
+    fn read_port1(&self, latch: u8) -> u8 {
+        let mut value = latch;
+        value = apply_open_drain_bit(value, 4, self.ds18b20.drive_low);
+        value = apply_push_pull_bit(value, 0, true);
+        apply_push_pull_bit(value, 1, self.ultrasonic.rx_level())
+    }
+
+    fn read_port2(&self, latch: u8) -> u8 {
+        let mut value = self.apply_i2c_lines(latch);
+        value = apply_push_pull_bit(value, 3, self.ds1302.io_level);
+        apply_push_pull_bit(value, 4, self.read_hall_level())
+    }
+
+    fn read_port3_base(&self, latch: u8, all_latches: &[u8; 6]) -> u8 {
+        let value = set_bit_level(latch, 4, self.read_p34_level(latch, all_latches, None));
+        set_bit_level(value, 5, true)
+    }
+
+    fn read_port3_with_keyboard_lows(
+        &self,
+        latch: u8,
+        all_latches: &[u8; 6],
+        lows: &KeyboardLows,
+        col4_low: bool,
+    ) -> u8 {
+        let mut value = self.read_port3_base_with_col4_low(latch, all_latches, col4_low);
+        for bit in 0..4 {
+            value = set_bit_level(value, bit as u8, !lows.rows[bit]);
         }
         value
+    }
+
+    fn read_port3_base_with_col4_low(
+        &self,
+        latch: u8,
+        all_latches: &[u8; 6],
+        col4_low: bool,
+    ) -> u8 {
+        let value = set_bit_level(
+            latch,
+            4,
+            self.read_p34_level(latch, all_latches, Some(col4_low)),
+        );
+        set_bit_level(value, 5, true)
+    }
+
+    fn read_port3_with_button_lows(
+        &self,
+        latch: u8,
+        all_latches: &[u8; 6],
+        row_lows: &[bool; 4],
+    ) -> u8 {
+        let mut value = self.read_port3_base(latch, all_latches);
+        for (bit, low) in row_lows.iter().copied().enumerate() {
+            value = set_bit_level(value, bit as u8, !low);
+        }
+        value
+    }
+
+    fn read_port4_with_keyboard_lows(&self, latch: u8, lows: &KeyboardLows) -> u8 {
+        let mut value = latch;
+        value = apply_open_drain_bit(value, 2, lows.cols[1]);
+        apply_open_drain_bit(value, 4, lows.cols[0])
     }
 
     fn set_key(&mut self, name: &str, pressed: bool) -> Result<()> {
@@ -3261,7 +3337,9 @@ impl BoardModel {
         true
     }
 
-    fn read_p34_level(&self, latch: u8, all_latches: &[u8; 6]) -> bool {
+    fn read_p34_level(&self, latch: u8, all_latches: &[u8; 6], col4_low: Option<bool>) -> bool {
+        let key_col4_low = self.key_mode == KeyMode::Keyboard
+            && col4_low.unwrap_or_else(|| self.keys.col_low(3, all_latches));
         let drivers = [
             (
                 "mcu.p3.4",
@@ -3273,7 +3351,7 @@ impl BoardModel {
             ),
             (
                 "key.col4",
-                if self.key_mode == KeyMode::Keyboard && self.keys.col_low(3, all_latches) {
+                if key_col4_low {
                     LineDrive::DriveLow
                 } else {
                     LineDrive::HighZ
@@ -4281,7 +4359,7 @@ mod tests {
         );
 
         uart.write(super::UART1_SFR_SBUF, 0x55);
-        let _ = uart.tick_ns(0, 1);
+        uart.tick_ns(0, 1);
 
         assert!(uart.take_event_notes().is_empty());
     }

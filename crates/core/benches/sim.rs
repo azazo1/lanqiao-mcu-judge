@@ -204,7 +204,6 @@ fn bench_script_ops(c: &mut Criterion) {
             let next_ns = sim_time_ns() + 1000;
             total += run_to(|| sim_time_ns() >= next_ns, 10_000);
         }
-        print(total);
     "#;
 
     group.bench_function("run_to_predicate_200_rounds", |b| {

@@ -2631,7 +2631,8 @@ fn run_to_callback_wait(
         let ready = predicate
             .call_within_context::<bool>(&ctx, ())
             .map_err(|err| runtime_error(err.to_string()))?;
-        let elapsed_ns = current_sim_time_ns(sim).saturating_sub(start_ns);
+        let mut sim = sim.lock().map_err(|_| runtime_error("仿真器锁已损坏"))?;
+        let elapsed_ns = sim.sim_time_ns().saturating_sub(start_ns);
         if ready {
             if let Some(timeout_ns) = timeout_ns
                 && elapsed_ns > timeout_ns
@@ -2649,9 +2650,7 @@ fn run_to_callback_wait(
                 "run_to 回调等待超时: timeout_ns={timeout_ns}"
             )));
         }
-        sim.lock()
-            .map_err(|_| runtime_error("仿真器锁已损坏"))?
-            .step_once()
+        sim.step_once()
             .map_err(|err| runtime_error(err.to_string()))?;
     }
 }

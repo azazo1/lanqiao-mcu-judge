@@ -19,7 +19,7 @@ pub use ds1302::Ds1302State;
 pub(crate) use i2c::I2cBus;
 #[cfg(test)]
 pub(crate) use i2c_slave::I2cSlaveDevice;
-pub(crate) use keys::Key;
+pub(crate) use keys::{Key, KeyboardLows};
 pub(crate) use ne555::{Ne555, SignalEdge, SignalTransition, SignalTransitionIter};
 pub(crate) use pcf8591::Pcf8591;
 pub(crate) use ultrasonic::UltrasonicDevice;
