@@ -319,6 +319,9 @@ impl Simulator {
 
     fn reset_power_cycle(&mut self) -> Result<()> {
         let retained = self.ctx.board.retained_state();
+        let retained_sim_time_ns = self.ctx.board.sim_time_ns;
+        let retained_sim_time_ns_remainder = self.ctx.board.sim_time_ns_remainder;
+        let retained_system_cycle_remainder = self.ctx.board.system_cycle_remainder;
         self.cpu = Cpu::new();
         self.interrupt_poll_blocked_instructions = 0;
         self.active_interrupts.clear();
@@ -328,6 +331,9 @@ impl Simulator {
             self.code_image.clone(),
             Arc::clone(&self.event_gate),
         );
+        self.ctx.board.sim_time_ns = retained_sim_time_ns;
+        self.ctx.board.sim_time_ns_remainder = retained_sim_time_ns_remainder;
+        self.ctx.board.system_cycle_remainder = retained_system_cycle_remainder;
         self.ctx.board.load_retained_state(&retained);
         self.ctx.ports.sync_inputs(&self.ctx.board);
         self.capture_wave_snapshot();
@@ -4252,6 +4258,17 @@ mod tests {
         assert_eq!(sim.ctx.ports.board_latches[0], 0xFE);
         assert!(sim.led_on(1).expect("read L1 after cpu reset"));
         assert!(sim.relay_on(), "relay latch should survive cpu reset");
+    }
+
+    #[test]
+    fn power_reset_preserves_sim_time_ns() {
+        let mut sim = Simulator::nop(false);
+        sim.run_us(100).expect("advance sim time");
+        let before_reset_ns = sim.sim_time_ns();
+
+        sim.reset_with_mode(ResetMode::Power).expect("power reset");
+
+        assert_eq!(sim.sim_time_ns(), before_reset_ns);
     }
 
     #[test]

@@ -3350,7 +3350,7 @@ mod tests {
             reset(CPU_RESET);
             assert_eq(sim_time_ns(), before, "cpu reset should keep current timestamp");
             reset(POWER_RESET);
-            assert_eq(sim_time_ns(), 0, "power reset should restart simulator time");
+            assert_eq(sim_time_ns(), before, "power reset should keep current timestamp");
         "#;
         eval_source(sim, "test:reset_modes", script).expect("run reset mode script");
     }
