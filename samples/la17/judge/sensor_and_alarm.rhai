@@ -37,6 +37,13 @@ fn assert_dist_freq_page(dist_min, dist_max, freq_min, freq_max, label) {
     assert_in(parse_int(text[4..8]), freq_min..=freq_max, label + ": 频率显示超出范围");
 }
 
+fn assert_float_window(actual, min, max, label) {
+    assert(
+        actual >= min && actual <= max,
+        label + ": 应在[" + min + "," + max + "], 实际" + actual
+    );
+}
+
 set_rtc(#{
     year: 26,
     month: 6,
@@ -120,7 +127,7 @@ assert(!led_on(L7), "距离 15cm: L7 状态错误, 期望熄灭, 实际点亮");
 set_distance_cm(14);
 run_ms(320);
 let dist_alarm_low = watch_led_stats(L7, 1200);
-assert_in(dist_alarm_low.changes, 3..=6, "距离 14cm: L7 告警闪烁次数超出范围");
+assert_float_window(dist_alarm_low.change_frequency_hz, 2.5, 5.0, "距离 14cm: L7 告警状态切换频率");
 
 set_distance_cm(69);
 run_ms(320);
@@ -137,12 +144,12 @@ assert(!led_on(L7), "距离 70cm: L7 状态错误, 期望熄灭, 实际点亮");
 set_distance_cm(71);
 run_ms(320);
 let dist_alarm_high = watch_led_stats(L7, 1200);
-assert_in(dist_alarm_high.changes, 3..=6, "距离 71cm: L7 告警闪烁次数超出范围");
+assert_float_window(dist_alarm_high.change_frequency_hz, 2.5, 5.0, "距离 71cm: L7 告警状态切换频率");
 
 set_distance_cm(10);
 run_ms(320);
 let dist_alarm = watch_led_stats(L7, 1200);
-assert_in(dist_alarm.changes, 3..=6, "液位告警: L7 闪烁次数超出范围");
+assert_float_window(dist_alarm.change_frequency_hz, 2.5, 5.0, "液位告警: L7 状态切换频率");
 
 set_distance_cm(35);
 run_ms(320);
@@ -153,7 +160,7 @@ assert(!led_on(L7), "距离恢复正常: L7 状态错误, 期望熄灭, 实际�
 set_frequency_hz(2200);
 run_ms(1300);
 let freq_alarm = watch_led_stats(L8, 700);
-assert_in(freq_alarm.changes, 4..=7, "风机告警: L8 闪烁次数超出范围");
+assert_float_window(freq_alarm.change_frequency_hz, 5.7, 10.0, "风机告警: L8 状态切换频率");
 
 set_frequency_hz(1200);
 run_ms(1300);
@@ -164,7 +171,7 @@ assert(!led_on(L8), "频率恢复正常: L8 状态错误, 期望熄灭, 实际�
 set_frequency_hz(999);
 run_ms(1300);
 let freq_alarm_low = watch_led_stats(L8, 700);
-assert_in(freq_alarm_low.changes, 4..=7, "频率 999Hz: L8 告警闪烁次数超出范围");
+assert_float_window(freq_alarm_low.change_frequency_hz, 5.7, 10.0, "频率 999Hz: L8 告警状态切换频率");
 
 set_frequency_hz(1000);
 run_ms(1300);
@@ -193,4 +200,4 @@ assert(!led_on(L8), "频率 2000Hz: L8 状态错误, 期望熄灭, 实际点亮"
 set_frequency_hz(2001);
 run_ms(1300);
 let freq_alarm_high = watch_led_stats(L8, 700);
-assert_in(freq_alarm_high.changes, 4..=7, "频率 2001Hz: L8 告警闪烁次数超出范围");
+assert_float_window(freq_alarm_high.change_frequency_hz, 5.7, 10.0, "频率 2001Hz: L8 告警状态切换频率");

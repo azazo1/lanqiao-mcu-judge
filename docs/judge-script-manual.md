@@ -821,13 +821,17 @@ assert_eq(text[4..9], "00000", "TI 计数页: 后 5 位数值显示错误");
 - `stats.pwm_frequency_hz`
 - `stats.duty_percent`
 - `watch_led_stats` 同样会推进仿真时间. 对高频 PWM 建议至少观察多个周期, 并给结果留出范围余量.
+- 对 "每 0.1s / 0.2s 切换一次亮灭状态" 这类固定节奏闪烁, 优先断言 `stats.change_frequency_hz`.
+- `stats.change_frequency_hz` 统计的是 "状态切换次数 / 秒". 如果题面写的是完整闪烁周期频率, 需要先换算到状态切换频率再断言.
+- `stats.changes` 更适合判断 "完全不闪烁" 这类场景, 例如 `assert_eq(stats.changes, 0, "...")`.
+- `stats.pwm_frequency_hz` 和 `stats.duty_percent` 只用于 PWM, 不要拿来判断普通闪烁.
 
 例如 `led_flicker` 可以直接这样写:
 
 ```rhai
 run_ms(20);
 let stats = watch_led_stats(L1, 1000);
-assert_in(stats.changes, 9..=11, "L1 闪烁统计: 1 秒内翻转次数超出范围");
+assert_in(stats.change_frequency_hz, 9..=11, "L1 闪烁统计: 状态切换频率超出范围");
 ```
 
 - 但是评测最好留有余量, 防止误差.

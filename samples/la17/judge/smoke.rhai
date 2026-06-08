@@ -28,6 +28,13 @@ fn assert_dist_freq_page(dist_min, dist_max, freq_min, freq_max, label) {
     assert_in(parse_int(text[4..8]), freq_min..=freq_max, label + ": 频率显示超出范围");
 }
 
+fn assert_float_window(actual, min, max, label) {
+    assert(
+        actual >= min && actual <= max,
+        label + ": 应在[" + min + "," + max + "], 实际" + actual
+    );
+}
+
 set_rtc(#{
     year: 26,
     month: 6,
@@ -53,7 +60,7 @@ assert_eq(display_text(30), "23-59-50", "上电检查: 默认时间页显示错�
 assert_page_led(0, "上电页面指示");
 
 let heartbeat = watch_led_stats(L5, 2100);
-assert_in(heartbeat.changes, 3..=5, "上电检查: L5 心跳灯翻转次数超出范围");
+assert_float_window(heartbeat.change_frequency_hz, 1.4, 2.4, "上电检查: L5 心跳灯状态切换频率");
 
 tap_key(S5, 80);
 run_ms(120);

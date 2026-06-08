@@ -548,8 +548,8 @@ ckpt(3, "无异常状态发生", "继电器断开", || {
 ckpt(4, "2s内频率在300hz->1700hz", "L8以0.2s为间隔闪烁", || {
     prepare_504_alarm_300_scene();
     let stats = watch_led_stats(L8, 3000);
-    assert_int_window(stats.changes, 14, 16, "504 场景 L8 闪烁次数");
-    "changes=" + stats.changes
+    assert_float_window(stats.change_frequency_hz, 4.6, 5.4, "504 场景 L8 闪烁频率");
+    "change_frequency_hz=" + stats.change_frequency_hz
 });
 
 ckpt(5, "504异常状态发生", "继电器吸合(无异常断开)", || {
@@ -970,8 +970,8 @@ ckpt(62, "频率趋势异常", "L7以0.1s为间隔闪烁", || {
     prepare_503_alarm_scene();
     run_ms(1000);
     let stats = watch_led_stats(L7, 1000);
-    assert_int_window(stats.changes, 9, 11, "503 场景 L7 闪烁次数");
-    "changes=" + stats.changes
+    assert_float_window(stats.change_frequency_hz, 8.0, 12.0, "503 场景 L7 闪烁频率");
+    "change_frequency_hz=" + stats.change_frequency_hz
 });
 
 // 题面只写了"上电后第一秒开始, 间隔 1 秒连续采集", 没写死测频门宽, 也没写死
