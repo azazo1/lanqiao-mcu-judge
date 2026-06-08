@@ -13,9 +13,6 @@ test:
     cargo test --release
     just judge-samples
 
-bench-run-to-callback:
-    cargo test --release bench_run_to_callback_predicate -- --ignored --nocapture
-
 alias sj := stcjudge
 stcjudge *args:
     cargo run --release -- {{ args }}
@@ -69,3 +66,8 @@ keil-doctor sample="arith_bench":
 # 自动分析 Keil 编译产物中适合 peek_* / poke_* 使用的固定地址符号.
 analyze-objects sample pattern="":
     @just --justfile {{ quote(platform_justfile) }} --working-directory {{ quote(justfile_directory()) }} analyze-objects {{ quote(sample) }} {{ quote(pattern) }}
+
+# 示例: just bench
+# 运行 criterion 仿真基准.
+bench:
+    cargo bench --bench sim

@@ -9,18 +9,18 @@ use crate::persistent_state::Ds1302PersistentState;
 use crate::wave::{WaveCaptureWindow, WaveEventNote};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct Ds1302State {
-    pub(crate) hour: Option<u8>,
-    pub(crate) minute: Option<u8>,
-    pub(crate) second: Option<u8>,
-    pub(crate) day_of_week: Option<u8>,
-    pub(crate) date: Option<u8>,
-    pub(crate) month: Option<u8>,
-    pub(crate) year: Option<u8>,
-    pub(crate) halted: Option<bool>,
-    pub(crate) hour_mode_12: Option<bool>,
-    pub(crate) write_protect: Option<bool>,
-    pub(crate) trickle_charge: Option<u8>,
+pub struct Ds1302State {
+    pub hour: Option<u8>,
+    pub minute: Option<u8>,
+    pub second: Option<u8>,
+    pub day_of_week: Option<u8>,
+    pub date: Option<u8>,
+    pub month: Option<u8>,
+    pub year: Option<u8>,
+    pub halted: Option<bool>,
+    pub hour_mode_12: Option<bool>,
+    pub write_protect: Option<bool>,
+    pub trickle_charge: Option<u8>,
 }
 
 impl Ds1302State {

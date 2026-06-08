@@ -7,11 +7,11 @@ use i8051::{
 };
 use tracing::{trace, warn};
 
-pub(crate) const SYSTEM_HZ: u64 = 12_000_000;
-pub(crate) const CPU_EXEC_HZ: u64 = 12_000_000;
-pub(crate) const NS_PER_SECOND: u64 = 1_000_000_000;
-pub(crate) const NS_PER_MILLISECOND: u64 = 1_000_000;
-pub(crate) const NS_PER_MICROSECOND: u64 = 1_000;
+pub const SYSTEM_HZ: u64 = 12_000_000;
+pub const CPU_EXEC_HZ: u64 = 12_000_000;
+pub const NS_PER_SECOND: u64 = 1_000_000_000;
+pub const NS_PER_MILLISECOND: u64 = 1_000_000;
+pub const NS_PER_MICROSECOND: u64 = 1_000;
 const BOARD_POWER_ON_LATCHES: [u8; 4] = [0x00, 0x70, 0x00, 0x00];
 const INTERRUPT_ENTRY_TICKS: u32 = 3;
 const UART_INTERRUPT_REASSERT_INSTRUCTIONS: u8 = 2;
@@ -2361,7 +2361,7 @@ impl ReadOnlyMemoryMapper for InterruptPollMaskCode<'_> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum UartParity {
+pub enum UartParity {
     None,
     Odd,
     Even,
@@ -2370,18 +2370,18 @@ pub(crate) enum UartParity {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum UartStopBits {
+pub enum UartStopBits {
     One,
     OnePointFive,
     Two,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct UartConfig {
-    pub(crate) data_bits: u8,
-    pub(crate) baud_rate: u32,
-    pub(crate) stop_bits: UartStopBits,
-    pub(crate) parity: UartParity,
+pub struct UartConfig {
+    pub data_bits: u8,
+    pub baud_rate: u32,
+    pub stop_bits: UartStopBits,
+    pub parity: UartParity,
 }
 
 impl Default for UartConfig {
@@ -2396,7 +2396,7 @@ impl Default for UartConfig {
 }
 
 impl UartConfig {
-    pub(crate) fn validate(self) -> Result<()> {
+    pub fn validate(self) -> Result<()> {
         if !(5..=9).contains(&self.data_bits) {
             bail!("串口数据位只支持 5..=9");
         }
