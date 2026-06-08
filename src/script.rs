@@ -3248,7 +3248,7 @@ fn script_time_target_ns(
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
-    use std::time::{Instant, SystemTime, UNIX_EPOCH};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use rhai::Scope;
 
@@ -3650,23 +3650,4 @@ mod tests {
         assert!(!formatted.contains("(from "), "{formatted}");
     }
 
-    #[test]
-    #[ignore = "manual benchmark"]
-    fn bench_run_to_callback_predicate() {
-        let sim = Simulator::nop(false);
-        let script = r#"
-            set_frequency_hz(2000);
-            let rounds = 200;
-            let total = 0;
-            for i in 0..rounds {
-                let next_ns = sim_time_ns() + 1000;
-                total += run_to(|| sim_time_ns() >= next_ns, 10_000);
-            }
-            total
-        "#;
-        let started = Instant::now();
-        eval_source(sim, "bench:run_to_callback", script).expect("run callback benchmark");
-        let elapsed = started.elapsed();
-        eprintln!("bench_run_to_callback_predicate elapsed={elapsed:?}");
-    }
 }

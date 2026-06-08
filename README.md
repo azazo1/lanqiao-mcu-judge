@@ -53,6 +53,32 @@ run_ms(100);
 EOF
 ```
 
+运行 criterion 仿真基准:
+
+```bash
+just bench
+```
+
+或直接执行:
+
+```bash
+cargo bench --bench sim
+```
+
+## 作为库复用
+
+除了 `stcjudge` CLI, 当前仓库也可以作为库被其他 crate 直接依赖.
+
+- `Simulator`: 仿真器核心入口.
+- `RunToTarget`, `RunToEdge`: 相位对齐和信号等待.
+- `WaveCaptureOptions`: 波形采集配置.
+- `Ds1302State`, `UartConfig`: 常见外设状态和串口配置.
+- `BenchHarness`: 面向单功能 bench 的轻量包装.
+
+这意味着后续独立 GUI crate 可以直接调用仿真核心 API, 不需要通过启动 `stcjudge` CLI 的方式间接实现功能.
+
+当前的 criterion 基准不依赖 sample 目录下的 HEX 文件, 而是使用内建的稳定代码镜像, 并按单个功能拆分为执行, 输入注入, 状态读取, wave 导出等微基准, 便于长期跟踪性能变化.
+
 ## 评测脚本
 
 - 评测脚本约定放在 `sample/xxx/judge/`.

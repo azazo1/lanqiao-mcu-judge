@@ -12,6 +12,10 @@ path = "src/main.rs"
 name = "analyze-objects"
 path = "src/bin/analyze_objects.rs"
 
+[[bench]]
+name = "sim"
+harness = false
+
 [dependencies]
 anyhow = "1.0.100"
 base64 = "0.22.1"
@@ -25,6 +29,9 @@ serde = { version = "1.0.228", features = ["derive"] }
 tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
+
+[dev-dependencies]
+criterion = "0.8.2"
 
 [patch.crates-io]
 i8051 = { path = "vendor/i8051" }

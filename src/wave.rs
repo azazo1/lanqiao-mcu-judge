@@ -43,12 +43,12 @@ const KEY_NAMES: [&str; 16] = [
 const LED_NAMES: [&str; 8] = ["L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8"];
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct WaveCaptureOptions {
-    pub(crate) html_path: Option<PathBuf>,
-    pub(crate) json_path: Option<PathBuf>,
-    pub(crate) msgpack_path: Option<PathBuf>,
-    pub(crate) start_ns: u64,
-    pub(crate) end_ns: Option<u64>,
+pub struct WaveCaptureOptions {
+    pub html_path: Option<PathBuf>,
+    pub json_path: Option<PathBuf>,
+    pub msgpack_path: Option<PathBuf>,
+    pub start_ns: u64,
+    pub end_ns: Option<u64>,
 }
 
 impl WaveCaptureOptions {
