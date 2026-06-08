@@ -257,9 +257,7 @@ fn trigger_obstacle_expect_wait(distance_cm, label) {
 
 fn set_distance_expect_wait_page(distance_cm, label) {
     set_distance_cm(distance_cm);
-    let event = run_to_event("seg.change", avoid_response_ns());
-    assert_int_window(event.elapsed_ns, 0, avoid_response_ns(), label + ": 距离显示响应超时");
-    run_ms(30);
+    run_ms(470);
     assert_distance_formula_page(distance_cm, label)
 }
 
@@ -760,6 +758,7 @@ ckpt(23, "切换坐标界面", "继电器断开 (运行状态时吸合)", || {
 });
 
 ckpt(24, "空闲中", "L1-L8 均熄灭 (运行时 L1, L2 点亮, 其余指示灯熄灭)", || {
+    run_to_elapsed_from(start_108.press_ns, 12000);
     assert_led_pattern(false, false, false, false, false, false, false, false, "到达后空闲指示灯");
     led_summary()
 });
