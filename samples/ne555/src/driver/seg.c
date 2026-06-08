@@ -1,0 +1,17 @@
+#include "seg.h"
+
+u8 sg_dula[] = {0x3F,0x06,0x5B,0x4F,0x66,0x6D,0x7D,0x07,0x7F,0x6F, 0x00};
+
+void write_p0(u8 dat, u8 addr) {
+	u8 t;
+	P0 = dat;
+	t = P2 & 0x1f;
+	P2 = t | addr;
+	P2 = t;
+}
+
+void sg_disp(u8 pos, u8 dula, bit dot) {
+	write_p0(0xff, 0xe0);
+	write_p0(1 << pos, 0xc0);
+	write_p0(~(sg_dula[dula] | (dot ? 0x80 : 0x00)), 0xe0);
+}

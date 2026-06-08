@@ -1,9 +1,9 @@
 /target
-/sample/*/prj/Objects/*
-!/sample/*/prj/Objects/*.hex
-/sample/*/prj/Listings/
-/sample/*/prj/*.uvgui.*
+/samples/*/prj/Objects/*
+!/samples/*/prj/Objects/*.hex
+/samples/*/prj/Listings/
+/samples/*/prj/*.uvgui.*
 /outputs/
 /profile.json.gz
-/sample/*.zip
+/samples/*.zip
 .env
