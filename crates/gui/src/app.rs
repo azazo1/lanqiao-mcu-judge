@@ -64,6 +64,12 @@ impl UartOutputSignature {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TemporaryKeyPress {
+    key: KeyId,
+    restore_pressed: bool,
+}
+
 pub struct StcjudgeGuiApp {
     session: GuiSession,
     tab: AppTab,
@@ -89,6 +95,7 @@ pub struct StcjudgeGuiApp {
     wave_end_input: String,
     repl_input: String,
     repl_history: Vec<String>,
+    temporary_key_press: Option<TemporaryKeyPress>,
 }
 
 impl Default for StcjudgeGuiApp {
@@ -118,6 +125,7 @@ impl Default for StcjudgeGuiApp {
             wave_end_input: String::new(),
             repl_input: "display_text()".to_owned(),
             repl_history: Vec::new(),
+            temporary_key_press: None,
         }
     }
 }
@@ -491,27 +499,40 @@ impl StcjudgeGuiApp {
 
     fn draw_inputs_panel(&mut self, ui: &mut egui::Ui) {
         ui.heading("按键");
+        let mut primary_down_key = None;
         egui::Grid::new("keys-grid")
             .num_columns(4)
             .spacing([5.0, 5.0])
             .show(ui, |ui| {
                 for (index, key) in KEY_ORDER.into_iter().enumerate() {
                     let pressed = self.session.snapshot.key_states[key_snapshot_index(key)];
+                    let display_pressed = pressed
+                        || self
+                            .temporary_key_press
+                            .is_some_and(|temporary| temporary.key == key);
                     let label = format!("{key:?}");
-                    let response =
-                        ui.add_sized([50.0, 28.0], egui::Button::new(label).selected(pressed));
-                    if response.clicked() {
-                        self.run_action(|session| {
-                            session.sim.set_key_id(key, !pressed);
-                            session.refresh();
-                            Ok(())
-                        });
+                    let response = ui
+                        .add_sized(
+                            [50.0, 28.0],
+                            egui::Button::new(label).selected(display_pressed),
+                        )
+                        .on_hover_text("左键按住临时按下, 右键切换锁定");
+                    if response.clicked_by(egui::PointerButton::Secondary) {
+                        self.set_key_pressed(key, !pressed);
+                    }
+                    let primary_down_on_key = response.is_pointer_button_down_on()
+                        && ui.input(|input| input.pointer.primary_down());
+                    if primary_down_on_key {
+                        primary_down_key = Some((key, pressed));
                     }
                     if index % 4 == 3 {
                         ui.end_row();
                     }
                 }
             });
+        if self.sync_temporary_key_press(primary_down_key) {
+            ui.ctx().request_repaint();
+        }
 
         ui.horizontal_wrapped(|ui| {
             ui.label("按键模式");
@@ -640,6 +661,43 @@ impl StcjudgeGuiApp {
 
         ui.add_space(4.0);
         self.draw_repl_panel(ui);
+    }
+
+    fn set_key_pressed(&mut self, key: KeyId, pressed: bool) {
+        self.run_action(|session| {
+            session.sim.set_key_id(key, pressed);
+            session.refresh();
+            Ok(())
+        });
+    }
+
+    fn sync_temporary_key_press(&mut self, active: Option<(KeyId, bool)>) -> bool {
+        match (self.temporary_key_press, active) {
+            (Some(current), Some((key, _))) if current.key == key => false,
+            (Some(current), Some((key, restore_pressed))) => {
+                self.set_key_pressed(current.key, current.restore_pressed);
+                self.temporary_key_press = Some(TemporaryKeyPress {
+                    key,
+                    restore_pressed,
+                });
+                self.set_key_pressed(key, true);
+                true
+            }
+            (None, Some((key, restore_pressed))) => {
+                self.temporary_key_press = Some(TemporaryKeyPress {
+                    key,
+                    restore_pressed,
+                });
+                self.set_key_pressed(key, true);
+                true
+            }
+            (Some(current), None) => {
+                self.set_key_pressed(current.key, current.restore_pressed);
+                self.temporary_key_press = None;
+                true
+            }
+            (None, None) => false,
+        }
     }
 
     fn draw_repl_panel(&mut self, ui: &mut egui::Ui) {
