@@ -329,11 +329,17 @@ fn draw_uart_output(
 ) -> bool {
     let mut at_scroll_bottom = false;
     ui.label(format!("{}:", view.label));
+    let focus_id = ui.make_persistent_id(format!("board-overview-{}-output-focus", view.label));
+    let scroll_focused = ui
+        .ctx()
+        .data_mut(|data| data.get_temp::<bool>(focus_id).unwrap_or(false));
+    let stroke_color = if scroll_focused {
+        ui.visuals().selection.stroke.color
+    } else {
+        ui.visuals().widgets.noninteractive.bg_stroke.color
+    };
     egui::Frame::new()
-        .stroke(egui::Stroke::new(
-            1.0,
-            ui.visuals().widgets.noninteractive.bg_stroke.color,
-        ))
+        .stroke(egui::Stroke::new(1.0, stroke_color))
         .inner_margin(egui::Margin::symmetric(6, 4))
         .show(ui, |ui| {
             let content = match mode {
@@ -349,21 +355,39 @@ fn draw_uart_output(
             } else {
                 content.as_str()
             };
+            let scroll_source = if scroll_focused {
+                egui::scroll_area::ScrollSource::ALL
+            } else {
+                egui::scroll_area::ScrollSource::SCROLL_BAR
+            };
             let mut output = egui::ScrollArea::both()
                 .id_salt(format!("board-overview-{}-output", view.label))
                 .auto_shrink([false, false])
                 .max_height(56.0)
+                .scroll_source(scroll_source)
                 .stick_to_bottom(stick_to_bottom)
                 .show(ui, |ui| {
                     ui.set_min_width(ui.available_width());
                     ui.monospace(output);
                 });
-            if ui.rect_contains_pointer(output.inner_rect) {
+            let clicked_inside = ui.rect_contains_pointer(output.inner_rect)
+                && ui.input(|input| input.pointer.primary_clicked());
+            let clicked_outside = !ui.rect_contains_pointer(output.inner_rect)
+                && ui.input(|input| input.pointer.primary_clicked());
+            if clicked_inside {
+                ui.ctx().data_mut(|data| {
+                    data.insert_temp(focus_id, true);
+                });
+            } else if clicked_outside {
+                ui.ctx().data_mut(|data| {
+                    data.insert_temp(focus_id, false);
+                });
+            }
+            if scroll_focused && ui.rect_contains_pointer(output.inner_rect) {
                 ui.input_mut(|input| {
                     input.smooth_scroll_delta = egui::Vec2::ZERO;
                 });
             }
-
             let max_offset_y = (output.content_size.y - output.inner_rect.height()).max(0.0);
             let has_vertical_overflow = max_offset_y > 1.0;
             at_scroll_bottom = has_vertical_overflow && output.state.offset.y >= max_offset_y - 1.0;
