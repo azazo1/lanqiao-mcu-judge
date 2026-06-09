@@ -6,8 +6,8 @@ use std::{
 };
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use std::hint::black_box;
 use stcjudge::{BenchHarness, Simulator, WaveCaptureOptions, run_script_source};
+use std::hint::black_box;
 
 const TOGGLE_P34_LOOP: &[u8] = &[0xB2, 0xB4, 0x80, 0xFC];
 static FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -239,10 +239,8 @@ fn bench_wave_ops(c: &mut Criterion) {
                 };
                 let start = Instant::now();
                 {
-                    let mut sim = BenchHarness::from_code_with_options(
-                        TOGGLE_P34_LOOP.to_vec(),
-                        options,
-                    );
+                    let mut sim =
+                        BenchHarness::from_code_with_options(TOGGLE_P34_LOOP.to_vec(), options);
                     sim.run_ms(1).expect("run wave json benchmark");
                     black_box(sim.sim_time_ns());
                 }
@@ -266,10 +264,8 @@ fn bench_wave_ops(c: &mut Criterion) {
                 };
                 let start = Instant::now();
                 {
-                    let mut sim = BenchHarness::from_code_with_options(
-                        TOGGLE_P34_LOOP.to_vec(),
-                        options,
-                    );
+                    let mut sim =
+                        BenchHarness::from_code_with_options(TOGGLE_P34_LOOP.to_vec(), options);
                     sim.run_ms(1).expect("run wave msgpack benchmark");
                     black_box(sim.sim_time_ns());
                 }
@@ -293,10 +289,8 @@ fn bench_wave_ops(c: &mut Criterion) {
                 };
                 let start = Instant::now();
                 {
-                    let mut sim = BenchHarness::from_code_with_options(
-                        TOGGLE_P34_LOOP.to_vec(),
-                        options,
-                    );
+                    let mut sim =
+                        BenchHarness::from_code_with_options(TOGGLE_P34_LOOP.to_vec(), options);
                     sim.run_ms(1).expect("run wave html benchmark");
                     black_box(sim.sim_time_ns());
                 }
@@ -382,8 +376,9 @@ fn bench_wave_ops(c: &mut Criterion) {
                     sim.onewire_write_byte(0x44).expect("convert t");
                     black_box(sim.sim_time_ns());
                 }
-                let file_size =
-                    fs::metadata(&path).expect("wave onewire json metadata").len();
+                let file_size = fs::metadata(&path)
+                    .expect("wave onewire json metadata")
+                    .len();
                 black_box(file_size);
                 let _ = fs::remove_file(&path);
                 total += start.elapsed();
@@ -411,8 +406,9 @@ fn bench_wave_ops(c: &mut Criterion) {
                     sim.ds1302_end().expect("ds1302 end");
                     black_box(sim.sim_time_ns());
                 }
-                let file_size =
-                    fs::metadata(&path).expect("wave ds1302 json metadata").len();
+                let file_size = fs::metadata(&path)
+                    .expect("wave ds1302 json metadata")
+                    .len();
                 black_box(file_size);
                 let _ = fs::remove_file(&path);
                 total += start.elapsed();

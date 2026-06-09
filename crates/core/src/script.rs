@@ -3,10 +3,12 @@ mod state_api;
 pub(crate) mod state_target;
 
 use std::{
+    cell::RefCell,
     io::{self, BufRead, IsTerminal, Read, Write},
     ops::{Range, RangeInclusive},
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{Arc, Condvar, Mutex},
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -28,10 +30,29 @@ use crate::{
     script::run_target::{RunToEdge, RunToTarget},
 };
 
+thread_local! {
+    static ACTIVE_SCRIPT_CONTROL: RefCell<Option<ScriptRunControl>> = const { RefCell::new(None) };
+}
+
 pub fn run_script(sim: Simulator, path: &Path) -> Result<()> {
     let source = std::fs::read_to_string(path)
         .with_context(|| format!("读取脚本失败: {}", path.display()))?;
     run_script_source(sim, &format!("file:{}", path.display()), &source)
+}
+
+pub fn run_script_with_events(
+    sim: Simulator,
+    path: &Path,
+    event_sink: ScriptRunEventSink,
+) -> Result<ScriptRunReport> {
+    let source = std::fs::read_to_string(path)
+        .with_context(|| format!("读取脚本失败: {}", path.display()))?;
+    Ok(run_script_source_with_events(
+        sim,
+        &format!("file:{}", path.display()),
+        &source,
+        event_sink,
+    ))
 }
 
 pub fn run_script_stdin(sim: Simulator) -> Result<()> {
@@ -49,11 +70,121 @@ pub fn run_script_source(sim: Simulator, label: &str, source: &str) -> Result<()
     eval_source(sim, label, source)
 }
 
+pub fn run_script_source_report(sim: Simulator, label: &str, source: &str) -> ScriptRunReport {
+    eval_source_report(sim, label, source, None, None)
+}
+
+pub fn run_script_source_with_events(
+    sim: Simulator,
+    label: &str,
+    source: &str,
+    event_sink: ScriptRunEventSink,
+) -> ScriptRunReport {
+    eval_source_report(sim, label, source, Some(event_sink), None)
+}
+
+pub fn run_script_source_with_events_and_control(
+    sim: Simulator,
+    label: &str,
+    source: &str,
+    event_sink: ScriptRunEventSink,
+    control: ScriptRunControl,
+) -> ScriptRunReport {
+    eval_source_report(sim, label, source, Some(event_sink), Some(control))
+}
+
+pub struct ScriptReplSession {
+    scope: Scope<'static>,
+    line_no: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptReplOutput {
+    pub line_no: u64,
+    pub value: Option<String>,
+    pub prints: Vec<String>,
+}
+
+impl Default for ScriptReplSession {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ScriptReplSession {
+    pub fn new() -> Self {
+        Self {
+            scope: build_scope(),
+            line_no: 1,
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.scope = build_scope();
+        self.line_no = 1;
+    }
+
+    pub fn eval(&mut self, sim: &mut Simulator, source: &str) -> Result<ScriptReplOutput> {
+        let source = source.trim();
+        if source.is_empty() {
+            bail!("REPL 输入为空");
+        }
+
+        let line_no = self.line_no;
+        let mut sim_slot = Simulator::nop(false);
+        std::mem::swap(sim, &mut sim_slot);
+
+        let shared = Arc::new(Mutex::new(sim_slot));
+        let trace_state = Arc::new(Mutex::new(ScriptTraceState::default()));
+        let checkpoint_state = Arc::new(Mutex::new(ScriptCheckpointState::new(0, None)));
+        let prints = Arc::new(Mutex::new(Vec::new()));
+        let label = format!("gui-repl:{line_no}");
+
+        debug!(
+            line_no,
+            sim_time_ns = current_sim_time_ns(&shared),
+            source,
+            "执行 GUI REPL 语句"
+        );
+
+        let result = {
+            let engine = build_engine_with_print(
+                &shared,
+                &trace_state,
+                &checkpoint_state,
+                None,
+                Some(Arc::clone(&prints)),
+            );
+            eval_source_with_engine_value(&engine, &mut self.scope, &trace_state, &label, source)
+        };
+
+        let restored = Arc::try_unwrap(shared)
+            .map_err(|_| anyhow!("REPL 仿真器仍在使用中"))?
+            .into_inner()
+            .map_err(|_| anyhow!("REPL 仿真器锁已损坏"))?;
+        *sim = restored;
+
+        let prints = Arc::try_unwrap(prints)
+            .map_err(|_| anyhow!("REPL 输出仍在使用中"))?
+            .into_inner()
+            .map_err(|_| anyhow!("REPL 输出锁已损坏"))?;
+
+        self.line_no = self.line_no.saturating_add(1);
+        let value = result?;
+        let value = repl_value_text(&value);
+        Ok(ScriptReplOutput {
+            line_no,
+            value,
+            prints,
+        })
+    }
+}
+
 pub fn run_repl(sim: Simulator) -> Result<()> {
     let shared = Arc::new(Mutex::new(sim));
     let trace_state = Arc::new(Mutex::new(ScriptTraceState::default()));
-    let checkpoint_state = Arc::new(Mutex::new(ScriptCheckpointState::default()));
-    let engine = build_engine(&shared, &trace_state, &checkpoint_state);
+    let checkpoint_state = Arc::new(Mutex::new(ScriptCheckpointState::new(0, None)));
+    let engine = build_engine(&shared, &trace_state, &checkpoint_state, None);
     let mut scope = build_scope();
     let stdin = io::stdin();
     let mut reader = stdin.lock();
@@ -90,14 +221,21 @@ pub fn run_repl(sim: Simulator) -> Result<()> {
             statement,
             "执行 REPL 语句"
         );
-        if let Err(err) = eval_source_with_engine(
+        match eval_source_with_engine_value(
             &engine,
             &mut scope,
             &trace_state,
             &format!("repl:{line_no}"),
             &line,
         ) {
-            eprintln!("{err}");
+            Ok(value) => {
+                if let Some(value) = repl_value_text(&value) {
+                    println!("=> {value}");
+                }
+            }
+            Err(err) => {
+                eprintln!("{err}");
+            }
         }
         line_no = line_no.saturating_add(1);
     }
@@ -105,11 +243,37 @@ pub fn run_repl(sim: Simulator) -> Result<()> {
     Ok(())
 }
 
+fn repl_value_text(value: &Dynamic) -> Option<String> {
+    (!value.is_unit()).then(|| value.to_string())
+}
+
 fn eval_source(sim: Simulator, label: &str, source: &str) -> Result<()> {
+    let report = eval_source_report(sim, label, source, None, None);
+    finalize_script_report(report)
+}
+
+fn eval_source_report(
+    sim: Simulator,
+    label: &str,
+    source: &str,
+    event_sink: Option<ScriptRunEventSink>,
+    control: Option<ScriptRunControl>,
+) -> ScriptRunReport {
     let shared = Arc::new(Mutex::new(sim));
     let trace_state = Arc::new(Mutex::new(ScriptTraceState::default()));
-    let checkpoint_state = Arc::new(Mutex::new(ScriptCheckpointState::default()));
-    let engine = build_engine(&shared, &trace_state, &checkpoint_state);
+    let estimated_total_ckpts = estimate_checkpoint_total(source);
+    let checkpoint_state = Arc::new(Mutex::new(ScriptCheckpointState::new(
+        estimated_total_ckpts,
+        event_sink.clone(),
+    )));
+    emit_script_event(
+        &event_sink,
+        ScriptRunEvent::Started {
+            label: label.to_owned(),
+            estimated_total_ckpts,
+        },
+    );
+    let engine = build_engine(&shared, &trace_state, &checkpoint_state, control.as_ref());
     let mut scope = build_scope();
     debug!(
         label,
@@ -117,8 +281,29 @@ fn eval_source(sim: Simulator, label: &str, source: &str) -> Result<()> {
         sim_time_ns = current_sim_time_ns(&shared),
         "开始执行评测脚本"
     );
-    let result = eval_source_with_engine(&engine, &mut scope, &trace_state, label, source);
-    finalize_checkpoint_run(&checkpoint_state, result)
+    let result = with_active_script_control(control.clone(), || {
+        eval_source_with_engine(&engine, &mut scope, &trace_state, label, source)
+    });
+    let report = finish_script_report(&checkpoint_state, result.err().map(|err| err.to_string()));
+    if report.success() {
+        emit_script_event(&event_sink, ScriptRunEvent::Finished(report.clone()));
+    } else {
+        emit_script_event(&event_sink, ScriptRunEvent::Failed(report.clone()));
+    }
+    report
+}
+
+fn with_active_script_control<T>(control: Option<ScriptRunControl>, f: impl FnOnce() -> T) -> T {
+    let previous = ACTIVE_SCRIPT_CONTROL.with(|active| active.replace(control));
+    let result = f();
+    ACTIVE_SCRIPT_CONTROL.with(|active| {
+        active.replace(previous);
+    });
+    result
+}
+
+fn active_script_control() -> Option<ScriptRunControl> {
+    ACTIVE_SCRIPT_CONTROL.with(|active| active.borrow().clone())
 }
 
 fn eval_source_with_engine(
@@ -128,25 +313,56 @@ fn eval_source_with_engine(
     label: &str,
     source: &str,
 ) -> Result<()> {
+    let _ = eval_source_with_engine_value(engine, scope, trace_state, label, source)?;
+    Ok(())
+}
+
+fn eval_source_with_engine_value(
+    engine: &Engine,
+    scope: &mut Scope<'_>,
+    trace_state: &Arc<Mutex<ScriptTraceState>>,
+    label: &str,
+    source: &str,
+) -> Result<Dynamic> {
     update_script_trace_state(trace_state, label, source);
     let mut ast = engine
         .compile_with_scope(scope, source)
         .map_err(|err| anyhow!(err.to_string()))?;
     ast.set_source(label);
-    let _ = engine
+    let value = engine
         .eval_ast_with_scope::<Dynamic>(scope, &ast)
         .map_err(|err| anyhow!(err.to_string()))?;
-    Ok(())
+    Ok(value)
 }
 
 fn build_engine(
     sim: &Arc<Mutex<Simulator>>,
     trace_state: &Arc<Mutex<ScriptTraceState>>,
     checkpoint_state: &Arc<Mutex<ScriptCheckpointState>>,
+    control: Option<&ScriptRunControl>,
+) -> Engine {
+    build_engine_with_print(sim, trace_state, checkpoint_state, control, None)
+}
+
+fn build_engine_with_print(
+    sim: &Arc<Mutex<Simulator>>,
+    trace_state: &Arc<Mutex<ScriptTraceState>>,
+    checkpoint_state: &Arc<Mutex<ScriptCheckpointState>>,
+    control: Option<&ScriptRunControl>,
+    print_sink: Option<Arc<Mutex<Vec<String>>>>,
 ) -> Engine {
     let mut engine = Engine::new();
-    engine.on_print(|text| println!("{text}"));
-    register_script_progress_debugger(&mut engine, sim, trace_state);
+    if let Some(print_sink) = print_sink {
+        engine.on_print(move |text| {
+            print_sink
+                .lock()
+                .expect("script print sink lock")
+                .push(text.to_owned());
+        });
+    } else {
+        engine.on_print(|text| println!("{text}"));
+    }
+    register_script_progress_debugger(&mut engine, sim, trace_state, checkpoint_state, control);
     engine.register_type_with_name::<LedId>("Led");
     engine.register_type_with_name::<KeyId>("Key");
     engine.register_type_with_name::<KeyMode>("KeyMode");
@@ -155,7 +371,7 @@ fn build_engine(
     engine.register_type_with_name::<SignalId>("Signal");
     engine.register_type_with_name::<RunToTarget>("RunToTarget");
     engine.register_type_with_name::<RunToEdge>("RunToEdge");
-    register_api(&mut engine, sim, checkpoint_state);
+    register_api(&mut engine, sim, checkpoint_state, control);
     engine
 }
 
@@ -167,7 +383,8 @@ struct ScriptTraceState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CheckpointStatus {
+pub enum CheckpointStatus {
+    Running,
     Passed,
     Failed,
 }
@@ -175,6 +392,7 @@ enum CheckpointStatus {
 impl CheckpointStatus {
     fn as_str(self) -> &'static str {
         match self {
+            Self::Running => "运行中",
             Self::Passed => "✅ 通过",
             Self::Failed => "❌ 失败",
         }
@@ -182,56 +400,307 @@ impl CheckpointStatus {
 }
 
 #[derive(Debug, Clone)]
-struct CheckpointRecord {
-    index: i64,
-    condition: String,
-    expected: String,
-    actual: String,
-    actual_detail: Option<String>,
-    status: CheckpointStatus,
+pub struct CheckpointRecord {
+    pub row_id: CheckpointRowId,
+    pub index: i64,
+    pub condition: String,
+    pub expected: String,
+    pub actual: String,
+    pub actual_detail: Option<String>,
+    pub status: CheckpointStatus,
+    pub sim_time_ns: u64,
 }
 
-#[derive(Debug, Default)]
-struct ScriptCheckpointState {
-    records: Vec<CheckpointRecord>,
-}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CheckpointRowId(pub u64);
 
-#[derive(Debug, Clone)]
-struct CheckpointSummary {
-    total: usize,
-    failed: usize,
-    report: String,
-}
+#[derive(Clone)]
+pub struct ScriptRunEventSink(Arc<dyn Fn(ScriptRunEvent) + Send + Sync + 'static>);
 
-impl CheckpointSummary {
-    fn failure_message(&self) -> String {
-        format!("ckpt 失败: {}/{}", self.failed, self.total)
+impl ScriptRunEventSink {
+    pub fn new<F>(sink: F) -> Self
+    where
+        F: Fn(ScriptRunEvent) + Send + Sync + 'static,
+    {
+        Self(Arc::new(sink))
+    }
+
+    pub fn emit(&self, event: ScriptRunEvent) {
+        (self.0)(event);
     }
 }
 
+impl std::fmt::Debug for ScriptRunEventSink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScriptRunEventSink").finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum ScriptRunEvent {
+    Started {
+        label: String,
+        estimated_total_ckpts: usize,
+    },
+    Paused,
+    Resumed,
+    Terminating,
+    Progress {
+        phase: String,
+        completed_ckpts: usize,
+        estimated_total_ckpts: usize,
+        sim_time_ns: u64,
+        line: usize,
+        step: u64,
+    },
+    CheckpointStarted(CheckpointRecord),
+    CheckpointFinished(CheckpointRecord),
+    Finished(ScriptRunReport),
+    Failed(ScriptRunReport),
+}
+
+#[derive(Debug, Clone)]
+pub struct ScriptRunReport {
+    pub total: usize,
+    pub failed: usize,
+    pub estimated_total_ckpts: usize,
+    pub records: Vec<CheckpointRecord>,
+    pub report: String,
+    pub error: Option<String>,
+}
+
+impl ScriptRunReport {
+    pub fn success(&self) -> bool {
+        self.failed == 0 && self.error.is_none()
+    }
+
+    fn failure_message(&self) -> String {
+        if self.total == 0 {
+            "评测脚本执行失败".to_owned()
+        } else {
+            format!("ckpt 失败: {}/{}", self.failed, self.total)
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScriptControlState {
+    Running,
+    Paused,
+    Terminating,
+}
+
+#[derive(Debug)]
+struct ScriptRunControlInner {
+    state: Mutex<ScriptControlState>,
+    condvar: Condvar,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScriptRunControl(Arc<ScriptRunControlInner>);
+
+impl Default for ScriptRunControl {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ScriptRunControl {
+    pub fn new() -> Self {
+        Self(Arc::new(ScriptRunControlInner {
+            state: Mutex::new(ScriptControlState::Running),
+            condvar: Condvar::new(),
+        }))
+    }
+
+    pub fn pause(&self) {
+        let mut state = self.0.state.lock().expect("script control lock");
+        if *state == ScriptControlState::Running {
+            *state = ScriptControlState::Paused;
+        }
+    }
+
+    pub fn resume(&self) {
+        let mut state = self.0.state.lock().expect("script control lock");
+        if *state == ScriptControlState::Paused {
+            *state = ScriptControlState::Running;
+            self.0.condvar.notify_all();
+        }
+    }
+
+    pub fn terminate(&self) {
+        let mut state = self.0.state.lock().expect("script control lock");
+        *state = ScriptControlState::Terminating;
+        self.0.condvar.notify_all();
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.state() == ScriptControlState::Paused
+    }
+
+    pub fn is_terminating(&self) -> bool {
+        self.state() == ScriptControlState::Terminating
+    }
+
+    fn state(&self) -> ScriptControlState {
+        *self.0.state.lock().expect("script control lock")
+    }
+
+    fn wait_if_paused(&self) -> Result<(), Box<EvalAltResult>> {
+        let mut state = self.0.state.lock().expect("script control lock");
+        loop {
+            match *state {
+                ScriptControlState::Running => return Ok(()),
+                ScriptControlState::Paused => {
+                    state = self
+                        .0
+                        .condvar
+                        .wait(state)
+                        .expect("script control condvar wait");
+                }
+                ScriptControlState::Terminating => {
+                    return Err(runtime_error("评测已终止"));
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ScriptProgressThrottle {
+    last_emit: Instant,
+    steps_since_emit: u64,
+}
+
+impl Default for ScriptProgressThrottle {
+    fn default() -> Self {
+        Self {
+            last_emit: Instant::now(),
+            steps_since_emit: 0,
+        }
+    }
+}
+
+impl ScriptProgressThrottle {
+    fn should_emit(&mut self) -> bool {
+        self.steps_since_emit = self.steps_since_emit.saturating_add(1);
+        if self.steps_since_emit >= 200 || self.last_emit.elapsed() >= Duration::from_millis(100) {
+            self.steps_since_emit = 0;
+            self.last_emit = Instant::now();
+            true
+        } else {
+            false
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ScriptCheckpointState {
+    records: Vec<CheckpointRecord>,
+    next_row_id: u64,
+    completed: usize,
+    estimated_total_ckpts: usize,
+    event_sink: Option<ScriptRunEventSink>,
+    progress: ScriptProgressThrottle,
+}
+
 impl ScriptCheckpointState {
-    fn record(
+    fn new(estimated_total_ckpts: usize, event_sink: Option<ScriptRunEventSink>) -> Self {
+        Self {
+            records: Vec::new(),
+            next_row_id: 0,
+            completed: 0,
+            estimated_total_ckpts,
+            event_sink,
+            progress: ScriptProgressThrottle::default(),
+        }
+    }
+
+    fn start_record(
         &mut self,
         index: i64,
         condition: &str,
         expected: &str,
-        actual: String,
-        actual_detail: Option<String>,
-        status: CheckpointStatus,
-    ) {
-        self.records.push(CheckpointRecord {
+        sim_time_ns: u64,
+    ) -> CheckpointRecord {
+        let row_id = CheckpointRowId(self.next_row_id);
+        self.next_row_id = self.next_row_id.saturating_add(1);
+        let record = CheckpointRecord {
+            row_id,
             index,
             condition: condition.to_owned(),
             expected: expected.to_owned(),
-            actual,
-            actual_detail,
-            status,
-        });
+            actual: String::new(),
+            actual_detail: None,
+            status: CheckpointStatus::Running,
+            sim_time_ns,
+        };
+        self.records.push(record.clone());
+        emit_script_event(
+            &self.event_sink,
+            ScriptRunEvent::CheckpointStarted(record.clone()),
+        );
+        record
     }
 
-    fn summary(&self) -> Option<CheckpointSummary> {
+    fn finish_record(
+        &mut self,
+        row_id: CheckpointRowId,
+        actual: String,
+        actual_detail: String,
+        status: CheckpointStatus,
+        sim_time_ns: u64,
+    ) -> Option<CheckpointRecord> {
+        let record = self
+            .records
+            .iter_mut()
+            .find(|record| record.row_id == row_id)?;
+        record.actual = actual;
+        record.actual_detail = (status == CheckpointStatus::Failed).then_some(actual_detail);
+        record.status = status;
+        record.sim_time_ns = sim_time_ns;
+        self.completed = self.completed.saturating_add(1);
+        let record = record.clone();
+        emit_script_event(
+            &self.event_sink,
+            ScriptRunEvent::CheckpointFinished(record.clone()),
+        );
+        Some(record)
+    }
+
+    fn maybe_progress(
+        &mut self,
+        phase: impl Into<String>,
+        sim_time_ns: u64,
+        line: usize,
+        step: u64,
+    ) {
+        if self.event_sink.is_none() || !self.progress.should_emit() {
+            return;
+        }
+        emit_script_event(
+            &self.event_sink,
+            ScriptRunEvent::Progress {
+                phase: phase.into(),
+                completed_ckpts: self.completed,
+                estimated_total_ckpts: self.estimated_total_ckpts,
+                sim_time_ns,
+                line,
+                step,
+            },
+        );
+    }
+
+    fn report(&self, error: Option<String>) -> ScriptRunReport {
         if self.records.is_empty() {
-            return None;
+            return ScriptRunReport {
+                total: 0,
+                failed: 0,
+                estimated_total_ckpts: self.estimated_total_ckpts,
+                records: Vec::new(),
+                report: String::new(),
+                error,
+            };
         }
 
         let total = self.records.len();
@@ -259,45 +728,55 @@ impl ScriptCheckpointState {
         let mut report = format_checkpoint_report(passed, failed, &rows);
         report.push_str(&format_checkpoint_failure_records(&self.records));
 
-        Some(CheckpointSummary {
+        ScriptRunReport {
             total,
             failed,
+            estimated_total_ckpts: self.estimated_total_ckpts,
+            records: self.records.clone(),
             report,
-        })
+            error,
+        }
     }
 }
 
-fn finalize_checkpoint_run(
+impl Default for ScriptCheckpointState {
+    fn default() -> Self {
+        Self::new(0, None)
+    }
+}
+
+fn emit_script_event(event_sink: &Option<ScriptRunEventSink>, event: ScriptRunEvent) {
+    if let Some(event_sink) = event_sink {
+        event_sink.emit(event);
+    }
+}
+
+fn finish_script_report(
     checkpoint_state: &Arc<Mutex<ScriptCheckpointState>>,
-    result: Result<()>,
-) -> Result<()> {
-    let summary = checkpoint_state
+    error: Option<String>,
+) -> ScriptRunReport {
+    checkpoint_state
         .lock()
         .expect("checkpoint state lock")
-        .summary();
+        .report(error)
+}
 
-    if let Some(summary) = &summary {
-        print!("{}", summary.report);
+fn finalize_script_report(report: ScriptRunReport) -> Result<()> {
+    if !report.report.is_empty() {
+        print!("{}", report.report);
     }
 
-    match result {
-        Ok(()) => {
-            if let Some(summary) = summary
-                && summary.failed > 0
-            {
-                bail!("{}", summary.failure_message());
-            }
-            Ok(())
+    if let Some(error) = report.error.clone() {
+        if report.failed > 0 {
+            return Err(anyhow!(error).context(report.failure_message()));
         }
-        Err(err) => {
-            if let Some(summary) = summary
-                && summary.failed > 0
-            {
-                return Err(err.context(summary.failure_message()));
-            }
-            Err(err)
-        }
+        return Err(anyhow!(error));
     }
+
+    if report.failed > 0 {
+        bail!("{}", report.failure_message());
+    }
+    Ok(())
 }
 
 fn checkpoint_table_cell(text: &str) -> String {
@@ -371,6 +850,82 @@ fn checkpoint_table_row(cells: &[impl AsRef<str>]) -> String {
     row
 }
 
+pub fn estimate_checkpoint_total(source: &str) -> usize {
+    let bytes = source.as_bytes();
+    let mut index = 0_usize;
+    let mut total = 0_usize;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'"' => {
+                index = skip_quoted_string(bytes, index + 1, b'"');
+            }
+            b'\'' => {
+                index = skip_quoted_string(bytes, index + 1, b'\'');
+            }
+            b'`' => {
+                index = skip_quoted_string(bytes, index + 1, b'`');
+            }
+            b'/' if bytes.get(index + 1) == Some(&b'/') => {
+                index += 2;
+                while index < bytes.len() && bytes[index] != b'\n' {
+                    index += 1;
+                }
+            }
+            b'/' if bytes.get(index + 1) == Some(&b'*') => {
+                index += 2;
+                while index + 1 < bytes.len() {
+                    if bytes[index] == b'*' && bytes[index + 1] == b'/' {
+                        index += 2;
+                        break;
+                    }
+                    index += 1;
+                }
+            }
+            b'c' if bytes.get(index..index + 4) == Some(b"ckpt") => {
+                let before = index.checked_sub(1).and_then(|it| bytes.get(it)).copied();
+                let after = bytes.get(index + 4).copied();
+                let word_before = before.is_some_and(is_ident_byte);
+                let word_after = after.is_some_and(is_ident_byte);
+                if !word_before && !word_after {
+                    let mut cursor = index + 4;
+                    while bytes
+                        .get(cursor)
+                        .is_some_and(|byte| byte.is_ascii_whitespace())
+                    {
+                        cursor += 1;
+                    }
+                    if bytes.get(cursor) == Some(&b'(') {
+                        total += 1;
+                    }
+                }
+                index += 4;
+            }
+            _ => {
+                index += 1;
+            }
+        }
+    }
+    total
+}
+
+fn skip_quoted_string(bytes: &[u8], mut index: usize, quote: u8) -> usize {
+    while index < bytes.len() {
+        if bytes[index] == b'\\' {
+            index = index.saturating_add(2);
+            continue;
+        }
+        if bytes[index] == quote {
+            return index + 1;
+        }
+        index += 1;
+    }
+    index
+}
+
+fn is_ident_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
 fn update_script_trace_state(
     trace_state: &Arc<Mutex<ScriptTraceState>>,
     label: &str,
@@ -409,17 +964,88 @@ fn current_sim_time_ns(sim: &Arc<Mutex<Simulator>>) -> u64 {
     sim.lock().expect("sim lock").sim_time_ns()
 }
 
+fn check_script_control(control: Option<&ScriptRunControl>) -> Result<(), Box<EvalAltResult>> {
+    if let Some(control) = control {
+        control.wait_if_paused()?;
+    }
+    Ok(())
+}
+
+fn run_controlled_us(
+    sim: &Arc<Mutex<Simulator>>,
+    control: Option<&ScriptRunControl>,
+    us: u64,
+) -> Result<(), Box<EvalAltResult>> {
+    let target_ns = {
+        let sim = sim.lock().map_err(|_| runtime_error("仿真器锁已损坏"))?;
+        sim.sim_time_ns()
+            .saturating_add(us.saturating_mul(NS_PER_MICROSECOND))
+    };
+    run_controlled_to_ns(sim, control, target_ns).map(|_| ())
+}
+
+fn run_controlled_to_ns(
+    sim: &Arc<Mutex<Simulator>>,
+    control: Option<&ScriptRunControl>,
+    target_ns: u64,
+) -> Result<u64, Box<EvalAltResult>> {
+    let start_ns = current_sim_time_ns(sim);
+    if target_ns < start_ns {
+        return Err(runtime_error(format!(
+            "run_to_ns 目标时间戳早于当前时间: target_ns={target_ns}, current_ns={start_ns}"
+        )));
+    }
+    let mut current_ns = start_ns;
+    while current_ns < target_ns {
+        check_script_control(control)?;
+        let next_ns = target_ns.min(current_ns.saturating_add(NS_PER_MILLISECOND));
+        let mut sim = sim.lock().map_err(|_| runtime_error("仿真器锁已损坏"))?;
+        sim.run_to_ns(next_ns)
+            .map_err(|err| runtime_error(err.to_string()))?;
+        current_ns = sim.sim_time_ns();
+    }
+    Ok(current_ns.saturating_sub(start_ns))
+}
+
 fn register_script_progress_debugger(
     engine: &mut Engine,
     sim: &Arc<Mutex<Simulator>>,
     trace_state: &Arc<Mutex<ScriptTraceState>>,
+    checkpoint_state: &Arc<Mutex<ScriptCheckpointState>>,
+    control: Option<&ScriptRunControl>,
 ) {
     let sim = Arc::clone(sim);
     let trace_state = Arc::clone(trace_state);
+    let checkpoint_state = Arc::clone(checkpoint_state);
+    let control = control.cloned();
     #[allow(deprecated)]
     engine.register_debugger(
         |_, debugger| debugger,
         move |context, event, node, source, pos| {
+            if matches!(
+                event,
+                DebuggerEvent::Start | DebuggerEvent::Step | DebuggerEvent::BreakPoint(_)
+            ) && let Some(control) = &control
+            {
+                match control.state() {
+                    ScriptControlState::Running => {}
+                    ScriptControlState::Paused => {
+                        if let Ok(state) = checkpoint_state.lock() {
+                            emit_script_event(&state.event_sink, ScriptRunEvent::Paused);
+                        }
+                        control.wait_if_paused()?;
+                        if let Ok(state) = checkpoint_state.lock() {
+                            emit_script_event(&state.event_sink, ScriptRunEvent::Resumed);
+                        }
+                    }
+                    ScriptControlState::Terminating => {
+                        if let Ok(state) = checkpoint_state.lock() {
+                            emit_script_event(&state.event_sink, ScriptRunEvent::Terminating);
+                        }
+                        return Err(runtime_error("评测已终止"));
+                    }
+                }
+            }
             let mut label = source.unwrap_or("").to_owned();
             let mut step = 0_u64;
             let mut snippet = String::new();
@@ -437,6 +1063,18 @@ fn register_script_progress_debugger(
                 snippet = source_line_snippet(&state.lines, pos);
             }
             let sim_time_ns = current_sim_time_ns(&sim);
+            if matches!(
+                event,
+                DebuggerEvent::Start | DebuggerEvent::Step | DebuggerEvent::BreakPoint(_)
+            ) && let Ok(mut checkpoint_state) = checkpoint_state.lock()
+            {
+                checkpoint_state.maybe_progress(
+                    snippet.clone(),
+                    sim_time_ns,
+                    pos.line().unwrap_or(0),
+                    step,
+                );
+            }
 
             match event {
                 DebuggerEvent::Start | DebuggerEvent::Step | DebuggerEvent::BreakPoint(_) => {
@@ -620,128 +1258,118 @@ fn register_api(
     engine: &mut Engine,
     sim: &Arc<Mutex<Simulator>>,
     checkpoint_state: &Arc<Mutex<ScriptCheckpointState>>,
+    control: Option<&ScriptRunControl>,
 ) {
     let sim_run = Arc::clone(sim);
+    let control_run = control.cloned();
     engine.register_fn("run_ms", move |ms: i64| -> Result<(), Box<EvalAltResult>> {
         let ms = u64::try_from(ms).map_err(|_| runtime_error("run_ms 参数必须 >= 0"))?;
-        sim_run
-            .lock()
-            .map_err(|_| runtime_error("仿真器锁已损坏"))?
-            .run_ms(ms)
-            .map_err(|err| runtime_error(err.to_string()))
+        run_controlled_us(&sim_run, control_run.as_ref(), ms.saturating_mul(1_000))
     });
 
     let sim_run_us = Arc::clone(sim);
+    let control_run_us = control.cloned();
     engine.register_fn("run_us", move |us: i64| -> Result<(), Box<EvalAltResult>> {
         let us = u64::try_from(us).map_err(|_| runtime_error("run_us 参数必须 >= 0"))?;
-        sim_run_us
-            .lock()
-            .map_err(|_| runtime_error("仿真器锁已损坏"))?
-            .run_us(us)
-            .map_err(|err| runtime_error(err.to_string()))
+        run_controlled_us(&sim_run_us, control_run_us.as_ref(), us)
     });
 
     let sim_run_to_ns = Arc::clone(sim);
+    let control_run_to_ns = control.cloned();
     engine.register_fn(
         "run_to_ns",
         move |target_ns: i64| -> Result<i64, Box<EvalAltResult>> {
             let target_ns =
                 u64::try_from(target_ns).map_err(|_| runtime_error("run_to_ns 参数必须 >= 0"))?;
-            let elapsed_ns = sim_run_to_ns
-                .lock()
-                .map_err(|_| runtime_error("仿真器锁已损坏"))?
-                .run_to_ns(target_ns)
-                .map_err(|err| runtime_error(err.to_string()))?;
+            let elapsed_ns =
+                run_controlled_to_ns(&sim_run_to_ns, control_run_to_ns.as_ref(), target_ns)?;
             script_int(elapsed_ns, "run_to_ns 返回值超出脚本整数范围")
         },
     );
 
     let sim_run_to_us = Arc::clone(sim);
+    let control_run_to_us = control.cloned();
     engine.register_fn(
         "run_to_us",
         move |target_us: i64| -> Result<rhai::FLOAT, Box<EvalAltResult>> {
             let target_us =
                 u64::try_from(target_us).map_err(|_| runtime_error("run_to_us 参数必须 >= 0"))?;
             let target_ns = target_us.saturating_mul(NS_PER_MICROSECOND);
-            let elapsed_ns = sim_run_to_us
-                .lock()
-                .map_err(|_| runtime_error("仿真器锁已损坏"))?
-                .run_to_ns(target_ns)
-                .map_err(|err| runtime_error(err.to_string()))?;
+            let elapsed_ns =
+                run_controlled_to_ns(&sim_run_to_us, control_run_to_us.as_ref(), target_ns)?;
             Ok(elapsed_ns as rhai::FLOAT / NS_PER_MICROSECOND as rhai::FLOAT)
         },
     );
 
     let sim_run_to_us_float = Arc::clone(sim);
+    let control_run_to_us_float = control.cloned();
     engine.register_fn(
         "run_to_us",
         move |target_us: rhai::FLOAT| -> Result<rhai::FLOAT, Box<EvalAltResult>> {
             let target_ns = script_time_target_ns(target_us, NS_PER_MICROSECOND, "run_to_us")?;
-            let elapsed_ns = sim_run_to_us_float
-                .lock()
-                .map_err(|_| runtime_error("仿真器锁已损坏"))?
-                .run_to_ns(target_ns)
-                .map_err(|err| runtime_error(err.to_string()))?;
+            let elapsed_ns = run_controlled_to_ns(
+                &sim_run_to_us_float,
+                control_run_to_us_float.as_ref(),
+                target_ns,
+            )?;
             Ok(elapsed_ns as rhai::FLOAT / NS_PER_MICROSECOND as rhai::FLOAT)
         },
     );
 
     let sim_run_to_ms = Arc::clone(sim);
+    let control_run_to_ms = control.cloned();
     engine.register_fn(
         "run_to_ms",
         move |target_ms: i64| -> Result<rhai::FLOAT, Box<EvalAltResult>> {
             let target_ms =
                 u64::try_from(target_ms).map_err(|_| runtime_error("run_to_ms 参数必须 >= 0"))?;
             let target_ns = target_ms.saturating_mul(NS_PER_MILLISECOND);
-            let elapsed_ns = sim_run_to_ms
-                .lock()
-                .map_err(|_| runtime_error("仿真器锁已损坏"))?
-                .run_to_ns(target_ns)
-                .map_err(|err| runtime_error(err.to_string()))?;
+            let elapsed_ns =
+                run_controlled_to_ns(&sim_run_to_ms, control_run_to_ms.as_ref(), target_ns)?;
             Ok(elapsed_ns as rhai::FLOAT / NS_PER_MILLISECOND as rhai::FLOAT)
         },
     );
 
     let sim_run_to_ms_float = Arc::clone(sim);
+    let control_run_to_ms_float = control.cloned();
     engine.register_fn(
         "run_to_ms",
         move |target_ms: rhai::FLOAT| -> Result<rhai::FLOAT, Box<EvalAltResult>> {
             let target_ns = script_time_target_ns(target_ms, NS_PER_MILLISECOND, "run_to_ms")?;
-            let elapsed_ns = sim_run_to_ms_float
-                .lock()
-                .map_err(|_| runtime_error("仿真器锁已损坏"))?
-                .run_to_ns(target_ns)
-                .map_err(|err| runtime_error(err.to_string()))?;
+            let elapsed_ns = run_controlled_to_ns(
+                &sim_run_to_ms_float,
+                control_run_to_ms_float.as_ref(),
+                target_ns,
+            )?;
             Ok(elapsed_ns as rhai::FLOAT / NS_PER_MILLISECOND as rhai::FLOAT)
         },
     );
 
     let sim_run_to_s = Arc::clone(sim);
+    let control_run_to_s = control.cloned();
     engine.register_fn(
         "run_to_s",
         move |target_s: i64| -> Result<rhai::FLOAT, Box<EvalAltResult>> {
             let target_s =
                 u64::try_from(target_s).map_err(|_| runtime_error("run_to_s 参数必须 >= 0"))?;
             let target_ns = target_s.saturating_mul(NS_PER_SECOND);
-            let elapsed_ns = sim_run_to_s
-                .lock()
-                .map_err(|_| runtime_error("仿真器锁已损坏"))?
-                .run_to_ns(target_ns)
-                .map_err(|err| runtime_error(err.to_string()))?;
+            let elapsed_ns =
+                run_controlled_to_ns(&sim_run_to_s, control_run_to_s.as_ref(), target_ns)?;
             Ok(elapsed_ns as rhai::FLOAT / NS_PER_SECOND as rhai::FLOAT)
         },
     );
 
     let sim_run_to_s_float = Arc::clone(sim);
+    let control_run_to_s_float = control.cloned();
     engine.register_fn(
         "run_to_s",
         move |target_s: rhai::FLOAT| -> Result<rhai::FLOAT, Box<EvalAltResult>> {
             let target_ns = script_time_target_ns(target_s, NS_PER_SECOND, "run_to_s")?;
-            let elapsed_ns = sim_run_to_s_float
-                .lock()
-                .map_err(|_| runtime_error("仿真器锁已损坏"))?
-                .run_to_ns(target_ns)
-                .map_err(|err| runtime_error(err.to_string()))?;
+            let elapsed_ns = run_controlled_to_ns(
+                &sim_run_to_s_float,
+                control_run_to_s_float.as_ref(),
+                target_ns,
+            )?;
             Ok(elapsed_ns as rhai::FLOAT / NS_PER_SECOND as rhai::FLOAT)
         },
     );
@@ -2229,6 +2857,20 @@ fn register_checkpoint_api(
               expected: ImmutableString,
               body: FnPtr|
               -> Result<(), Box<EvalAltResult>> {
+            let start_sim_time_ns = current_sim_time_ns(&sim);
+            let row_id = {
+                let mut checkpoint_state = checkpoint_state
+                    .lock()
+                    .map_err(|_| runtime_error("评测点状态锁已损坏"))?;
+                checkpoint_state
+                    .start_record(
+                        index,
+                        condition.as_str(),
+                        expected.as_str(),
+                        start_sim_time_ns,
+                    )
+                    .row_id
+            };
             let result = body.call_within_context::<Dynamic>(&ctx, ());
             let (actual, actual_detail, status) = match result {
                 Ok(value) => {
@@ -2241,24 +2883,21 @@ fn register_checkpoint_api(
                     (summary, detail, CheckpointStatus::Failed)
                 }
             };
+            let finish_sim_time_ns = current_sim_time_ns(&sim);
             let mut checkpoint_state = checkpoint_state
                 .lock()
                 .map_err(|_| runtime_error("评测点状态锁已损坏"))?;
-            checkpoint_state.record(
-                index,
-                condition.as_str(),
-                expected.as_str(),
+            checkpoint_state.finish_record(
+                row_id,
                 actual.clone(),
-                if status == CheckpointStatus::Failed {
-                    Some(actual_detail.clone())
-                } else {
-                    None
-                },
+                actual_detail.clone(),
                 status,
+                finish_sim_time_ns,
             );
             drop(checkpoint_state);
 
             match status {
+                CheckpointStatus::Running => {}
                 CheckpointStatus::Passed => {
                     info!(
                         ckpt_index = index,
@@ -2612,12 +3251,44 @@ fn run_to_target_wait(
     edge: RunToEdge,
     timeout_ns: Option<u64>,
 ) -> Result<i64, Box<EvalAltResult>> {
-    let elapsed_ns = sim
+    let control = active_script_control();
+    let start = current_sim_time_ns(sim);
+    let mut previous = sim
         .lock()
         .map_err(|_| runtime_error("仿真器锁已损坏"))?
-        .run_to_target_with_timeout(target, edge, timeout_ns)
-        .map_err(|err| runtime_error(err.to_string()))?;
-    script_int(elapsed_ns, "run_to 返回值超出脚本整数范围")
+        .read_run_to_target(target);
+    loop {
+        check_script_control(control.as_ref())?;
+        let mut sim = sim.lock().map_err(|_| runtime_error("仿真器锁已损坏"))?;
+        let elapsed_ns = sim.sim_time_ns().saturating_sub(start);
+        if let Some(timeout_ns) = timeout_ns
+            && elapsed_ns >= timeout_ns
+        {
+            return Err(runtime_error(format!(
+                "run_to 等待超时: timeout_ns={timeout_ns}"
+            )));
+        }
+        sim.step_once()
+            .map_err(|err| runtime_error(err.to_string()))?;
+        let current = sim.read_run_to_target(target);
+        let elapsed_ns = sim.sim_time_ns().saturating_sub(start);
+        let matched = match edge {
+            RunToEdge::Up => !previous && current,
+            RunToEdge::Down => previous && !current,
+            RunToEdge::Flip => previous != current,
+        };
+        if matched {
+            if let Some(timeout_ns) = timeout_ns
+                && elapsed_ns > timeout_ns
+            {
+                return Err(runtime_error(format!(
+                    "run_to 等待超时: timeout_ns={timeout_ns}"
+                )));
+            }
+            return script_int(elapsed_ns, "run_to 返回值超出脚本整数范围");
+        }
+        previous = current;
+    }
 }
 
 fn run_to_callback_wait(
@@ -2626,8 +3297,10 @@ fn run_to_callback_wait(
     predicate: FnPtr,
     timeout_ns: Option<u64>,
 ) -> Result<i64, Box<EvalAltResult>> {
+    let control = active_script_control();
     let start_ns = current_sim_time_ns(sim);
     loop {
+        check_script_control(control.as_ref())?;
         let ready = predicate
             .call_within_context::<bool>(&ctx, ())
             .map_err(|err| runtime_error(err.to_string()))?;
@@ -3252,8 +3925,10 @@ mod tests {
     use rhai::Scope;
 
     use super::{
-        ScriptCheckpointState, ScriptTraceState, build_engine, build_scope, eval_source,
-        eval_source_with_engine,
+        CheckpointStatus, ScriptCheckpointState, ScriptReplSession, ScriptRunControl,
+        ScriptRunEvent, ScriptRunEventSink, ScriptTraceState, build_engine, build_scope,
+        estimate_checkpoint_total, eval_source, eval_source_with_engine,
+        run_script_source_with_events, run_script_source_with_events_and_control,
     };
     use crate::{chip::Simulator, persistent_state::PersistentState, wave::WaveCaptureOptions};
 
@@ -3276,7 +3951,107 @@ mod tests {
     }
 
     fn checkpoint_state() -> Arc<Mutex<ScriptCheckpointState>> {
-        Arc::new(Mutex::new(ScriptCheckpointState::default()))
+        Arc::new(Mutex::new(ScriptCheckpointState::new(0, None)))
+    }
+
+    #[test]
+    fn checkpoint_estimator_ignores_comments_and_strings() {
+        let source = r#"
+            // ckpt(1, "x", "x", || {});
+            let text = "ckpt(2)";
+            let other = 'ckpt(3)';
+            /*
+                ckpt(4, "x", "x", || {});
+            */
+            ckpt(5, "x", "x", || {});
+            other_ckpt(6);
+            ckpt (7, "x", "x", || {});
+        "#;
+        assert_eq!(estimate_checkpoint_total(source), 2);
+    }
+
+    #[test]
+    fn gui_repl_session_keeps_scope_and_updates_sim() {
+        let mut session = ScriptReplSession::new();
+        let mut sim = Simulator::nop(false);
+
+        let output = session
+            .eval(&mut sim, "let dt = 1000; run_us(dt); sim_time_ns()")
+            .expect("first repl command");
+        assert_eq!(output.value.as_deref(), Some("1000000"));
+        assert_eq!(sim.sim_time_ns(), 1_000_000);
+
+        let output = session
+            .eval(&mut sim, "run_us(dt); sim_time_ns()")
+            .expect("second repl command");
+        assert_eq!(output.value.as_deref(), Some("2000000"));
+        assert_eq!(sim.sim_time_ns(), 2_000_000);
+
+        let output = session
+            .eval(&mut sim, "display_text()")
+            .expect("display text repl command");
+        assert_eq!(output.value.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn script_events_include_checkpoint_lifecycle() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sink_events = Arc::clone(&events);
+        let sink = ScriptRunEventSink::new(move |event| {
+            sink_events.lock().expect("events lock").push(event);
+        });
+        let script = r#"
+            ckpt(1, "ok", "pass", || { true });
+            ckpt(2, "bad", "fail", || { assert(false, "boom"); });
+        "#;
+        let report =
+            run_script_source_with_events(Simulator::nop(false), "test:events", script, sink);
+        assert_eq!(report.total, 2);
+        assert_eq!(report.failed, 1);
+        let events = events.lock().expect("events lock");
+        assert!(events.iter().any(|event| matches!(
+            event,
+            ScriptRunEvent::Started {
+                estimated_total_ckpts: 2,
+                ..
+            }
+        )));
+        let started = events
+            .iter()
+            .filter(|event| matches!(event, ScriptRunEvent::CheckpointStarted(_)))
+            .count();
+        let finished = events
+            .iter()
+            .filter(|event| matches!(event, ScriptRunEvent::CheckpointFinished(_)))
+            .count();
+        assert_eq!(started, 2);
+        assert_eq!(finished, 2);
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, ScriptRunEvent::CheckpointFinished(record) if record.status == CheckpointStatus::Failed && record.actual_detail.is_some()))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, ScriptRunEvent::Failed(_)))
+        );
+    }
+
+    #[test]
+    fn script_events_report_compile_error_without_checkpoints() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sink_events = Arc::clone(&events);
+        let sink = ScriptRunEventSink::new(move |event| {
+            sink_events.lock().expect("events lock").push(event);
+        });
+        let report =
+            run_script_source_with_events(Simulator::nop(false), "test:bad", "let =", sink);
+        assert_eq!(report.total, 0);
+        assert!(report.error.is_some());
+        assert!(events.lock().expect("events lock").iter().any(
+            |event| matches!(event, ScriptRunEvent::Failed(report) if report.error.is_some())
+        ));
     }
 
     #[test]
@@ -3460,7 +4235,7 @@ mod tests {
         )));
         let trace_state = Arc::new(Mutex::new(ScriptTraceState::default()));
         let checkpoint_state = checkpoint_state();
-        let engine = build_engine(&sim, &trace_state, &checkpoint_state);
+        let engine = build_engine(&sim, &trace_state, &checkpoint_state, None);
         let mut scope: Scope<'static> = build_scope();
         let script = r#"
             add_marker();
@@ -3500,7 +4275,7 @@ mod tests {
         let sim = Arc::new(Mutex::new(Simulator::nop(false)));
         let trace_state = Arc::new(Mutex::new(ScriptTraceState::default()));
         let checkpoint_state = checkpoint_state();
-        let engine = build_engine(&sim, &trace_state, &checkpoint_state);
+        let engine = build_engine(&sim, &trace_state, &checkpoint_state, None);
         let mut scope: Scope<'static> = build_scope();
         let script = r#"
             set_rtc(#{
@@ -3552,7 +4327,7 @@ mod tests {
         let sim = Arc::new(Mutex::new(Simulator::nop(false)));
         let trace_state = Arc::new(Mutex::new(ScriptTraceState::default()));
         let checkpoint_state = checkpoint_state();
-        let engine = build_engine(&sim, &trace_state, &checkpoint_state);
+        let engine = build_engine(&sim, &trace_state, &checkpoint_state, None);
         let mut scope: Scope<'static> = build_scope();
         let script = r#"
             set_eeprom(0x10, 0xAB);
@@ -3621,6 +4396,38 @@ mod tests {
     }
 
     #[test]
+    fn script_run_control_can_terminate_run() {
+        let sim = Simulator::nop(false);
+        let control = ScriptRunControl::new();
+        control.terminate();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let events_sink = Arc::clone(&events);
+        let sink = ScriptRunEventSink::new(move |event| {
+            events_sink.lock().expect("events lock").push(event);
+        });
+        let report = run_script_source_with_events_and_control(
+            sim,
+            "test:terminate",
+            "run_ms(10);",
+            sink,
+            control,
+        );
+        assert!(
+            report
+                .error
+                .as_deref()
+                .is_some_and(|err| err.contains("终止"))
+        );
+        assert!(
+            events
+                .lock()
+                .expect("events lock")
+                .iter()
+                .any(|event| matches!(event, ScriptRunEvent::Failed(report) if report.error.as_deref().is_some_and(|err| err.contains("终止"))))
+        );
+    }
+
+    #[test]
     fn checkpoint_failure_summary_drops_rhai_stack_frames() {
         let detail = "Runtime error: 圆柱体 76cm 体积页 剩余空间 @ 'file:samples/na16/judge/4t.rhai' (line 172, position 5) / in call to function 'assert_volume_page' (from 'file:samples/na16/judge/4t.rhai') @ 'file:samples/na16/judge/4t.rhai' (line 801, position 5) / in closure call (from 'file:samples/na16/judge/4t.rhai') (line 798, position 1)";
         assert_eq!(
@@ -3648,5 +4455,4 @@ mod tests {
         );
         assert!(!formatted.contains("(from "), "{formatted}");
     }
-
 }

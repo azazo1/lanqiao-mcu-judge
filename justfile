@@ -8,6 +8,7 @@ default:
 
 clippy:
     cargo clippy -p stcjudge --all-targets
+    cargo clippy -p stcjudge-gui --all-targets
 
 test:
     cargo test --release -p stcjudge
@@ -27,6 +28,9 @@ run-stdin hex:
 
 repl hex:
     cargo run --release -p stcjudge -- repl --hex {{ quote(hex) }}
+
+gui:
+    cargo run --release -p stcjudge-gui
 
 # 示例: just judge-sample ds1302
 # 示例: just judge-sample ds1302 smoke

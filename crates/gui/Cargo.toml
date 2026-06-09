@@ -6,3 +6,17 @@ publish = false
 
 [lib]
 path = "src/lib.rs"
+
+[[bin]]
+name = "stcjudge-gui"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+eframe.workspace = true
+egui.workspace = true
+egui_extras.workspace = true
+rfd.workspace = true
+stcjudge = { path = "../core" }
+tracing.workspace = true
+tracing-subscriber.workspace = true

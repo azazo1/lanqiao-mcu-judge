@@ -117,27 +117,19 @@ mod tests {
         let mut decoder = I2cEventDecoder::default();
         let mut labels = Vec::new();
 
-        let samples = [
-            (0, true, true),
-            (10, true, false),
-            (20, false, false),
-            (30, false, true),
-            (40, true, true),
-            (50, false, true),
-            (60, false, false),
-            (70, true, false),
-            (80, false, false),
-            (90, false, true),
-            (100, true, true),
-            (110, false, true),
-            (120, false, false),
-            (130, true, false),
-            (140, false, false),
-            (150, false, true),
-            (160, true, true),
-            (170, false, true),
-            (180, true, true),
-        ];
+        let mut samples = vec![(0, true, true), (10, true, false)];
+        let mut time_ns = 20;
+        for bit in [true, false, true, false, false, false, false, false] {
+            samples.push((time_ns, false, bit));
+            time_ns += 10;
+            samples.push((time_ns, true, bit));
+            time_ns += 10;
+        }
+        samples.push((time_ns, false, false));
+        time_ns += 10;
+        samples.push((time_ns, true, false));
+        time_ns += 10;
+        samples.push((time_ns, true, true));
 
         for (time_ns, scl, sda) in samples {
             for event in decoder.observe(time_ns, scl, sda) {

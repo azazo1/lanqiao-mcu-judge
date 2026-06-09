@@ -178,13 +178,18 @@ impl LedWatchStats {
         if self.change_intervals_ns.is_empty() {
             return Ok(None);
         }
-        let total_interval_ns: u128 = self.change_intervals_ns.iter().map(|&it| u128::from(it)).sum();
+        let total_interval_ns: u128 = self
+            .change_intervals_ns
+            .iter()
+            .map(|&it| u128::from(it))
+            .sum();
         if total_interval_ns == 0 {
             return Ok(None);
         }
         let mean_interval_ns = total_interval_ns as f64 / self.change_intervals_ns.len() as f64;
         for &interval_ns in &self.change_intervals_ns {
-            let relative_deviation = (interval_ns as f64 - mean_interval_ns).abs() / mean_interval_ns;
+            let relative_deviation =
+                (interval_ns as f64 - mean_interval_ns).abs() / mean_interval_ns;
             if relative_deviation > LED_CHANGE_INTERVAL_MAX_RELATIVE_DEVIATION {
                 return Ok(None);
             }
@@ -218,6 +223,45 @@ impl LedWatchStats {
 pub enum DisplayNumber {
     Integer(i64),
     Float(f64),
+}
+
+#[derive(Debug, Clone)]
+pub struct BoardSnapshot {
+    pub sim_time_ns: u64,
+    pub cpu_cycles: u64,
+    pub pc: u16,
+    pub display_text: String,
+    pub seg_chars: [char; 8],
+    pub seg_raw: [u8; 8],
+    pub led_states: [bool; 8],
+    pub key_states: [bool; 16],
+    pub key_mode: KeyMode,
+    pub relay_on: bool,
+    pub motor_on: bool,
+    pub buzzer_on: bool,
+    pub port_latch: [u8; 6],
+    pub port_input: [u8; 6],
+    pub board_latches_effective: [u8; 4],
+    pub board_latches_port: [u8; 4],
+    pub board_latches_xdata: [u8; 4],
+    pub analog_rd1_v: f32,
+    pub analog_rb2_v: f32,
+    pub adc_code: u8,
+    pub adc_channel: u8,
+    pub adc_channel_voltage_v: f32,
+    pub dac_code: u8,
+    pub dac_voltage_v: f32,
+    pub ne555_level: bool,
+    pub ne555_frequency_hz: f32,
+    pub ds18b20_temperature_c: f32,
+    pub ultrasonic_distance_cm: f32,
+    pub jumper_net_sig_to_sig_out: bool,
+    pub uart1_text: String,
+    pub uart1_text_error: Option<String>,
+    pub uart1_raw: Vec<u16>,
+    pub uart2_text: String,
+    pub uart2_text_error: Option<String>,
+    pub uart2_raw: Vec<u16>,
 }
 
 impl Simulator {
@@ -365,6 +409,10 @@ impl Simulator {
             self.step_once()?;
         }
         Ok(self.ctx.board.sim_time_ns.saturating_sub(start))
+    }
+
+    pub fn step(&mut self) -> Result<()> {
+        self.step_once()
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -656,6 +704,18 @@ impl Simulator {
 
     pub fn uart_take_raw_segment(&mut self, idle_ms: u64) -> Vec<u16> {
         self.uart1_take_raw_segment(idle_ms)
+    }
+
+    pub fn uart1_clear_output(&mut self) {
+        self.ctx.ports.uart1.clear_tx_output();
+    }
+
+    pub fn uart2_clear_output(&mut self) {
+        self.ctx.ports.uart2.clear_tx_output();
+    }
+
+    pub fn uart_clear_output(&mut self) {
+        self.uart1_clear_output();
     }
 
     pub fn uart1_peek_string(&self) -> Result<String> {
@@ -1106,6 +1166,71 @@ impl Simulator {
 
     pub fn seg_pattern(&self, index: usize) -> Result<u8> {
         self.ctx.board.outputs.seg_pattern(index)
+    }
+
+    pub fn snapshot(&self) -> BoardSnapshot {
+        let adc_channel = self.ctx.board.pcf8591.selected_channel();
+        let mut seg_chars = [' '; 8];
+        let mut seg_raw = [0_u8; 8];
+        for (index, digit) in self.ctx.board.outputs.digits.iter().copied().enumerate() {
+            seg_chars[index] = self.seg_decoder.decode_char(digit);
+            seg_raw[index] = digit.segments;
+        }
+
+        let mut key_states = [false; 16];
+        for (index, key) in WAVE_KEY_ORDER.into_iter().enumerate() {
+            key_states[index] = self.ctx.board.keys.pressed(key);
+        }
+
+        let (uart1_text, uart1_text_error) = match self.uart1_peek_string() {
+            Ok(text) => (text, None),
+            Err(err) => (String::new(), Some(err.to_string())),
+        };
+        let (uart2_text, uart2_text_error) = match self.uart2_peek_string() {
+            Ok(text) => (text, None),
+            Err(err) => (String::new(), Some(err.to_string())),
+        };
+
+        BoardSnapshot {
+            sim_time_ns: self.ctx.board.sim_time_ns,
+            cpu_cycles: self.ctx.board.cpu_cycles,
+            pc: self.cpu.pc,
+            display_text: self.display_text(),
+            seg_chars,
+            seg_raw,
+            led_states: self.ctx.board.outputs.leds,
+            key_states,
+            key_mode: self.ctx.board.key_mode,
+            relay_on: self.ctx.board.outputs.relay_on,
+            motor_on: self.ctx.board.outputs.motor_on,
+            buzzer_on: self.ctx.board.outputs.buzzer_on,
+            port_latch: self.ctx.ports.port_latch,
+            port_input: self.ctx.ports.port_input,
+            board_latches_effective: self.ctx.effective_board_latches(),
+            board_latches_port: self.ctx.ports.board_latches,
+            board_latches_xdata: self.ctx.xdata.board_latches,
+            analog_rd1_v: self.ctx.board.analog.channel_voltage(1),
+            analog_rb2_v: self.ctx.board.analog.channel_voltage(3),
+            adc_code: self.ctx.board.pcf8591.adc_data(),
+            adc_channel,
+            adc_channel_voltage_v: self.ctx.board.analog.channel_voltage(adc_channel),
+            dac_code: self.ctx.board.pcf8591.dac_value(),
+            dac_voltage_v: self.ctx.board.pcf8591.dac_voltage_v(),
+            ne555_level: self.ctx.board.frequency_level(),
+            ne555_frequency_hz: self.ctx.board.ne555.frequency_hz(),
+            ds18b20_temperature_c: self.ctx.board.ds18b20.temperature_c,
+            ultrasonic_distance_cm: self.ctx.board.ultrasonic.distance_cm,
+            jumper_net_sig_to_sig_out: self
+                .ctx
+                .board
+                .jumper_installed(SignalId::NetSig, SignalId::SigOut),
+            uart1_text,
+            uart1_text_error,
+            uart1_raw: self.uart1_peek_raw(),
+            uart2_text,
+            uart2_text_error,
+            uart2_raw: self.uart2_peek_raw(),
+        }
     }
 
     pub fn snapshot_text(&self) -> String {
@@ -2820,6 +2945,10 @@ impl Uart {
         self.tx_queue.drain(..).map(|entry| entry.symbol).collect()
     }
 
+    fn clear_tx_output(&mut self) {
+        self.tx_queue.clear();
+    }
+
     fn take_tx_string_segment(&mut self, idle_ms: u64) -> Result<String> {
         let symbols = self.take_tx_raw_segment(idle_ms);
         Self::symbols_to_string(&symbols)
@@ -3330,7 +3459,8 @@ impl BoardModel {
             return SignalTransitionIter::empty();
         }
 
-        self.ne555.transitions_between(effective_start_ns, end_time_ns)
+        self.ne555
+            .transitions_between(effective_start_ns, end_time_ns)
     }
 
     fn read_hall_level(&self) -> bool {
@@ -3531,7 +3661,7 @@ mod tests {
 
     use crate::{
         event::track::EventTrack,
-        ids::{KeyId, KeyMode, LedId, ResetMode, SignalId},
+        ids::{KeyId, KeyMode, LedId, ResetMode, SignalId, VoltageChannel},
         peripherals::{I2cSlaveDevice, SignalEdge},
         wave::WaveCaptureOptions,
     };
@@ -3769,17 +3899,37 @@ mod tests {
         board.ne555.set_frequency_hz_at(0, 2_200.0);
         board.sim_time_ns = 1_000_000;
 
-        assert!(board.t0_transitions(&latches, 0, 1_000_000).next().is_none());
+        assert!(
+            board
+                .t0_transitions(&latches, 0, 1_000_000)
+                .next()
+                .is_none()
+        );
 
         board
             .jumper_on(SignalId::NetSig, SignalId::SigOut)
             .expect("install NET_SIG to SIG_OUT jumper");
-        assert!(board.t0_transitions(&latches, 0, 1_000_000).next().is_none());
+        assert!(
+            board
+                .t0_transitions(&latches, 0, 1_000_000)
+                .next()
+                .is_none()
+        );
 
         board.sim_time_ns = 2_000_000;
-        let transitions: Vec<_> = board.t0_transitions(&latches, 1_000_000, 2_000_000).collect();
-        assert!(transitions.iter().any(|transition| transition.edge == SignalEdge::Falling));
-        assert!(transitions.iter().any(|transition| transition.edge == SignalEdge::Rising));
+        let transitions: Vec<_> = board
+            .t0_transitions(&latches, 1_000_000, 2_000_000)
+            .collect();
+        assert!(
+            transitions
+                .iter()
+                .any(|transition| transition.edge == SignalEdge::Falling)
+        );
+        assert!(
+            transitions
+                .iter()
+                .any(|transition| transition.edge == SignalEdge::Rising)
+        );
     }
 
     #[test]
@@ -3844,7 +3994,11 @@ mod tests {
 
         sim.reset_with_mode(ResetMode::Power)
             .expect("power reset simulator");
-        assert!(sim.ctx.board.jumper_installed(SignalId::NetSig, SignalId::SigOut));
+        assert!(
+            sim.ctx
+                .board
+                .jumper_installed(SignalId::NetSig, SignalId::SigOut)
+        );
         assert!(sim.ctx.ports.timers.write(
             &mut sim.ctx.ports.generic,
             super::SFR_TMOD,
@@ -4289,10 +4443,11 @@ mod tests {
         assert_eq!(sim.ctx.board.pcf8591.dac_value(), 0xA5);
         assert_eq!(sim.ctx.board.at24c02.byte(0x10), 0xAB);
         assert!(sim.sim_time_ns() > 0);
+        let reset_time_ns = sim.sim_time_ns();
 
         sim.reset().expect("power reset");
 
-        assert_eq!(sim.sim_time_ns(), 0);
+        assert_eq!(sim.sim_time_ns(), reset_time_ns);
         assert_eq!(sim.ctx.board.pcf8591.selected_channel(), 0);
         assert_eq!(sim.ctx.board.pcf8591.dac_value(), 0x00);
         assert_eq!(sim.ctx.board.at24c02.byte(0x10), 0xAB);
@@ -4515,8 +4670,9 @@ mod tests {
 
     #[test]
     fn us_sample_tracks_distance_and_speed_setting() {
-        let mut sim = Simulator::from_hex_path(&sample_path("samples/us/prj/Objects/us.hex"), false)
-            .expect("load us");
+        let mut sim =
+            Simulator::from_hex_path(&sample_path("samples/us/prj/Objects/us.hex"), false)
+                .expect("load us");
 
         sim.run_ms(220).expect("run us to idle");
         assert_eq!(sim.seg_pattern(1).expect("read L pattern"), 0x38);
@@ -4654,5 +4810,24 @@ mod tests {
         assert!(sim.relay_on(), "relay should be on at boot");
         assert!(sim.motor_on(), "motor should be on at boot");
         assert!(sim.buzzer_on(), "buzzer should be on at boot");
+    }
+
+    #[test]
+    fn snapshot_matches_public_state_getters() {
+        let mut sim = Simulator::nop(false);
+        sim.set_key_id(KeyId::S4, true);
+        sim.set_voltage_channel(VoltageChannel::Rd1, 1.25);
+        sim.set_frequency_hz(1234.0);
+
+        let snapshot = sim.snapshot();
+        assert_eq!(snapshot.sim_time_ns, sim.sim_time_ns());
+        assert_eq!(snapshot.display_text, sim.display_text());
+        assert_eq!(snapshot.led_states[0], sim.led_on_id(LedId::L1));
+        assert_eq!(snapshot.relay_on, sim.relay_on());
+        assert_eq!(snapshot.motor_on, sim.motor_on());
+        assert_eq!(snapshot.buzzer_on, sim.buzzer_on());
+        assert!(snapshot.key_states[0]);
+        assert!((snapshot.analog_rd1_v - 1.25).abs() < f32::EPSILON);
+        assert_eq!(snapshot.ne555_frequency_hz, 1234.0);
     }
 }

@@ -536,13 +536,7 @@ mod tests {
                 edge: SignalEdge::Rising,
             },
         ];
-        timers.tick_timers01_t2(
-            0xFF,
-            AUXR_T0_X12,
-            4,
-            transitions.into_iter(),
-            &mut generic,
-        )?;
+        timers.tick_timers01_t2(0xFF, AUXR_T0_X12, 4, transitions.into_iter(), &mut generic)?;
 
         let snapshot = timers.snapshot(&generic);
         assert_eq!(snapshot.tl0, 3);

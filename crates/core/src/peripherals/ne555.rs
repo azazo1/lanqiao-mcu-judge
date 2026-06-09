@@ -168,7 +168,9 @@ mod tests {
         start_time_ns: u64,
         end_time_ns: u64,
     ) -> Vec<SignalTransition> {
-        ne555.transitions_between(start_time_ns, end_time_ns).collect()
+        ne555
+            .transitions_between(start_time_ns, end_time_ns)
+            .collect()
     }
 
     #[test]
