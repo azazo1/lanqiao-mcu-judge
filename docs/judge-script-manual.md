@@ -120,6 +120,8 @@ reset 模式:
 
 - `run_ms(ms)`
 - `run_us(us)`
+- `run_ms_bounded(wall_ms, sim_ms)`
+- `run_us_bounded(wall_us, sim_us)`
 - `sim_time_ns()`
 - `add_marker()`
 - `add_marker(label)`
@@ -141,6 +143,23 @@ reset 模式:
 它们只推进仿真时间, 不等待真实时间.
 
 `run_ms(...)` 和 `run_us(...)` 按精确仿真时基推进. 如果固件内部有显示刷新周期, 1s 测频窗口, 传感器采样节拍等逻辑, 在修改输入后要显式留出足够稳定时间, 不要假设几十毫秒内一定已经更新到最终结果.
+
+`run_ms_bounded(wall_ms, sim_ms)` 和 `run_us_bounded(wall_us, sim_us)` 会持续推进仿真, 直到仿真时间达到上限, 或者真实执行时间达到上限. 返回值是一个 map:
+
+- `requested_sim_time_ns`: 请求推进的仿真时间, 单位 `ns`
+- `elapsed_sim_time_ns`: 实际推进的仿真时间, 单位 `ns`
+- `elapsed_wall_time_ns`: 实际消耗的真实时间, 单位 `ns`
+- `hit_sim_limit`: 是否命中仿真时间上限
+- `hit_wall_limit`: 是否命中真实时间上限
+
+例如:
+
+```rhai
+let stats = run_us_bounded(5_000, 20_000);
+if stats.hit_wall_limit {
+    print("本轮仿真先触发真实时间上限");
+}
+```
 
 `sim_time_ns()` 返回当前绝对仿真时间戳, 单位是 `ns`.
 

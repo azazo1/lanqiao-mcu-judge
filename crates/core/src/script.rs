@@ -22,8 +22,8 @@ use tracing::{debug, info, trace};
 
 use crate::{
     chip::{
-        DisplayNumber, LedWatchStats, NS_PER_MICROSECOND, NS_PER_MILLISECOND, NS_PER_SECOND,
-        Simulator, UartConfig, UartParity, UartStopBits,
+        BoundedRunStats, DisplayNumber, LedWatchStats, NS_PER_MICROSECOND, NS_PER_MILLISECOND,
+        NS_PER_SECOND, Simulator, UartConfig, UartParity, UartStopBits,
     },
     ids::{KeyId, KeyMode, LedId, ResetMode, SignalId, VoltageChannel},
     peripherals::Ds1302State,
@@ -1254,6 +1254,37 @@ fn led_stats_map(stats: LedWatchStats) -> Result<Map, Box<EvalAltResult>> {
     Ok(map)
 }
 
+fn bounded_run_stats_map(stats: BoundedRunStats) -> Result<Map, Box<EvalAltResult>> {
+    let mut map = Map::new();
+    map.insert(
+        "requested_sim_time_ns".into(),
+        script_int(
+            stats.requested_sim_time_ns,
+            "requested_sim_time_ns 超出脚本整数范围",
+        )?
+        .into(),
+    );
+    map.insert(
+        "elapsed_sim_time_ns".into(),
+        script_int(
+            stats.elapsed_sim_time_ns,
+            "elapsed_sim_time_ns 超出脚本整数范围",
+        )?
+        .into(),
+    );
+    map.insert(
+        "elapsed_wall_time_ns".into(),
+        script_int(
+            stats.elapsed_wall_time_ns,
+            "elapsed_wall_time_ns 超出脚本整数范围",
+        )?
+        .into(),
+    );
+    map.insert("hit_sim_limit".into(), stats.hit_sim_limit.into());
+    map.insert("hit_wall_limit".into(), stats.hit_wall_limit.into());
+    Ok(map)
+}
+
 fn register_api(
     engine: &mut Engine,
     sim: &Arc<Mutex<Simulator>>,
@@ -1273,6 +1304,42 @@ fn register_api(
         let us = u64::try_from(us).map_err(|_| runtime_error("run_us 参数必须 >= 0"))?;
         run_controlled_us(&sim_run_us, control_run_us.as_ref(), us)
     });
+
+    let sim_run_ms_bounded = Arc::clone(sim);
+    engine.register_fn(
+        "run_ms_bounded",
+        move |wall_ms: i64, sim_ms: i64| -> Result<Map, Box<EvalAltResult>> {
+            let wall_ms = u64::try_from(wall_ms)
+                .map_err(|_| runtime_error("run_ms_bounded wall_ms 参数必须 >= 0"))?;
+            let sim_ms = u64::try_from(sim_ms)
+                .map_err(|_| runtime_error("run_ms_bounded sim_ms 参数必须 >= 0"))?;
+            let mut sim = sim_run_ms_bounded
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?;
+            let stats = sim
+                .run_ms_bounded(wall_ms, sim_ms)
+                .map_err(|err| runtime_error(err.to_string()))?;
+            bounded_run_stats_map(stats)
+        },
+    );
+
+    let sim_run_us_bounded = Arc::clone(sim);
+    engine.register_fn(
+        "run_us_bounded",
+        move |wall_us: i64, sim_us: i64| -> Result<Map, Box<EvalAltResult>> {
+            let wall_us = u64::try_from(wall_us)
+                .map_err(|_| runtime_error("run_us_bounded wall_us 参数必须 >= 0"))?;
+            let sim_us = u64::try_from(sim_us)
+                .map_err(|_| runtime_error("run_us_bounded sim_us 参数必须 >= 0"))?;
+            let mut sim = sim_run_us_bounded
+                .lock()
+                .map_err(|_| runtime_error("仿真器锁已损坏"))?;
+            let stats = sim
+                .run_us_bounded(wall_us, sim_us)
+                .map_err(|err| runtime_error(err.to_string()))?;
+            bounded_run_stats_map(stats)
+        },
+    );
 
     let sim_run_to_ns = Arc::clone(sim);
     let control_run_to_ns = control.cloned();
@@ -4166,6 +4233,19 @@ mod tests {
         "#;
 
         eval_source(sim, "test:uart2_raw_api", script).expect("run uart2 raw script");
+    }
+
+    #[test]
+    fn rhai_run_us_bounded_returns_stats_map() {
+        let sim = Simulator::nop(false);
+        let script = r#"
+            let stats = run_us_bounded(100_000, 10);
+            assert_eq(stats.requested_sim_time_ns, 10_000, "bounded requested sim time");
+            assert(stats.elapsed_sim_time_ns >= 10_000, "bounded elapsed sim time");
+            assert(stats.hit_sim_limit, "bounded sim limit");
+        "#;
+
+        eval_source(sim, "test:run_us_bounded", script).expect("run bounded script");
     }
 
     #[test]

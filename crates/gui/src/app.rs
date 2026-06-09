@@ -78,6 +78,7 @@ pub struct StcjudgeGuiApp {
     logs: Vec<String>,
     run_ms_input: String,
     run_us_input: String,
+    sim_speed_limit_multiplier: f64,
     temperature_input: String,
     distance_input: String,
     frequency_input: String,
@@ -108,6 +109,7 @@ impl Default for StcjudgeGuiApp {
             logs: Vec::new(),
             run_ms_input: "100".to_owned(),
             run_us_input: "1000".to_owned(),
+            sim_speed_limit_multiplier: 1.0,
             temperature_input: "25.0".to_owned(),
             distance_input: "30.0".to_owned(),
             frequency_input: "1000.0".to_owned(),
@@ -459,6 +461,19 @@ impl StcjudgeGuiApp {
                     session.refresh();
                     Ok(())
                 });
+            }
+            ui.separator();
+            ui.label("速度上限");
+            let speed_response = ui.add_sized(
+                [96.0, 28.0],
+                egui::DragValue::new(&mut self.sim_speed_limit_multiplier)
+                    .range(0.05..=500.0)
+                    .speed(0.1)
+                    .suffix("x"),
+            );
+            if speed_response.changed() {
+                self.sim_speed_limit_multiplier =
+                    self.sim_speed_limit_multiplier.clamp(0.05, 500.0);
             }
         });
     }
@@ -1152,7 +1167,10 @@ fn key_snapshot_index(key: KeyId) -> usize {
 
 impl eframe::App for StcjudgeGuiApp {
     fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
-        if let Err(err) = self.session.run_for_ui_frame() {
+        if let Err(err) = self
+            .session
+            .run_for_ui_frame(self.sim_speed_limit_multiplier)
+        {
             self.session.running = false;
             self.log(err.to_string());
         }

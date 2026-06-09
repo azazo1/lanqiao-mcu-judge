@@ -14,8 +14,8 @@ use anyhow::Result;
 
 pub use bench::BenchHarness;
 pub use chip::{
-    BoardSnapshot, CPU_EXEC_HZ, DisplayNumber, NS_PER_MICROSECOND, NS_PER_MILLISECOND,
-    NS_PER_SECOND, SYSTEM_HZ, Simulator, UartConfig, UartParity, UartStopBits,
+    BoardSnapshot, BoundedRunStats, CPU_EXEC_HZ, DisplayNumber, NS_PER_MICROSECOND,
+    NS_PER_MILLISECOND, NS_PER_SECOND, SYSTEM_HZ, Simulator, UartConfig, UartParity, UartStopBits,
 };
 pub use ids::{KeyId, KeyMode, LedId, ResetMode, SignalId, VoltageChannel};
 pub use peripherals::Ds1302State;

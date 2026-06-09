@@ -1,4 +1,13 @@
-use std::{cell::Cell, collections::VecDeque, fmt::Write as _, fs, path::Path, rc::Rc, sync::Arc};
+use std::{
+    cell::Cell,
+    collections::VecDeque,
+    fmt::Write as _,
+    fs,
+    path::Path,
+    rc::Rc,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context, Result, bail};
 use i8051::{
@@ -33,6 +42,15 @@ const WAVE_KEY_ORDER: [KeyId; 16] = [
     KeyId::S18,
     KeyId::S19,
 ];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BoundedRunStats {
+    pub requested_sim_time_ns: u64,
+    pub elapsed_sim_time_ns: u64,
+    pub elapsed_wall_time_ns: u64,
+    pub hit_sim_limit: bool,
+    pub hit_wall_limit: bool,
+}
 
 use crate::{
     event::{
@@ -398,6 +416,31 @@ impl Simulator {
             self.step_once()?;
         }
         Ok(())
+    }
+
+    pub fn run_ms_bounded(&mut self, wall_ms: u64, sim_ms: u64) -> Result<BoundedRunStats> {
+        self.run_us_bounded(wall_ms.saturating_mul(1_000), sim_ms.saturating_mul(1_000))
+    }
+
+    pub fn run_us_bounded(&mut self, wall_us: u64, sim_us: u64) -> Result<BoundedRunStats> {
+        let requested_sim_time_ns = sim_us.saturating_mul(NS_PER_MICROSECOND);
+        let wall_limit = Duration::from_micros(wall_us);
+        let wall_start = Instant::now();
+        let sim_start_ns = self.ctx.board.sim_time_ns;
+        let sim_target_ns = sim_start_ns.saturating_add(requested_sim_time_ns);
+
+        while self.ctx.board.sim_time_ns < sim_target_ns && wall_start.elapsed() < wall_limit {
+            self.step_once()?;
+        }
+
+        let elapsed_wall_time = wall_start.elapsed();
+        Ok(BoundedRunStats {
+            requested_sim_time_ns,
+            elapsed_sim_time_ns: self.ctx.board.sim_time_ns.saturating_sub(sim_start_ns),
+            elapsed_wall_time_ns: duration_ns(elapsed_wall_time),
+            hit_sim_limit: self.ctx.board.sim_time_ns >= sim_target_ns,
+            hit_wall_limit: elapsed_wall_time >= wall_limit,
+        })
     }
 
     pub fn run_to_ns(&mut self, target_ns: u64) -> Result<u64> {
@@ -1846,6 +1889,10 @@ fn approximate_instruction_ticks(op: u8) -> u32 {
         0xE0 | 0xE2 | 0xE3 | 0xF0 | 0xF2 | 0xF3 => 2,
         _ => 1,
     }
+}
+
+fn duration_ns(duration: Duration) -> u64 {
+    u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
 }
 
 fn uart_event_char(symbol: u16) -> Option<String> {
@@ -3666,7 +3713,7 @@ mod tests {
         wave::WaveCaptureOptions,
     };
 
-    use super::{DisplayNumber, LedWatchStats, NS_PER_SECOND, Simulator};
+    use super::{DisplayNumber, LedWatchStats, NS_PER_MICROSECOND, NS_PER_SECOND, Simulator};
 
     fn sample_path(relative: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -4829,5 +4876,18 @@ mod tests {
         assert!(snapshot.key_states[0]);
         assert!((snapshot.analog_rd1_v - 1.25).abs() < f32::EPSILON);
         assert_eq!(snapshot.ne555_frequency_hz, 1234.0);
+    }
+
+    #[test]
+    fn run_us_bounded_reports_sim_limit_hit() {
+        let mut sim = Simulator::nop(false);
+
+        let stats = sim
+            .run_us_bounded(100_000, 10)
+            .expect("bounded run should succeed");
+
+        assert!(stats.hit_sim_limit);
+        assert!(stats.elapsed_sim_time_ns >= 10 * NS_PER_MICROSECOND);
+        assert_eq!(stats.requested_sim_time_ns, 10 * NS_PER_MICROSECOND);
     }
 }

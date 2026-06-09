@@ -10,6 +10,8 @@ use stcjudge::{
     Simulator, WaveCaptureOptions, estimate_checkpoint_total,
 };
 
+const UI_RUN_WALL_LIMIT_US: u64 = 8_000;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AppTab {
     Debug,
@@ -100,16 +102,21 @@ impl GuiSession {
         Ok(lines)
     }
 
-    pub(crate) fn run_for_ui_frame(&mut self) -> Result<()> {
+    pub(crate) fn run_for_ui_frame(&mut self, speed_limit_multiplier: f64) -> Result<()> {
         if !self.running {
             return Ok(());
         }
         let now = Instant::now();
-        if now.duration_since(self.last_tick) < Duration::from_millis(16) {
+        let elapsed = now.duration_since(self.last_tick);
+        if elapsed < Duration::from_millis(4) {
             return Ok(());
         }
-        self.last_tick = now;
-        self.sim.run_ms(5)?;
+        let speed_limit_multiplier = speed_limit_multiplier.clamp(0.05, 500.0);
+        let run_us = (elapsed.as_secs_f64() * 1_000_000.0 * speed_limit_multiplier)
+            .round()
+            .clamp(1.0, u64::MAX as f64) as u64;
+        self.sim.run_us_bounded(UI_RUN_WALL_LIMIT_US, run_us)?;
+        self.last_tick = Instant::now();
         self.refresh();
         Ok(())
     }
