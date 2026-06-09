@@ -2,6 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Result, bail};
 
+const DIGIT_REFRESH_TIMEOUT_NS: u64 = 100_000_000;
+
 #[derive(Debug, Default)]
 pub(crate) struct Outputs {
     pub(crate) leds: [bool; 8],
@@ -9,6 +11,7 @@ pub(crate) struct Outputs {
     pub(crate) motor_on: bool,
     pub(crate) buzzer_on: bool,
     pub(crate) digits: [DigitSample; 8],
+    digit_refresh_ns: [u64; 8],
     last_digits_change_ns: u64,
     segment_latch: u8,
     com_latch: u8,
@@ -53,12 +56,24 @@ impl Outputs {
                             seen: true,
                         };
                         self.digits[digit] = next;
+                        self.digit_refresh_ns[digit] = time_ns;
                         if prev != next {
                             self.last_digits_change_ns = time_ns;
                         }
                     }
                 }
                 self.pending_com_latch = 0;
+            }
+        }
+
+        for digit in 0..8 {
+            if !self.digits[digit].seen {
+                continue;
+            }
+            let elapsed_ns = time_ns.saturating_sub(self.digit_refresh_ns[digit]);
+            if elapsed_ns >= DIGIT_REFRESH_TIMEOUT_NS {
+                self.digits[digit] = DigitSample::default();
+                self.last_digits_change_ns = time_ns;
             }
         }
     }
@@ -316,5 +331,32 @@ mod tests {
 
         outputs.sample_from_latches(&[0x00, 0x00, 0x01, !0x06], &[0, 0, 3, 3], 300);
         assert_eq!(outputs.last_digits_change_ns(), 300);
+    }
+
+    #[test]
+    fn digit_without_refresh_blanks_after_timeout() {
+        let mut outputs = Outputs::default();
+        outputs.sample_from_latches(&[0x00, 0x00, 0x01, !0x3F], &[0, 0, 1, 1], 100);
+        assert_eq!(outputs.display_text(&SegmentDecoder::default()), "0");
+
+        outputs.sample_from_latches(&[0x00, 0x00, 0x01, !0x3F], &[0, 0, 1, 1], 100_000_099);
+        assert_eq!(outputs.display_text(&SegmentDecoder::default()), "0");
+
+        outputs.sample_from_latches(&[0x00, 0x00, 0x01, !0x3F], &[0, 0, 1, 1], 100_000_100);
+        assert_eq!(outputs.display_text(&SegmentDecoder::default()), "");
+    }
+
+    #[test]
+    fn repeated_scan_of_same_pattern_keeps_digit_visible() {
+        let mut outputs = Outputs::default();
+        outputs.sample_from_latches(&[0x00, 0x00, 0x01, !0x3F], &[0, 0, 1, 1], 100);
+        outputs.sample_from_latches(&[0x00, 0x00, 0x01, !0x3F], &[0, 0, 2, 2], 90_000_100);
+        assert_eq!(outputs.display_text(&SegmentDecoder::default()), "0");
+
+        outputs.sample_from_latches(&[0x00, 0x00, 0x01, !0x3F], &[0, 0, 2, 2], 180_000_099);
+        assert_eq!(outputs.display_text(&SegmentDecoder::default()), "0");
+
+        outputs.sample_from_latches(&[0x00, 0x00, 0x01, !0x3F], &[0, 0, 2, 2], 190_000_100);
+        assert_eq!(outputs.display_text(&SegmentDecoder::default()), "");
     }
 }
