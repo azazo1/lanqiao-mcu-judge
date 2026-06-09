@@ -24,7 +24,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
-eframe = "0.34.3"
+eframe = { version = "0.34.3", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
 egui = "0.34.3"
 egui_extras = "0.34.3"
 rfd = "0.17.2"
