@@ -43,6 +43,8 @@ const KEY_ORDER: [KeyId; 16] = [
     KeyId::S16,
 ];
 
+const DEBUG_LOG_BOTTOM_GAP: f32 = 10.0;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct UartOutputSignature {
     mode: UartOutputMode,
@@ -76,6 +78,7 @@ pub struct StcjudgeGuiApp {
     judge: JudgeState,
     feedbacks: Vec<UiFeedback>,
     logs: Vec<String>,
+    logs_expanded: bool,
     run_ms_input: String,
     run_us_input: String,
     sim_speed_limit_multiplier: f64,
@@ -107,6 +110,7 @@ impl Default for StcjudgeGuiApp {
             judge: JudgeState::default(),
             feedbacks: Vec::new(),
             logs: Vec::new(),
+            logs_expanded: false,
             run_ms_input: "100".to_owned(),
             run_us_input: "1000".to_owned(),
             sim_speed_limit_multiplier: 1.0,
@@ -367,7 +371,16 @@ impl StcjudgeGuiApp {
         self.draw_debug_toolbar(ui);
         ui.separator();
 
-        let log_space = 132.0_f32.min((ui.available_height() * 0.3).max(92.0));
+        let logs_max_height = if self.logs_expanded {
+            132.0_f32.min((ui.available_height() * 0.3).max(92.0))
+        } else {
+            0.0
+        };
+        let log_space = if self.logs_expanded {
+            logs_max_height + 38.0 + DEBUG_LOG_BOTTOM_GAP
+        } else {
+            34.0 + DEBUG_LOG_BOTTOM_GAP
+        };
         let main_height = (ui.available_height() - log_space).max(220.0);
         ui.columns(2, |columns| {
             egui::ScrollArea::vertical()
@@ -386,7 +399,8 @@ impl StcjudgeGuiApp {
                 });
         });
         ui.separator();
-        draw_logs(ui, &self.logs);
+        draw_logs(ui, &mut self.logs, &mut self.logs_expanded, logs_max_height);
+        ui.add_space(DEBUG_LOG_BOTTOM_GAP);
     }
 
     fn draw_debug_toolbar(&mut self, ui: &mut egui::Ui) {

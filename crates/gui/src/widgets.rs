@@ -417,16 +417,51 @@ fn format_uart_hex(raw: &[u16]) -> String {
         .join(" ")
 }
 
-pub(crate) fn draw_logs(ui: &mut egui::Ui, logs: &[String]) {
-    ui.heading("日志");
-    egui::ScrollArea::vertical()
-        .max_height(120.0)
-        .stick_to_bottom(true)
-        .show(ui, |ui| {
-            for log in logs {
-                ui.label(log);
-            }
-        });
+pub(crate) fn draw_logs(
+    ui: &mut egui::Ui,
+    logs: &mut Vec<String>,
+    expanded: &mut bool,
+    max_height: f32,
+) {
+    let latest = logs
+        .last()
+        .cloned()
+        .unwrap_or_else(|| "暂无日志".to_owned());
+    ui.horizontal(|ui| {
+        let toggle_label = if *expanded {
+            "收起日志"
+        } else {
+            "展开日志"
+        };
+        if ui.button(toggle_label).clicked() {
+            *expanded = !*expanded;
+        }
+        ui.small(format!("{} 条", logs.len()));
+        ui.separator();
+        if logs.is_empty() {
+            ui.small(&latest);
+        } else {
+            ui.add(egui::Label::new(egui::RichText::new(&latest).monospace().small()).truncate())
+                .on_hover_text(&latest);
+        }
+        if ui
+            .add_enabled(!logs.is_empty(), egui::Button::new("清空"))
+            .clicked()
+        {
+            logs.clear();
+        }
+    });
+
+    if *expanded {
+        egui::ScrollArea::vertical()
+            .max_height(max_height)
+            .stick_to_bottom(true)
+            .show(ui, |ui| {
+                for log in logs {
+                    ui.monospace(log);
+                }
+            });
+    }
 }
 
 pub(crate) fn draw_checkpoint_table(ui: &mut egui::Ui, rows: &[CheckpointRecord], max_height: f32) {
