@@ -1,4 +1,5 @@
 use std::{
+    path::{Path, PathBuf},
     sync::mpsc::{self, Receiver, Sender},
     thread,
     time::{Duration, Instant},
@@ -70,6 +71,12 @@ impl UartOutputSignature {
 struct TemporaryKeyPress {
     key: KeyId,
     restore_pressed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DroppedFileKind {
+    Hex,
+    Rhai,
 }
 
 pub struct StcjudgeGuiApp {
@@ -179,19 +186,70 @@ impl StcjudgeGuiApp {
     }
 
     fn select_hex_file(&mut self) {
-        if let Err(err) = self.apply_wave_window() {
-            self.error(err);
-            return;
-        }
         let Some(path) = rfd::FileDialog::new()
             .add_filter("Intel HEX", &["hex"])
             .pick_file()
         else {
             return;
         };
+        self.load_hex_file(path);
+    }
+
+    fn load_hex_file(&mut self, path: PathBuf) -> bool {
+        if let Err(err) = self.apply_wave_window() {
+            self.error(err);
+            return false;
+        }
         match self.session.load_hex(path.clone()) {
-            Ok(()) => self.notice(format!("已加载 {}", path.display())),
-            Err(err) => self.error(err.to_string()),
+            Ok(()) => {
+                self.notice(format!("已加载 HEX {}", path.display()));
+                true
+            }
+            Err(err) => {
+                self.error(err.to_string());
+                false
+            }
+        }
+    }
+
+    fn load_script_file(&mut self, path: PathBuf) -> bool {
+        match self.judge.load_script(path.clone()) {
+            Ok(()) => {
+                self.notice(format!("已加载脚本 {}", path.display()));
+                true
+            }
+            Err(err) => {
+                self.error(err.to_string());
+                false
+            }
+        }
+    }
+
+    fn handle_dropped_files(&mut self, files: Vec<egui::DroppedFile>) {
+        let mut loaded_hex = false;
+        let mut loaded_script = false;
+        for file in files {
+            let Some(path) = file.path else {
+                self.error("拖放文件缺少本地路径");
+                continue;
+            };
+            match dropped_file_kind(&path) {
+                Some(DroppedFileKind::Hex) => {
+                    loaded_hex |= self.load_hex_file(path);
+                }
+                Some(DroppedFileKind::Rhai) => {
+                    loaded_script |= self.load_script_file(path);
+                }
+                None => {
+                    self.error(format!("不支持拖放文件类型: {}", path.display()));
+                }
+            }
+        }
+        match (loaded_hex, loaded_script) {
+            (true, true) => self.tab = AppTab::Judge,
+            (true, false) => self.tab = AppTab::Debug,
+            (false, true) => self.tab = AppTab::Script,
+            (false, false) => {}
         }
     }
 
@@ -819,10 +877,7 @@ impl StcjudgeGuiApp {
                     .add_filter("Rhai", &["rhai"])
                     .pick_file()
             {
-                match self.judge.load_script(path.clone()) {
-                    Ok(()) => self.notice(format!("已加载脚本 {}", path.display())),
-                    Err(err) => self.error(err.to_string()),
-                }
+                self.load_script_file(path);
             }
             if ui
                 .add_enabled(!self.judge.running, egui::Button::new("运行评测"))
@@ -910,10 +965,7 @@ impl StcjudgeGuiApp {
                     .add_filter("Rhai", &["rhai"])
                     .pick_file()
             {
-                match self.judge.load_script(path.clone()) {
-                    Ok(()) => self.notice(format!("已加载脚本 {}", path.display())),
-                    Err(err) => self.error(err.to_string()),
-                }
+                self.load_script_file(path);
             }
             if ui
                 .add_enabled(!self.judge.running, egui::Button::new("运行当前脚本"))
@@ -1188,8 +1240,23 @@ fn key_snapshot_index(key: KeyId) -> usize {
     column * 4 + (3 - row)
 }
 
+fn dropped_file_kind(path: &Path) -> Option<DroppedFileKind> {
+    let extension = path.extension()?.to_str()?;
+    if extension.eq_ignore_ascii_case("hex") {
+        Some(DroppedFileKind::Hex)
+    } else if extension.eq_ignore_ascii_case("rhai") {
+        Some(DroppedFileKind::Rhai)
+    } else {
+        None
+    }
+}
+
 impl eframe::App for StcjudgeGuiApp {
     fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
+        let dropped_files = ui.ctx().input(|input| input.raw.dropped_files.clone());
+        if !dropped_files.is_empty() {
+            self.handle_dropped_files(dropped_files);
+        }
         if let Err(err) = self
             .session
             .run_for_ui_frame(self.sim_speed_limit_multiplier)
@@ -1249,5 +1316,18 @@ mod tests {
     fn parse_wave_window_rejects_invalid_range() {
         let err = parse_wave_window("2ms", "1ms").unwrap_err();
         assert!(err.contains("结束时间"));
+    }
+
+    #[test]
+    fn dropped_file_kind_matches_supported_extensions() {
+        assert_eq!(
+            dropped_file_kind(Path::new("sample.HEX")),
+            Some(DroppedFileKind::Hex)
+        );
+        assert_eq!(
+            dropped_file_kind(Path::new("judge.Rhai")),
+            Some(DroppedFileKind::Rhai)
+        );
+        assert_eq!(dropped_file_kind(Path::new("note.txt")), None);
     }
 }
