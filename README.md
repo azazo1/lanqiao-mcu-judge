@@ -87,6 +87,12 @@ cargo bench --bench sim
   </tr>
 </table>
 
+macOS release 包中的二进制会做 ad-hoc signing, 但没有 Apple Developer ID notarization. 如果系统仍提示无法验证 `stcjudge-gui`, 可以在系统设置的隐私与安全性中选择仍要打开, 或在解压后的目录执行:
+
+```bash
+xattr -dr com.apple.quarantine stcjudge-gui
+```
+
 ## 发布
 
 Release workflow 只会在手动触发或推送 `v*` tag 时运行, 普通 `git push origin main` 不会发布任何 release.

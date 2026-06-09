@@ -180,6 +180,17 @@ jobs:
       - name: Build bins
         run: cargo build --release --workspace --bins --target ${{ matrix.target }}
 
+      - name: Ad-hoc sign macOS bins
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          BIN_NAMES="${{ needs.metadata.outputs.bin_names }}"
+          RELEASE_DIR="target/${{ matrix.target }}/release"
+
+          for BIN_NAME in $BIN_NAMES; do
+            codesign --force --sign - "$RELEASE_DIR/$BIN_NAME"
+          done
+
       - name: Package bins
         id: package
         shell: bash
