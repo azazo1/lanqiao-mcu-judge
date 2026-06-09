@@ -1,0 +1,272 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to build
+        required: false
+        default: ""
+      dry_run:
+        description: Build artifacts without publishing a release
+        required: false
+        type: boolean
+        default: false
+      release_type:
+        description: Release type for manual runs
+        required: true
+        type: choice
+        default: prerelease
+        options:
+          - prerelease
+          - release
+          - auto
+  push:
+    tags:
+      - "v*"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  metadata:
+    name: Metadata
+    runs-on: ubuntu-latest
+    outputs:
+      bin_names: ${{ steps.version.outputs.bin_names }}
+      version: ${{ steps.version.outputs.version }}
+      release_tag: ${{ steps.version.outputs.release_tag }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      make_latest: ${{ steps.version.outputs.make_latest }}
+      release_name: ${{ steps.version.outputs.release_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "stcjudge") | .version')"
+          BIN_NAMES="$(cargo metadata --no-deps --format-version 1 | jq -r '[.packages[] | .targets[] | select(.kind | index("bin")) | .name] | unique | join(" ")')"
+
+          EVENT_NAME="${{ github.event_name }}"
+          REF_NAME="${{ github.ref_name }}"
+          RELEASE_TYPE="${{ github.event.inputs.release_type || 'auto' }}"
+          REQUESTED_REF="${{ github.event.inputs.ref }}"
+
+          if [ "$EVENT_NAME" = "push" ]; then
+            RELEASE_TAG="$REF_NAME"
+          elif [ "$RELEASE_TYPE" = "release" ]; then
+            RELEASE_TAG="v$VERSION"
+          elif [ "$RELEASE_TYPE" = "prerelease" ]; then
+            RELEASE_TAG="v$VERSION-pre"
+          elif [[ "$REQUESTED_REF" == refs/tags/* ]]; then
+            RELEASE_TAG="${REQUESTED_REF#refs/tags/}"
+          elif [[ "$REQUESTED_REF" == v* ]]; then
+            RELEASE_TAG="$REQUESTED_REF"
+          else
+            RELEASE_TAG="v$VERSION-pre"
+          fi
+
+          TAG_VERSION="${RELEASE_TAG#v}"
+          TAG_VERSION="${TAG_VERSION%%-*}"
+          if [ "$TAG_VERSION" != "$VERSION" ]; then
+            echo "Release tag $RELEASE_TAG does not match Cargo version $VERSION" >&2
+            exit 1
+          fi
+
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            PRERELEASE=true
+            MAKE_LATEST=false
+            RELEASE_NAME="Pre-release $RELEASE_TAG"
+          else
+            PRERELEASE=false
+            MAKE_LATEST=true
+            RELEASE_NAME="Release $RELEASE_TAG"
+          fi
+
+          echo "bin_names=$BIN_NAMES" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "make_latest=$MAKE_LATEST" >> "$GITHUB_OUTPUT"
+          echo "release_name=$RELEASE_NAME" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.label }}
+    needs: metadata
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux-x86_64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            package_os: linux
+            package_arch: x86_64
+            archive: tar.gz
+            exe_suffix: ""
+          - label: linux-aarch64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            package_os: linux
+            package_arch: aarch64
+            archive: tar.gz
+            exe_suffix: ""
+          - label: macos-x86_64
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+            package_os: macos
+            package_arch: x86_64
+            archive: tar.gz
+            exe_suffix: ""
+          - label: macos-aarch64
+            runner: macos-15
+            target: aarch64-apple-darwin
+            package_os: macos
+            package_arch: aarch64
+            archive: tar.gz
+            exe_suffix: ""
+          - label: windows-x86_64
+            runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            package_os: windows
+            package_arch: x86_64
+            archive: zip
+            exe_suffix: ".exe"
+          - label: windows-aarch64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            package_os: windows
+            package_arch: aarch64
+            archive: zip
+            exe_suffix: ".exe"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev \
+            libegl1-mesa-dev \
+            libgl1-mesa-dev \
+            libudev-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxcb1-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxkbcommon-dev \
+            pkg-config
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ matrix.target }}
+
+      - name: Build bins
+        run: cargo build --release --workspace --bins --target ${{ matrix.target }}
+
+      - name: Package bins
+        id: package
+        shell: bash
+        run: |
+          VERSION="${{ needs.metadata.outputs.version }}"
+          BIN_NAMES="${{ needs.metadata.outputs.bin_names }}"
+          PACKAGE="stcjudge-${{ matrix.package_os }}-${{ matrix.package_arch }}-$VERSION"
+          RELEASE_DIR="target/${{ matrix.target }}/release"
+          EXE_SUFFIX="${{ matrix.exe_suffix }}"
+
+          mkdir -p "$PACKAGE"
+          for BIN_NAME in $BIN_NAMES; do
+            cp "$RELEASE_DIR/$BIN_NAME$EXE_SUFFIX" "$PACKAGE/"
+          done
+
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            7z a "$PACKAGE.zip" "$PACKAGE"
+            echo "asset=$PACKAGE.zip" >> "$GITHUB_OUTPUT"
+          else
+            tar -czf "$PACKAGE.tar.gz" "$PACKAGE"
+            echo "asset=$PACKAGE.tar.gz" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: stcjudge-${{ matrix.package_os }}-${{ matrix.package_arch }}-${{ needs.metadata.outputs.version }}
+          path: ${{ steps.package.outputs.asset }}
+          if-no-files-found: error
+
+  package-judges:
+    name: Package judges
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Package judge scripts
+        shell: bash
+        run: |
+          FIRST_SCRIPT="$(find samples -path "*/judge/*.rhai" -type f -print -quit)"
+          if [ -z "$FIRST_SCRIPT" ]; then
+            echo "No judge scripts found" >&2
+            exit 1
+          fi
+          find samples -path "*/judge/*.rhai" -type f -print0 | sort -z | xargs -0 zip judges.zip
+
+      - name: Upload judges
+        uses: actions/upload-artifact@v4
+        with:
+          name: judges
+          path: judges.zip
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish release
+    needs:
+      - metadata
+      - build
+      - package-judges
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    if: ${{ github.event.inputs.dry_run != 'true' }}
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.metadata.outputs.release_tag }}
+          name: ${{ needs.metadata.outputs.release_name }}
+          prerelease: ${{ needs.metadata.outputs.prerelease }}
+          make_latest: ${{ needs.metadata.outputs.make_latest }}
+          overwrite_files: true
+          generate_release_notes: true
+          body: |
+            Automated build from `${{ github.sha }}`.
+
+            Version: `${{ needs.metadata.outputs.version }}`
+            Run: `${{ github.run_number }}`
+          files: artifacts/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
