@@ -39,11 +39,13 @@ jobs:
       prerelease: ${{ steps.version.outputs.prerelease }}
       make_latest: ${{ steps.version.outputs.make_latest }}
       release_name: ${{ steps.version.outputs.release_name }}
+      release_body: ${{ steps.version.outputs.release_body }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.ref || github.ref }}
+          fetch-depth: 0
 
       - name: Resolve version
         id: version
@@ -88,12 +90,34 @@ jobs:
             RELEASE_NAME="Release $RELEASE_TAG"
           fi
 
+          BUILD_SHA="$(git rev-parse HEAD)"
+          RELEASE_BODY_DELIMITER="RELEASE_BODY_${BUILD_SHA}_EOF"
+          TAG_NOTES_FILE="$(mktemp)"
+          TAG_OBJECT_TYPE="$(git for-each-ref --count=1 "refs/tags/$RELEASE_TAG" --format="%(objecttype)")"
+          if [ "$TAG_OBJECT_TYPE" = "tag" ]; then
+            git for-each-ref --count=1 "refs/tags/$RELEASE_TAG" --format="%(contents)" > "$TAG_NOTES_FILE"
+          fi
+
           echo "bin_names=$BIN_NAMES" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
           echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
           echo "make_latest=$MAKE_LATEST" >> "$GITHUB_OUTPUT"
           echo "release_name=$RELEASE_NAME" >> "$GITHUB_OUTPUT"
+          {
+            echo "release_body<<$RELEASE_BODY_DELIMITER"
+            echo "Automated build from \`$BUILD_SHA\`."
+            echo
+            echo "Version: \`$VERSION\`"
+            echo "Run: \`${{ github.run_number }}\`"
+            if [ -s "$TAG_NOTES_FILE" ]; then
+              echo
+              echo "Tag notes:"
+              echo
+              cat "$TAG_NOTES_FILE"
+            fi
+            echo "$RELEASE_BODY_DELIMITER"
+          } >> "$GITHUB_OUTPUT"
 
   build:
     name: Build ${{ matrix.label }}
@@ -273,11 +297,7 @@ jobs:
           make_latest: ${{ needs.metadata.outputs.make_latest }}
           overwrite_files: true
           generate_release_notes: true
-          body: |
-            Automated build from `${{ github.sha }}`.
-
-            Version: `${{ needs.metadata.outputs.version }}`
-            Run: `${{ github.run_number }}`
+          body: ${{ needs.metadata.outputs.release_body }}
           files: artifacts/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
