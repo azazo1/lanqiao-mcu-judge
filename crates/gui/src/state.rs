@@ -42,6 +42,12 @@ pub(crate) struct GuiSession {
     pub(crate) repl: ScriptReplSession,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReloadResult {
+    Hex,
+    Empty,
+}
+
 impl GuiSession {
     pub(crate) fn empty() -> Self {
         let sim = Simulator::nop(false);
@@ -69,15 +75,27 @@ impl GuiSession {
         self.sim = sim;
         self.repl.reset();
         self.running = false;
+        self.last_tick = Instant::now();
         self.refresh();
         Ok(())
     }
 
-    pub(crate) fn reload(&mut self) -> Result<()> {
+    pub(crate) fn reload(&mut self) -> Result<ReloadResult> {
         let Some(path) = self.hex_path.clone() else {
-            return Ok(());
+            self.reset_empty();
+            return Ok(ReloadResult::Empty);
         };
-        self.load_hex(path)
+        self.load_hex(path)?;
+        Ok(ReloadResult::Hex)
+    }
+
+    fn reset_empty(&mut self) {
+        self.hex_path = None;
+        self.sim = Simulator::nop_with_options(self.trace_cpu, self.wave_options());
+        self.repl.reset();
+        self.running = false;
+        self.last_tick = Instant::now();
+        self.refresh();
     }
 
     pub(crate) fn refresh(&mut self) {
@@ -269,6 +287,26 @@ impl JudgeState {
         } else {
             self.rows.push(row);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reload_without_hex_resets_empty_sim_time() {
+        let mut session = GuiSession::empty();
+        session.sim.run_ms(10).expect("advance empty sim");
+        session.refresh();
+        assert!(session.snapshot.sim_time_ns > 0);
+
+        let result = session.reload().expect("reload empty sim");
+
+        assert_eq!(result, ReloadResult::Empty);
+        assert_eq!(session.snapshot.sim_time_ns, 0);
+        assert!(session.hex_path.is_none());
+        assert!(!session.running);
     }
 }
 

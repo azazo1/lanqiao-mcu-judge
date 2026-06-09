@@ -15,7 +15,7 @@ use stcjudge::{
 use crate::{
     api::judge_api_catalog,
     script_editor::{SCRIPT_EDITOR_ID, insert_snippet_at_editor_cursor},
-    state::{AppTab, GuiSession, JudgeState, UiFeedback, UiFeedbackKind},
+    state::{AppTab, GuiSession, JudgeState, ReloadResult, UiFeedback, UiFeedbackKind},
     style::{install_cjk_fonts, tune_ui_style},
     syntax::highlight_rhai,
     widgets::{
@@ -395,7 +395,16 @@ impl StcjudgeGuiApp {
                 self.select_hex_file();
             }
             if ui.button("重新加载").clicked() {
-                self.run_action(GuiSession::reload);
+                match self.session.reload() {
+                    Ok(result) => {
+                        self.temporary_key_press = None;
+                        match result {
+                            ReloadResult::Hex => self.notice("已重新加载 HEX"),
+                            ReloadResult::Empty => self.notice("已重置空仿真器"),
+                        }
+                    }
+                    Err(err) => self.error(err.to_string()),
+                }
             }
             if ui.button("复位").clicked() {
                 self.run_action(|session| {
@@ -467,13 +476,13 @@ impl StcjudgeGuiApp {
             let speed_response = ui.add_sized(
                 [96.0, 28.0],
                 egui::DragValue::new(&mut self.sim_speed_limit_multiplier)
-                    .range(0.05..=500.0)
+                    .range(0.01..=100.0)
                     .speed(0.1)
                     .suffix("x"),
             );
             if speed_response.changed() {
                 self.sim_speed_limit_multiplier =
-                    self.sim_speed_limit_multiplier.clamp(0.05, 500.0);
+                    self.sim_speed_limit_multiplier.clamp(0.01, 100.0);
             }
         });
     }
@@ -1004,7 +1013,7 @@ impl StcjudgeGuiApp {
                     Ok(()) => {
                         if self.session.hex_path.is_some() {
                             match self.session.reload() {
-                                Ok(()) => self.notice("已用当前波形配置重新加载 HEX"),
+                                Ok(_) => self.notice("已用当前波形配置重新加载 HEX"),
                                 Err(err) => self.error(err.to_string()),
                             }
                         } else {
