@@ -70,6 +70,32 @@ just bench
 cargo bench --bench sim
 ```
 
+## 发布
+
+Release workflow 只会在手动触发或推送 `v*` tag 时运行, 普通 `git push origin main` 不会发布任何 release.
+
+正式 release:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+预发布:
+
+```bash
+git tag v0.1.0-pre
+git push origin v0.1.0-pre
+```
+
+手动触发可以在 GitHub Actions 的 `Release` workflow 中选择 `release_type`:
+
+- `release`: 发布 `v<version>` 正式 release, 并标记为 latest.
+- `prerelease`: 发布 `v<version>-pre` prerelease, 不标记为 latest.
+- `auto`: 如果 `ref` 是 tag, 按 tag 名判断发布类型, 否则默认发布 prerelease.
+
+tag 中的版本号需要和 Cargo workspace version 一致, 例如 `v0.1.0` 对应 `version = "0.1.0"`.
+
 ## 作为库复用
 
 除了 `stcjudge` CLI, 当前仓库也可以作为库被其他 crate 直接依赖.
