@@ -13,7 +13,7 @@
 当前仓库使用 workspace 结构:
 
 - `crates/core`: `stcjudge` 核心 crate.
-- `crates/gui`: GUI crate 占位目录, 暂未实现.
+- `crates/gui`: `stcjudge-gui` 原生桌面调试台.
 
 > [!note]
 > 使用 `--release` 运行会比开发中运行快上不少.
@@ -34,6 +34,12 @@ stcjudge run --hex samples/key_seg/prj/Objects/key_seg.hex --stdin < samples/key
 
 ```bash
 stcjudge repl --hex samples/key_seg/prj/Objects/key_seg.hex
+```
+
+启动 GUI:
+
+```bash
+just gui
 ```
 
 查看 Rhai 脚本逐语句 tracing:
@@ -69,6 +75,17 @@ just bench
 ```bash
 cargo bench --bench sim
 ```
+
+## GUI
+
+`stcjudge-gui` 是面向本地调试和评测的原生桌面界面, 可以直接加载 HEX, 查看板级状态, 注入按键和串口输入, 运行 Rhai 评测脚本, 并导出波形文件. 波形查看界面是独立 HTML, 导出后在浏览器中打开.
+
+<table>
+  <tr>
+    <td width="50%" valign="top"><img src="assets/gui-demo.png" alt="stcjudge GUI 示例" width="100%"></td>
+    <td width="50%" valign="top"><img src="assets/wave-demo.png" alt="stcjudge 波形示例" width="100%"></td>
+  </tr>
+</table>
 
 ## 发布
 
