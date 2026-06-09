@@ -1,4 +1,4 @@
-use std::{path::Path, path::PathBuf};
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use eframe::egui;
@@ -368,7 +368,7 @@ fn draw_uart_output(
                 .stick_to_bottom(stick_to_bottom)
                 .show(ui, |ui| {
                     ui.set_min_width(ui.available_width());
-                    ui.monospace(output);
+                    draw_uart_output_text(ui, output);
                 });
             let clicked_inside = ui.rect_contains_pointer(output.inner_rect)
                 && ui.input(|input| input.pointer.primary_clicked());
@@ -415,6 +415,34 @@ fn format_uart_hex(raw: &[u16]) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn draw_uart_output_text(ui: &mut egui::Ui, text: &str) {
+    let font_id = egui::TextStyle::Monospace.resolve(ui.style());
+    let text_color = ui.visuals().text_color();
+    let wrap_width = ui.available_width().max(1.0);
+    let galley = ui.fonts_mut(|fonts| {
+        fonts.layout_job(uart_output_layout_job(
+            text.to_owned(),
+            font_id,
+            text_color,
+            wrap_width,
+        ))
+    });
+    ui.add(egui::Label::new(galley));
+}
+
+fn uart_output_layout_job(
+    text: String,
+    font_id: egui::FontId,
+    color: egui::Color32,
+    wrap_width: f32,
+) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::simple(text, font_id, color, wrap_width.max(1.0));
+    job.wrap.break_anywhere = true;
+    job.justify = false;
+    job.halign = egui::Align::LEFT;
+    job
 }
 
 pub(crate) fn draw_logs(
@@ -721,5 +749,20 @@ mod tests {
     #[test]
     fn format_uart_hex_keeps_ninth_bit_symbols() {
         assert_eq!(format_uart_hex(&[0x00, 0x0A, 0xFF, 0x101]), "00 0A FF 101");
+    }
+
+    #[test]
+    fn uart_output_layout_wraps_by_character_without_justifying() {
+        let job = uart_output_layout_job(
+            "hello world woooooolld".to_owned(),
+            egui::FontId::monospace(13.0),
+            egui::Color32::WHITE,
+            80.0,
+        );
+
+        assert!(job.wrap.break_anywhere);
+        assert!(!job.justify);
+        assert_eq!(job.halign, egui::Align::LEFT);
+        assert_eq!(job.wrap.max_width, 80.0);
     }
 }
