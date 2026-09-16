@@ -14,6 +14,30 @@ $target = $env:PROJECT_DIST_TARGET
 $outDir = if ($env:PROJECT_DIST_OUT) { $env:PROJECT_DIST_OUT } else { 'dist' }
 $fakeSuffix = if ($env:PROJECT_DIST_FAKE) { '-fake' } else { '' }
 
+# 把一个文件列表打成 $outDir 下的 zip, 每个包使用独立的临时目录.
+function New-Package {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+        [Parameter(Mandatory = $true)]
+        [string[]]$Files
+    )
+
+    $packageDir = Join-Path ([System.IO.Path]::GetTempPath()) ("stcjudge-dist-" + [guid]::NewGuid().ToString())
+    New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
+    try {
+        foreach ($file in $Files) {
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
+                throw "缺少打包文件: $file"
+            }
+            Copy-Item -LiteralPath $file -Destination $packageDir
+        }
+        Compress-Archive -Path (Join-Path $packageDir '*') -DestinationPath (Join-Path $outDir $Name) -Force
+    } finally {
+        Remove-Item -LiteralPath $packageDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 $root = Split-Path -Parent $PSScriptRoot
 Push-Location -LiteralPath $root
 try {
@@ -49,7 +73,7 @@ try {
         }
     }
 
-    $cliVersion = & (Join-Path $releaseDir 'stcjudge.exe') --version
+    $cliVersion = & (Join-Path $releaseDir 'stcjudge.exe') '--version'
     if ($LASTEXITCODE -ne 0) {
         throw 'stcjudge --version 执行失败'
     }
@@ -58,28 +82,22 @@ try {
     }
 
     New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-    $staging = Join-Path ([System.IO.Path]::GetTempPath()) ("stcjudge-dist-" + [guid]::NewGuid().ToString())
-    New-Item -ItemType Directory -Force -Path $staging | Out-Null
-    try {
-        $cliName = "stcjudge-$version-windows-$platformArch$fakeSuffix.zip"
-        $guiName = "stcjudge-gui-$version-windows-$platformArch$fakeSuffix.zip"
+    $cliName = "stcjudge-$version-windows-$platformArch$fakeSuffix.zip"
+    $guiName = "stcjudge-gui-$version-windows-$platformArch$fakeSuffix.zip"
 
-        Copy-Item -LiteralPath (Join-Path $releaseDir 'stcjudge.exe') -Destination $staging
-        Copy-Item -LiteralPath (Join-Path $releaseDir 'analyze-objects.exe') -Destination $staging
-        Copy-Item -LiteralPath 'LICENSE' -Destination $staging
-        Copy-Item -LiteralPath 'README.md' -Destination $staging
-        Compress-Archive -Path (Join-Path $staging '*') -DestinationPath (Join-Path $outDir $cliName) -Force
+    New-Package -Name $cliName -Files @(
+        (Join-Path $releaseDir 'stcjudge.exe'),
+        (Join-Path $releaseDir 'analyze-objects.exe'),
+        'LICENSE',
+        'README.md'
+    )
+    New-Package -Name $guiName -Files @(
+        (Join-Path $releaseDir 'stcjudge-gui.exe'),
+        'LICENSE'
+    )
 
-        Remove-Item -LiteralPath (Join-Path $staging '*') -Recurse -Force
-        Copy-Item -LiteralPath (Join-Path $releaseDir 'stcjudge-gui.exe') -Destination $staging
-        Copy-Item -LiteralPath 'LICENSE' -Destination $staging
-        Compress-Archive -Path (Join-Path $staging '*') -DestinationPath (Join-Path $outDir $guiName) -Force
-
-        Write-Output "已生成 $outDir/$cliName"
-        Write-Output "已生成 $outDir/$guiName"
-    } finally {
-        Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
-    }
+    Write-Output "已生成 $outDir/$cliName"
+    Write-Output "已生成 $outDir/$guiName"
 } finally {
     Pop-Location
 }
