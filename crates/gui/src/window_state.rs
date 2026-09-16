@@ -10,7 +10,7 @@ use std::{
 };
 
 use eframe::egui;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::settings::{Settings, lock};
 
@@ -57,7 +57,7 @@ impl StartupGeometry {
 pub struct WindowState {
     last_seen: Option<egui::Vec2>,
     settle_since: Option<Instant>,
-    clamped: bool,
+    measured: bool,
 }
 
 impl WindowState {
@@ -67,10 +67,11 @@ impl WindowState {
 
     /// 每帧跟踪窗口尺寸; 尺寸稳定一段时间后落盘.
     pub fn track(&mut self, ctx: &egui::Context, settings: &Arc<Mutex<Settings>>) {
-        let (size, maximized, fullscreen, monitor_size) = ctx.input(|input| {
+        let (inner_rect, outer_rect, maximized, fullscreen, monitor_size) = ctx.input(|input| {
             let viewport = input.viewport();
             (
-                viewport.inner_rect.map(|rect| rect.size()),
+                viewport.inner_rect,
+                viewport.outer_rect,
                 viewport.maximized.unwrap_or(false),
                 viewport.fullscreen.unwrap_or(false),
                 viewport.monitor_size,
@@ -85,20 +86,29 @@ impl WindowState {
             return;
         }
 
-        let Some(size) = size else {
+        let Some(inner_rect) = inner_rect else {
             return;
         };
+        let size = inner_rect.size();
 
-        // 恢复出来的尺寸在当前显示器放不下时夹取一次, 避免窗口大于屏幕.
-        if !self.clamped {
-            self.clamped = true;
-            if let Some(monitor_size) = monitor_size
-                && exceeds_monitor(size, monitor_size)
-            {
-                let clamped = clamp_to_monitor(size, monitor_size);
-                debug!(from = ?size, to = ?clamped, "恢复的窗口尺寸超出显示器, 已夹取");
-                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(clamped));
-                return;
+        // 首次拿到窗口几何时记录一次, 并确认整个窗口 (含标题栏) 仍在显示器内.
+        if !self.measured {
+            self.measured = true;
+            if let (Some(outer_rect), Some(monitor_size)) = (outer_rect, monitor_size) {
+                let chrome = outer_rect.size() - size;
+                debug!(
+                    monitor = ?monitor_size,
+                    inner = ?size,
+                    outer = ?outer_rect.size(),
+                    "窗口几何"
+                );
+                let outer_size = size + chrome;
+                if exceeds_monitor(outer_size, monitor_size) {
+                    let clamped = (clamp_to_monitor(outer_size, monitor_size) - chrome).max(MIN_SIZE);
+                    info!(from = ?size, to = ?clamped, "恢复的窗口尺寸放不下, 已夹取到显示器内");
+                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(clamped));
+                    return;
+                }
             }
         }
 
@@ -190,11 +200,11 @@ fn exceeds_monitor(size: egui::Vec2, monitor_size: egui::Vec2) -> bool {
     size.x > monitor_size.x || size.y > monitor_size.y
 }
 
-/// 把尺寸夹取到显示器工作区内.
+/// 把尺寸夹取到显示器工作区内, 但不会小于允许的最小窗口大小.
 fn clamp_to_monitor(size: egui::Vec2, monitor_size: egui::Vec2) -> egui::Vec2 {
     egui::vec2(
-        size.x.min(monitor_size.x - MONITOR_MARGIN).max(MIN_SIZE.x),
-        size.y.min(monitor_size.y - MONITOR_MARGIN).max(MIN_SIZE.y),
+        size.x.min((monitor_size.x - MONITOR_MARGIN).max(MIN_SIZE.x)),
+        size.y.min((monitor_size.y - MONITOR_MARGIN).max(MIN_SIZE.y)),
     )
 }
 
