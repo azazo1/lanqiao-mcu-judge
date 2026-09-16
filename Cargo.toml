@@ -16,19 +16,30 @@ anyhow = "1.0.100"
 base64 = "0.22.1"
 clap = { version = "4.5.53", features = ["derive"] }
 criterion = "0.8.2"
+ctrlc = "3.5.2"
+dirs = "7.0.0"
+flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs"] }
 i8051 = "0.13.0"
 ihex = "3.0.0"
 regex = "1.12.2"
+reqwest = { version = "0.13.5", default-features = false, features = ["charset", "http2", "json", "native-tls", "system-proxy"] }
 rhai = { version = "1.23.6", features = ["sync", "debugging"] }
 rmp-serde = "1.3.0"
+semver = "1.0.28"
 serde = { version = "1.0.228", features = ["derive"] }
-tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread"] }
+serde_json = "1.0.145"
+sha2 = "0.10.9"
+tar = "0.4.46"
+tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread", "sync", "time"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 eframe = { version = "0.34.3", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
 egui = "0.34.3"
 egui_extras = "0.34.3"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+notify-rust = "4.18.0"
 rfd = "0.17.2"
+zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [patch.crates-io]
 i8051 = { path = "vendor/i8051" }

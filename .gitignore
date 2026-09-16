@@ -1,4 +1,6 @@
 /target
+/dist
+/.tmp/
 /samples/*/prj/Objects/*
 !/samples/*/prj/Objects/*.hex
 /samples/*/prj/Listings/

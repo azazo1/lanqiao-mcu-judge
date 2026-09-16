@@ -1,5 +1,6 @@
 mod app;
 pub mod bench;
+pub mod build_info;
 mod chip;
 mod event;
 mod hex;

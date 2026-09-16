@@ -1,6 +1,9 @@
 use std::{
     path::{Path, PathBuf},
-    sync::mpsc::{self, Receiver, Sender},
+    sync::{
+        Arc, Mutex,
+        mpsc::{self, Receiver, Sender},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -15,10 +18,16 @@ use stcjudge::{
 
 use crate::{
     api::judge_api_catalog,
+    instance::InstanceGuard,
+    lifecycle::{self, ExitSignal},
+    logging,
     script_editor::{SCRIPT_EDITOR_ID, insert_snippet_at_editor_cursor},
+    settings::Settings,
     state::{AppTab, GuiSession, JudgeState, ReloadResult, UiFeedback, UiFeedbackKind},
     style::{install_cjk_fonts, tune_ui_style},
     syntax::highlight_rhai,
+    update::UpdateService,
+    update_view::UpdateView,
     widgets::{
         UartOutputMode, draw_board_overview, draw_checkpoint_table, draw_logs, draw_ports,
         input_f32_row, path_label, show_tab_scroll, slider_f32_row, uart_row, wave_path_row,
@@ -79,6 +88,16 @@ enum DroppedFileKind {
     Rhai,
 }
 
+/// 由入口构造应用时传入的外部句柄.
+pub struct AppHandles {
+    /// 单实例锁, 退出前释放.
+    pub instance: Option<InstanceGuard>,
+    /// 持久化设置, 与更新服务共享.
+    pub settings: Arc<Mutex<Settings>>,
+    /// 自动更新后台服务.
+    pub update: UpdateService,
+}
+
 pub struct StcjudgeGuiApp {
     session: GuiSession,
     tab: AppTab,
@@ -107,10 +126,22 @@ pub struct StcjudgeGuiApp {
     repl_input: String,
     repl_history: Vec<String>,
     temporary_key_press: Option<TemporaryKeyPress>,
+    instance: Option<InstanceGuard>,
+    settings: Arc<Mutex<Settings>>,
+    update: UpdateService,
+    update_view: UpdateView,
+    exit: ExitSignal,
+    exiting: bool,
 }
 
-impl Default for StcjudgeGuiApp {
-    fn default() -> Self {
+impl StcjudgeGuiApp {
+    pub fn new(ctx: &eframe::CreationContext<'_>, handles: AppHandles) -> Self {
+        install_cjk_fonts(&ctx.egui_ctx);
+        tune_ui_style(&ctx.egui_ctx);
+
+        let exit = ExitSignal::new();
+        lifecycle::install_or_warn(&exit, ctx.egui_ctx.clone());
+
         Self {
             session: GuiSession::empty(),
             tab: AppTab::Debug,
@@ -139,15 +170,51 @@ impl Default for StcjudgeGuiApp {
             repl_input: "display_text()".to_owned(),
             repl_history: Vec::new(),
             temporary_key_press: None,
+            instance: handles.instance,
+            settings: handles.settings,
+            update: handles.update,
+            update_view: UpdateView::new(),
+            exit,
+            exiting: false,
         }
     }
-}
 
-impl StcjudgeGuiApp {
-    pub fn new(ctx: &eframe::CreationContext<'_>) -> Self {
-        install_cjk_fonts(&ctx.egui_ctx);
-        tune_ui_style(&ctx.egui_ctx);
-        Self::default()
+    /// 处理来自其他实例, 终端信号与更新服务的退出请求.
+    fn poll_external_commands(&mut self, ctx: &egui::Context) {
+        if let Some(instance) = &self.instance {
+            while let Some(args) = instance.try_recv() {
+                tracing::info!(args = ?args, "收到二次启动请求, 显示主窗口");
+                self.show_main_window(ctx);
+            }
+        }
+
+        if self.exit.is_requested() {
+            self.request_exit(ctx, "收到终端退出信号");
+        } else if self.update.exit_requested() {
+            self.request_exit(ctx, "更新已交接替换");
+        }
+    }
+
+    /// 显示, 恢复并聚焦主窗口.
+    fn show_main_window(&self, ctx: &egui::Context) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+    }
+
+    /// 统一退出路径: 停止后台服务, 释放单实例锁, 刷盘日志后关闭窗口.
+    fn request_exit(&mut self, ctx: &egui::Context, reason: &str) {
+        if self.exiting {
+            return;
+        }
+        self.exiting = true;
+        tracing::info!(reason, "开始退出应用");
+
+        self.update.shutdown();
+        self.instance = None;
+        logging::flush();
+
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
     fn log(&mut self, message: impl Into<String>) {
@@ -163,6 +230,11 @@ impl StcjudgeGuiApp {
     }
 
     fn push_feedback(&mut self, kind: UiFeedbackKind, message: String) {
+        // 用户操作与错误同时写进文件日志, 便于事后复现问题.
+        match kind {
+            UiFeedbackKind::Info => tracing::info!(target: "stcjudge_gui::ui", "{message}"),
+            UiFeedbackKind::Error => tracing::error!(target: "stcjudge_gui::ui", "{message}"),
+        }
         self.push_log(message.clone());
         self.feedbacks.push(UiFeedback::new(kind, message));
         if self.feedbacks.len() > 6 {
@@ -1253,7 +1325,10 @@ fn dropped_file_kind(path: &Path) -> Option<DroppedFileKind> {
 
 impl eframe::App for StcjudgeGuiApp {
     fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
-        let dropped_files = ui.ctx().input(|input| input.raw.dropped_files.clone());
+        let ctx = ui.ctx().clone();
+        self.poll_external_commands(&ctx);
+
+        let dropped_files = ctx.input(|input| input.raw.dropped_files.clone());
         if !dropped_files.is_empty() {
             self.handle_dropped_files(dropped_files);
         }
@@ -1265,6 +1340,19 @@ impl eframe::App for StcjudgeGuiApp {
             self.log(err.to_string());
         }
         self.poll_judge_events();
+
+        let update_snapshot = self.update.snapshot();
+        egui::Panel::bottom("status-bar").show_inside(ui, |ui| {
+            ui.add_space(2.0);
+            if self
+                .update_view
+                .status_bar(ui, &self.update, &update_snapshot)
+            {
+                tracing::debug!("用户从状态栏打开了更新窗口");
+            }
+            ui.add_space(2.0);
+        });
+
         egui::Frame::central_panel(ui.style())
             .inner_margin(egui::Margin::same(12))
             .show(ui, |ui| {
@@ -1277,9 +1365,16 @@ impl eframe::App for StcjudgeGuiApp {
                     AppTab::Wave => self.draw_wave_tab(ui),
                 }
             });
-        self.draw_feedback_toasts(ui.ctx());
-        if self.session.running || self.judge.running || !self.feedbacks.is_empty() {
-            ui.ctx().request_repaint_after(Duration::from_millis(16));
+        self.draw_feedback_toasts(&ctx);
+        self.update_view
+            .window(&ctx, &self.update, &update_snapshot, &self.settings);
+
+        if self.session.running
+            || self.judge.running
+            || !self.feedbacks.is_empty()
+            || update_snapshot.phase.is_busy()
+        {
+            ctx.request_repaint_after(Duration::from_millis(16));
         }
     }
 }

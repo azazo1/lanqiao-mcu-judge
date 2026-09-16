@@ -87,6 +87,20 @@ cargo bench --bench sim
   </tr>
 </table>
 
+界面底部状态栏显示当前版本号, 有新版本时替换为可点击的更新入口; 更新窗口支持检查, 下载, 跳过版本, 查看 release notes, 并在下载完成后由用户决定何时 "重启并更新". 自动更新只在安装了发布产物时可用, 本地开发构建显示 `dev-build` 且不参与更新检查.
+
+数据目录与日志:
+
+- 默认数据目录: macOS 为 `~/Library/Application Support/stcjudge-gui`, Windows 为 `%APPDATA%\stcjudge-gui`, Linux 为 `~/.local/share/stcjudge-gui`.
+- `STCJUDGE_GUI_DATA_DIR` 覆盖数据目录, `STCJUDGE_GUI_LOG_FILE` 覆盖主日志文件路径.
+- 日志按天与单文件大小轮转, 默认留存 10 个归档文件; `RUST_LOG` 控制级别, 默认 `info`.
+
+调试实例 (隔离数据目录与日志, 输出最详细日志):
+
+```bash
+just debug
+```
+
 macOS release 包中的二进制会做 ad-hoc signing, 但没有 Apple Developer ID notarization. 如果系统仍提示无法验证 `stcjudge-gui`, 可以在系统设置的隐私与安全性中选择仍要打开, 或在解压后的目录执行:
 
 ```bash
@@ -95,29 +109,26 @@ xattr -dr com.apple.quarantine stcjudge-gui
 
 ## 发布
 
-Release workflow 只会在手动触发或推送 `v*` tag 时运行, 普通 `git push origin main` 不会发布任何 release.
+Release 由 `.github/workflows/ci.yml` 承载: 普通 `git push origin main` 只运行检查与打包, 不会创建 release; 推送 tag, 或手动触发 `CI` 并填写已有 tag, 才会发布. 发布步骤:
 
-正式 release:
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-预发布:
+1. 提升 `Cargo.toml` 中的 workspace 版本号.
+2. 编写 `docs/changelog/<version>.md`, 它同时是 release notes 与 tag annotation 的正文.
+3. 提交后创建 annotated tag 并推送:
 
 ```bash
-git tag v0.1.0-pre
-git push origin v0.1.0-pre
+git tag -a v0.1.3 --cleanup=verbatim -F docs/changelog/0.1.3.md
+git push origin main
+git push origin v0.1.3
 ```
 
-手动触发可以在 GitHub Actions 的 `Release` workflow 中选择 `release_type`:
+tag 必须与包版本一致, tag annotation 会与说明文件做字节比较, 不一致时发布直接失败. 每个平台产出 CLI 与桌面应用两类归档, 另加 `SHA256SUMS` 与 `judges.zip`; 桌面应用的自动更新按 `stcjudge-gui-<version>-<platform>-<arch>.<ext>` 匹配资产.
 
-- `release`: 发布 `v<version>` 正式 release, 并标记为 latest.
-- `prerelease`: 发布 `v<version>-pre` prerelease, 不标记为 latest.
-- `auto`: 如果 `ref` 是 tag, 按 tag 名判断发布类型, 否则默认发布 prerelease.
+本地可以按当前平台产出发布产物:
 
-tag 中的版本号需要和 Cargo workspace version 一致, 例如 `v0.1.0` 对应 `version = "0.1.0"`.
+```bash
+just dist        # 正式产物到 dist/
+just fake-dist   # v0.0.0 的自动更新测试构建
+```
 
 ## 作为库复用
 
@@ -140,6 +151,7 @@ tag 中的版本号需要和 Cargo workspace version 一致, 例如 `v0.1.0` 对
 - 波形导出说明见 [docs/wave-export.md](docs/wave-export.md).
 - 芯片与中断仿真说明见 [docs/chip.md](docs/chip.md).
 - C51 CLI 编译说明见 [docs/c51-cli-build.md](docs/c51-cli-build.md).
+- 发布与产物约定见 [docs/release.md](docs/release.md).
 - `just build-sample <sample>` 会自动读取项目根目录 `.env`, 然后调用现有 `uvproj` 工程做批量构建. Windows 直接调用 `UV4.exe`, macOS 通过 CrossOver 调用同一套工程. Linux 暂不支持.
 - `bash scripts/keil-env-doctor.sh <sample>` 和 `just keil-doctor` 可检查 macOS 兼容层中的 Keil 和 STC15 器件资源是否齐全.
 - 现在支持 `print(...)`, `watch_led_stats(...)`, `display_text(window_ms)`, `display_number(...)`, `key_mode(...)`, `jumper_on(...)`, `jumper_off(...)`, `jumper_installed(...)` 以及内置常量 `L1..L8`, `S4..S19`, `RB2/RB3/RB4/RD1`, `KEYBOARD/KBD`, `BUTTON/BTN`, `SIG_OUT/NET_SIG`.

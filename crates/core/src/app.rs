@@ -8,7 +8,11 @@ use tracing_subscriber::{EnvFilter, fmt};
 use crate::{chip::Simulator, wave::WaveCaptureOptions};
 
 #[derive(Debug, Parser)]
-#[command(author, version, about = "STC15F2K60S2 + 蓝桥杯 4T 开发板仿真评测工具")]
+#[command(
+    author,
+    version = crate::build_info::build_version(),
+    about = "STC15F2K60S2 + 蓝桥杯 4T 开发板仿真评测工具"
+)]
 pub struct Cli {
     #[command(subcommand)]
     command: Command,

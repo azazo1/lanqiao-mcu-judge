@@ -12,6 +12,7 @@ clippy:
 
 test:
     cargo test --release -p stcjudge
+    cargo test --release -p stcjudge-gui
     just judge-samples
 
 alias sj := stcjudge
@@ -31,6 +32,67 @@ repl hex:
 
 gui:
     cargo run --release -p stcjudge-gui
+
+# 启动隔离数据目录的调试实例, 完整日志写入隔离目录.
+[unix]
+debug:
+    STCJUDGE_GUI_DATA_DIR=target/gui-debug STCJUDGE_GUI_LOG_FILE=target/gui-debug/app.log RUST_LOG=stcjudge_gui=trace,info cargo run -p stcjudge-gui
+
+# 启动隔离数据目录的调试实例, 完整日志写入隔离目录.
+[windows]
+[script("pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
+debug:
+    $env:STCJUDGE_GUI_DATA_DIR = 'target/gui-debug'
+    $env:STCJUDGE_GUI_LOG_FILE = 'target/gui-debug/app.log'
+    $env:RUST_LOG = 'stcjudge_gui=trace,info'
+    cargo run -p stcjudge-gui
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+
+# 根据当前平台生成发布产物, 输出到 dist/.
+[windows]
+[script("pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
+dist:
+    $ErrorActionPreference = 'Stop'
+    $version = (& 'scripts/build-version.ps1' | Out-String).Trim()
+    $env:PROJECT_BUILD_VERSION = "v$version"
+    & 'scripts/dist-windows.ps1'
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+
+# 根据当前平台生成发布产物, 输出到 dist/.
+[macos]
+dist:
+    PROJECT_BUILD_VERSION="v$(bash scripts/build-version.sh)" ./scripts/dist-macos.sh
+
+# 根据当前平台生成发布产物, 输出到 dist/.
+[linux]
+dist:
+    PROJECT_BUILD_VERSION="v$(bash scripts/build-version.sh)" ./scripts/dist-linux.sh
+
+# 生成自动更新测试用的 fake 构建, 版本号固定为 v0.0.0, 产物名带 -fake.
+[windows]
+[script("pwsh", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
+fake-dist:
+    $ErrorActionPreference = 'Stop'
+    $env:PROJECT_BUILD_VERSION = 'v0.0.0'
+    $env:PROJECT_DIST_FAKE = '1'
+    & 'scripts/dist-windows.ps1'
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+
+# 生成自动更新测试用的 fake 构建, 版本号固定为 v0.0.0, 产物名带 -fake.
+[macos]
+fake-dist:
+    PROJECT_DIST_FAKE=1 PROJECT_BUILD_VERSION=v0.0.0 ./scripts/dist-macos.sh
+
+# 生成自动更新测试用的 fake 构建, 版本号固定为 v0.0.0, 产物名带 -fake.
+[linux]
+fake-dist:
+    PROJECT_DIST_FAKE=1 PROJECT_BUILD_VERSION=v0.0.0 ./scripts/dist-linux.sh
 
 # 示例: just judge-sample ds1302
 # 示例: just judge-sample ds1302 smoke

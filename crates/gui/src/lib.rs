@@ -1,10 +1,20 @@
 mod api;
 mod app;
+pub mod build_info;
+mod icon;
+pub mod instance;
+mod lifecycle;
+pub mod logging;
+pub mod paths;
 mod script_editor;
+pub mod settings;
 mod state;
 mod style;
 mod syntax;
+pub mod update;
+mod update_view;
 mod widgets;
 
 pub use api::{JudgeApiItem, judge_api_catalog};
-pub use app::StcjudgeGuiApp;
+pub use app::{AppHandles, StcjudgeGuiApp};
+pub use icon::window_icon;
