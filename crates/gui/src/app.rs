@@ -453,14 +453,21 @@ impl StcjudgeGuiApp {
         self.notice("正在终止评测");
     }
 
-    fn draw_top_bar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
+    /// 顶部标签栏: 左侧切换标签, 右侧固定展示版本号与更新入口.
+    fn draw_top_bar(&mut self, ui: &mut egui::Ui, snapshot: &crate::update::UpdateSnapshot) {
+        ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 14.0;
             for tab in [AppTab::Debug, AppTab::Judge, AppTab::Script, AppTab::Wave] {
                 if ui.selectable_label(self.tab == tab, tab.label()).clicked() {
                     self.tab = tab;
                 }
             }
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if self.update_view.status_bar(ui, &self.update, snapshot) {
+                    tracing::debug!("用户从版本区打开了更新窗口");
+                }
+            });
         });
     }
 
@@ -1347,21 +1354,10 @@ impl eframe::App for StcjudgeGuiApp {
         self.poll_judge_events();
 
         let update_snapshot = self.update.snapshot();
-        egui::Panel::bottom("status-bar").show_inside(ui, |ui| {
-            ui.add_space(2.0);
-            if self
-                .update_view
-                .status_bar(ui, &self.update, &update_snapshot)
-            {
-                tracing::debug!("用户从状态栏打开了更新窗口");
-            }
-            ui.add_space(2.0);
-        });
-
         egui::Frame::central_panel(ui.style())
             .inner_margin(egui::Margin::same(12))
             .show(ui, |ui| {
-                self.draw_top_bar(ui);
+                self.draw_top_bar(ui, &update_snapshot);
                 ui.separator();
                 match self.tab {
                     AppTab::Debug => self.draw_debug_tab(ui),

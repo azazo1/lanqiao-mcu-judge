@@ -3,6 +3,9 @@
 //! 只记忆非全屏, 非最大化时的窗口大小, 启动时恢复; 位置交给系统决定, 不还原上次坐标.
 //! 尺寸存在应用数据目录的 `settings.json` 里, 因此 `just debug` 与 fake 构建的隔离实例
 //! 各自记忆自己的尺寸. 同目录下运行期窗口尺寸变化结束会即时落盘, 优雅退出时再写一次.
+//!
+//! 恢复的尺寸必须让整个窗口 (含标题栏) 落在屏幕可用区域内: macOS 上还要排除菜单栏与
+//! Dock, 否则窗口底部会藏到 Dock 后面, 贴在底部的状态栏就会被挡住.
 
 use std::{
     sync::{Arc, Mutex},
@@ -91,23 +94,27 @@ impl WindowState {
         };
         let size = inner_rect.size();
 
-        // 首次拿到窗口几何时记录一次, 并确认整个窗口 (含标题栏) 仍在显示器内.
+        // 首次拿到窗口几何时记录一次, 并确认整个窗口 (含标题栏) 仍落在屏幕可用区域内.
         if !self.measured {
             self.measured = true;
-            if let (Some(outer_rect), Some(monitor_size)) = (outer_rect, monitor_size) {
+            if let Some(outer_rect) = outer_rect {
                 let chrome = outer_rect.size() - size;
-                debug!(
-                    monitor = ?monitor_size,
-                    inner = ?size,
-                    outer = ?outer_rect.size(),
-                    "窗口几何"
-                );
                 let outer_size = size + chrome;
-                if exceeds_monitor(outer_size, monitor_size) {
-                    let clamped = (clamp_to_monitor(outer_size, monitor_size) - chrome).max(MIN_SIZE);
-                    info!(from = ?size, to = ?clamped, "恢复的窗口尺寸放不下, 已夹取到显示器内");
-                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(clamped));
-                    return;
+                let area = available_area(monitor_size);
+                if let Some((area, margin)) = area {
+                    debug!(
+                        monitor = ?monitor_size,
+                        area = ?area,
+                        inner = ?size,
+                        outer = ?outer_size,
+                        "窗口几何"
+                    );
+                    if exceeds_area(outer_size, area, margin) {
+                        let clamped = (clamp_to_area(outer_size, area, margin) - chrome).max(MIN_SIZE);
+                        info!(from = ?size, to = ?clamped, "恢复的窗口尺寸放不下, 已夹取到屏幕可用区域内");
+                        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(clamped));
+                        return;
+                    }
                 }
             }
         }
@@ -195,17 +202,45 @@ fn usable_size(size: egui::Vec2) -> bool {
     size.x >= MIN_RECORDED && size.y >= MIN_RECORDED
 }
 
-/// 尺寸是否超出显示器工作区.
-fn exceeds_monitor(size: egui::Vec2, monitor_size: egui::Vec2) -> bool {
-    size.x > monitor_size.x || size.y > monitor_size.y
+/// 窗口可用的屏幕区域: 优先使用排除菜单栏与 Dock 的工作区, 取不到时退化为显示器尺寸.
+///
+/// 返回区域尺寸与需要额外预留的边距.
+fn available_area(monitor_size: Option<egui::Vec2>) -> Option<(egui::Vec2, f32)> {
+    if let Some(area) = work_area() {
+        return Some((area, 0.0));
+    }
+    monitor_size.map(|size| (size, MONITOR_MARGIN))
 }
 
-/// 把尺寸夹取到显示器工作区内, 但不会小于允许的最小窗口大小.
-fn clamp_to_monitor(size: egui::Vec2, monitor_size: egui::Vec2) -> egui::Vec2 {
+/// 尺寸是否超出可用区域.
+fn exceeds_area(size: egui::Vec2, area: egui::Vec2, margin: f32) -> bool {
+    size.x > area.x - margin || size.y > area.y - margin
+}
+
+/// 把尺寸夹取到可用区域内, 但不会小于允许的最小窗口大小.
+fn clamp_to_area(size: egui::Vec2, area: egui::Vec2, margin: f32) -> egui::Vec2 {
     egui::vec2(
-        size.x.min((monitor_size.x - MONITOR_MARGIN).max(MIN_SIZE.x)),
-        size.y.min((monitor_size.y - MONITOR_MARGIN).max(MIN_SIZE.y)),
+        size.x.min((area.x - margin).max(MIN_SIZE.x)),
+        size.y.min((area.y - margin).max(MIN_SIZE.y)),
     )
+}
+
+/// 屏幕可用区域 (不含菜单栏与 Dock), 单位为 egui 点.
+#[cfg(target_os = "macos")]
+fn work_area() -> Option<egui::Vec2> {
+    let mtm = objc2::MainThreadMarker::new()?;
+    let screen = objc2_app_kit::NSScreen::mainScreen(mtm)?;
+    let frame = screen.visibleFrame();
+    Some(egui::vec2(
+        frame.size.width as f32,
+        frame.size.height as f32,
+    ))
+}
+
+/// 其他平台无法直接查询工作区, 由调用方退回显示器尺寸.
+#[cfg(not(target_os = "macos"))]
+fn work_area() -> Option<egui::Vec2> {
+    None
 }
 
 fn is_same_size(left: egui::Vec2, right: egui::Vec2) -> bool {
@@ -256,15 +291,25 @@ mod tests {
     }
 
     #[test]
-    fn monitor_clamping_keeps_window_on_screen() {
-        let monitor = egui::vec2(1280.0, 800.0);
-        assert!(exceeds_monitor(egui::vec2(1920.0, 1080.0), monitor));
-        let clamped = clamp_to_monitor(egui::vec2(1920.0, 1080.0), monitor);
-        assert!(clamped.x <= monitor.x && clamped.y <= monitor.y);
-        assert!(!exceeds_monitor(egui::vec2(1000.0, 700.0), monitor));
+    fn clamping_keeps_window_inside_available_area() {
+        // 工作区 (已排除菜单栏与 Dock), 例如 1280x800 屏幕上的 1280x710.
+        let area = egui::vec2(1280.0, 710.0);
+        assert!(exceeds_area(egui::vec2(1280.0, 815.0), area, 0.0));
+        let clamped = clamp_to_area(egui::vec2(1280.0, 815.0), area, 0.0);
+        assert!(clamped.y <= area.y);
+        assert_eq!(clamped.x, 1280.0);
+        assert!(!exceeds_area(egui::vec2(1200.0, 700.0), area, 0.0));
         assert_eq!(
-            clamp_to_monitor(egui::vec2(1000.0, 700.0), monitor),
-            egui::vec2(1000.0, 700.0)
+            clamp_to_area(egui::vec2(1200.0, 700.0), area, 0.0),
+            egui::vec2(1200.0, 700.0)
         );
+    }
+
+    #[test]
+    fn clamping_falls_back_to_monitor_size() {
+        let (area, margin) = available_area(Some(egui::vec2(1440.0, 900.0))).expect("area");
+        assert_eq!(area, egui::vec2(1440.0, 900.0));
+        assert_eq!(margin, MONITOR_MARGIN);
+        assert!(available_area(None).is_none());
     }
 }
