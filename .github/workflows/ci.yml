@@ -66,7 +66,7 @@ jobs:
           echo "source_ref=$source_ref" >> "$GITHUB_OUTPUT"
 
       - name: 检出目标提交
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ steps.release_context.outputs.source_ref }}
           fetch-depth: 0
@@ -114,7 +114,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: 检出目标提交
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.version.outputs.source_ref }}
           fetch-depth: 0
@@ -198,7 +198,7 @@ jobs:
             dist_script: dist-windows.ps1
     steps:
       - name: 检出目标提交
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.version.outputs.source_ref }}
           fetch-depth: 0
@@ -254,7 +254,7 @@ jobs:
         run: ./scripts/dist-windows.ps1
 
       - name: 上传构建产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: stcjudge-${{ needs.version.outputs.build_version }}-${{ matrix.package_os }}-${{ matrix.package_arch }}
           path: release-artifacts/*
@@ -267,7 +267,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: 检出目标提交
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.version.outputs.source_ref }}
           fetch-depth: 0
@@ -285,7 +285,7 @@ jobs:
           find samples -path "*/judge/*.rhai" -type f -print0 | sort -z | xargs -0 zip judges.zip
 
       - name: 上传评测脚本
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: judges
           path: judges.zip
@@ -304,7 +304,7 @@ jobs:
       contents: write
     steps:
       - name: 检出发布 tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.version.outputs.source_ref }}
           fetch-depth: 0
@@ -386,7 +386,7 @@ jobs:
           fi
 
       - name: 下载构建产物
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: release-artifacts
           merge-multiple: true
