@@ -2,7 +2,10 @@
 
 mod migration;
 
-use std::path::Path;
+use std::{
+    path::Path,
+    sync::{Mutex, MutexGuard},
+};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -19,6 +22,8 @@ pub struct Settings {
     pub version: u32,
     #[serde(default)]
     pub update: UpdateSettings,
+    #[serde(default)]
+    pub window: WindowSettings,
 }
 
 /// 自动更新相关设置.
@@ -36,6 +41,20 @@ fn default_auto_check() -> bool {
     true
 }
 
+/// 主窗口的几何记忆.
+///
+/// 只记非全屏, 非最大化时的大小, 不记位置; 最大化单独用一个标志表示.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct WindowSettings {
+    #[serde(default)]
+    pub width: Option<f32>,
+    #[serde(default)]
+    pub height: Option<f32>,
+    /// 上次是否处于最大化状态.
+    #[serde(default)]
+    pub maximized: bool,
+}
+
 impl Default for UpdateSettings {
     fn default() -> Self {
         Self {
@@ -50,8 +69,14 @@ impl Default for Settings {
         Self {
             version: CURRENT_VERSION,
             update: UpdateSettings::default(),
+            window: WindowSettings::default(),
         }
     }
+}
+
+/// 取得设置锁; 锁被污染时继续使用内部数据.
+pub fn lock(settings: &Mutex<Settings>) -> MutexGuard<'_, Settings> {
+    settings.lock().unwrap_or_else(|err| err.into_inner())
 }
 
 impl Settings {
@@ -161,6 +186,11 @@ mod tests {
             update: UpdateSettings {
                 auto_check: false,
                 skipped_version: Some("1.2.3".to_owned()),
+            },
+            window: WindowSettings {
+                width: Some(1100.0),
+                height: Some(700.0),
+                maximized: true,
             },
         };
         settings.save_to(&path).expect("save settings");

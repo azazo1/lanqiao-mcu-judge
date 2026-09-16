@@ -12,8 +12,8 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use stcjudge_gui::{
-    AppHandles, StcjudgeGuiApp, build_info, instance, logging, settings::Settings, update::UpdateService,
-    window_icon,
+    AppHandles, StcjudgeGuiApp, build_info, instance, logging, settings::Settings,
+    update::UpdateService, window_icon, window_state,
 };
 
 fn main() -> Result<()> {
@@ -27,17 +27,28 @@ fn main() -> Result<()> {
     };
 
     let settings = Arc::new(Mutex::new(Settings::load()));
-    let update = UpdateService::start(settings.clone());
+    let geometry = window_state::StartupGeometry::from_settings(&stcjudge_gui::settings::lock(
+        &settings,
+    ));
 
     let mut options = eframe::NativeOptions::default();
     options.viewport = options
         .viewport
         .with_title(build_info::APP_TITLE)
-        .with_inner_size([1280.0, 860.0])
-        .with_min_inner_size([960.0, 640.0]);
+        .with_inner_size(match geometry.size {
+            Some(size) => [size.x, size.y],
+            None => [
+                window_state::DEFAULT_SIZE.x,
+                window_state::DEFAULT_SIZE.y,
+            ],
+        })
+        .with_min_inner_size([window_state::MIN_SIZE.x, window_state::MIN_SIZE.y])
+        .with_maximized(geometry.maximized);
     if let Some(icon) = window_icon() {
         options.viewport = options.viewport.with_icon(icon);
     }
+
+    let update = UpdateService::start(settings.clone());
 
     let handles = AppHandles {
         instance: Some(guard),

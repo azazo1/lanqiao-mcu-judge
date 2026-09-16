@@ -14,6 +14,7 @@ mod syntax;
 pub mod update;
 mod update_view;
 mod widgets;
+pub mod window_state;
 
 pub use api::{JudgeApiItem, judge_api_catalog};
 pub use app::{AppHandles, StcjudgeGuiApp};

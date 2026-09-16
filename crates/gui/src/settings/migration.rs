@@ -7,7 +7,7 @@ use anyhow::{Result, bail};
 use serde_json::Value;
 
 /// 当前支持的设置文件版本.
-pub const CURRENT_VERSION: u32 = 1;
+pub const CURRENT_VERSION: u32 = 2;
 
 /// 把任意历史版本的设置升级到 [`CURRENT_VERSION`].
 pub fn migrate(value: &mut Value) -> Result<u32> {
@@ -17,6 +17,8 @@ pub fn migrate(value: &mut Value) -> Result<u32> {
         match version {
             // 0 表示早期没有 version 字段的文件, 其字段集合与 v1 一致.
             0 => version = 1,
+            // v2 新增主窗口尺寸与最大化标志, 老文件按默认值补齐.
+            1 => version = 2,
             other => bail!("设置文件版本 {other} 缺少迁移步骤"),
         }
     }
@@ -50,6 +52,16 @@ mod tests {
         let mut value = json!({"update": {"auto_check": false}});
         assert_eq!(migrate(&mut value).expect("migrate"), CURRENT_VERSION);
         assert_eq!(value["version"], json!(CURRENT_VERSION));
+    }
+
+    #[test]
+    fn window_geometry_field_is_added_by_migration() {
+        let mut value = json!({"version": 1, "update": {"auto_check": true}});
+        assert_eq!(migrate(&mut value).expect("migrate"), CURRENT_VERSION);
+        assert_eq!(value["version"], json!(CURRENT_VERSION));
+
+        let settings: crate::settings::Settings = serde_json::from_value(value).expect("parse");
+        assert_eq!(settings.window, crate::settings::WindowSettings::default());
     }
 
     #[test]

@@ -28,6 +28,7 @@ use crate::{
     syntax::highlight_rhai,
     update::UpdateService,
     update_view::UpdateView,
+    window_state::WindowState,
     widgets::{
         UartOutputMode, draw_board_overview, draw_checkpoint_table, draw_logs, draw_ports,
         input_f32_row, path_label, show_tab_scroll, slider_f32_row, uart_row, wave_path_row,
@@ -130,6 +131,7 @@ pub struct StcjudgeGuiApp {
     settings: Arc<Mutex<Settings>>,
     update: UpdateService,
     update_view: UpdateView,
+    window_state: WindowState,
     exit: ExitSignal,
     exiting: bool,
 }
@@ -174,6 +176,7 @@ impl StcjudgeGuiApp {
             settings: handles.settings,
             update: handles.update,
             update_view: UpdateView::new(),
+            window_state: WindowState::new(),
             exit,
             exiting: false,
         }
@@ -210,6 +213,7 @@ impl StcjudgeGuiApp {
         self.exiting = true;
         tracing::info!(reason, "开始退出应用");
 
+        self.window_state.persist_now(ctx, &self.settings);
         self.update.shutdown();
         self.instance = None;
         logging::flush();
@@ -1327,6 +1331,7 @@ impl eframe::App for StcjudgeGuiApp {
     fn ui(&mut self, ui: &mut egui::Ui, _: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.poll_external_commands(&ctx);
+        self.window_state.track(&ctx, &self.settings);
 
         let dropped_files = ctx.input(|input| input.raw.dropped_files.clone());
         if !dropped_files.is_empty() {
