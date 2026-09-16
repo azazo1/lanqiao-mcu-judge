@@ -120,7 +120,11 @@ enum InterruptSource {
     Timer1,
     Serial,
     Serial2,
+    Timer2,
 }
+
+/// 手册 6.3 的中断向量表: `Timer2` 的中断号是 `12`, 入口地址是 `0x0063`.
+const TIMER2_VECTOR: u16 = 0x0063;
 
 #[derive(Debug, Clone, Copy)]
 struct PendingInterrupt {
@@ -136,6 +140,7 @@ impl PendingInterrupt {
             InterruptSource::External1 => CpuInterrupt::External1,
             InterruptSource::Timer1 => CpuInterrupt::Timer1,
             InterruptSource::Serial | InterruptSource::Serial2 => CpuInterrupt::Serial,
+            InterruptSource::Timer2 => CpuInterrupt::Vector(TIMER2_VECTOR),
         }
     }
 
@@ -1500,6 +1505,10 @@ impl Simulator {
                     source: InterruptSource::Serial2,
                     tcon_clear_mask: 0,
                 },
+                PendingInterrupt {
+                    source: InterruptSource::Timer2,
+                    tcon_clear_mask: 0,
+                },
             ] {
                 let (enable_mask, pending, priority_high) = match candidate.source {
                     InterruptSource::External0 => (IE_EX0, tcon & TCON_IE0 != 0, ip & IE_EX0 != 0),
@@ -1518,9 +1527,15 @@ impl Simulator {
                             && s2con & (S2CON_RI | S2CON_TI) != 0,
                         ip2 & IP2_PS2 != 0,
                     ),
+                    // `IP2` 没有 `PT2`, 手册 6.3 中 Timer2 也只有低优先级, 因此它固定不参与高优先级轮询.
+                    InterruptSource::Timer2 => (
+                        IE2_ET2,
+                        self.ctx.ports.timers.timer2_interrupt_requested(),
+                        false,
+                    ),
                 };
                 let enabled = match candidate.source {
-                    InterruptSource::Serial2 => ie2 & enable_mask != 0,
+                    InterruptSource::Serial2 | InterruptSource::Timer2 => ie2 & enable_mask != 0,
                     _ => ie & enable_mask != 0,
                 };
                 if !enabled || !pending || priority_high != high_priority {
@@ -1571,6 +1586,7 @@ impl Simulator {
         match source {
             InterruptSource::Serial => self.ctx.ports.uart1.ack_interrupt(),
             InterruptSource::Serial2 => self.ctx.ports.uart2.ack_interrupt(),
+            InterruptSource::Timer2 => self.ctx.ports.timers.ack_timer2_interrupt(),
             InterruptSource::External0
             | InterruptSource::Timer0
             | InterruptSource::External1
@@ -1594,7 +1610,8 @@ impl Simulator {
                 InterruptSource::External0
                 | InterruptSource::Timer0
                 | InterruptSource::External1
-                | InterruptSource::Timer1,
+                | InterruptSource::Timer1
+                | InterruptSource::Timer2,
             )
             | None => {}
         }
@@ -1834,6 +1851,7 @@ impl Simulator {
             InterruptSource::Timer1 => "T1 enter",
             InterruptSource::Serial => "UART enter",
             InterruptSource::Serial2 => "UART2 enter",
+            InterruptSource::Timer2 => "T2 enter",
         };
         let note = WaveEventNote::with_detail(
             time_ns,
@@ -2436,6 +2454,10 @@ impl PortMapper for MachinePorts {
                 if addr == SFR_P2 {
                     self.strobe_board_latch(byte, self.port_latch[0]);
                 }
+            }
+            SFR_IE2 => {
+                self.generic_set(addr, byte);
+                self.timers.sync_timer2_interrupt_enable(byte);
             }
             _ => self.generic_set(addr, byte),
         }
@@ -4383,6 +4405,144 @@ mod tests {
         sim.step_once()
             .expect("same uart2 RI level should reenter after delayed reassert");
         assert_eq!(sim.cpu.pc, 0x0043);
+    }
+
+    /// 手写一段 8051 机器码: T2 每 1ms 溢出一次, 中断服务程序轮流刷新数码管 D1/D2.
+    ///
+    /// `AUXR = 10H` 表示 T2 工作在 12T 定时模式并启动, 重装载值 `FC18H` 对应
+    /// `(65536 - 0xFC18) * 12 / 12MHz = 1ms`. 每次只刷新一位, 两位各刷新一次就构成一幅完整画面.
+    fn timer2_seg_scan_code(et2_enabled: bool) -> Vec<u8> {
+        let mut code = vec![0x00_u8; 0x114];
+        // 0000H: LJMP 0100H
+        code[0..3].copy_from_slice(&[0x02, 0x01, 0x00]);
+        // 0063H: T2 中断服务程序
+        code[0x63..0x8E].copy_from_slice(&[
+            0xB2, 0x00, // CPL 20H.0, 切换扫描相位
+            0x20, 0x00, 0x13, // JB 20H.0, 刷新 D2
+            0x75, 0x80, 0xFF, // MOV P0, #0FFH
+            0x75, 0xA0, 0xE0, // MOV P2, #0E0H
+            0x75, 0x80, 0x01, // MOV P0, #01H
+            0x75, 0xA0, 0xC0, // MOV P2, #0C0H, 位选 D1
+            0x75, 0x80, 0xF9, // MOV P0, #0F9H, 数字 1 的段码取反
+            0x75, 0xA0, 0xE0, // MOV P2, #0E0H, 段选锁存
+            0x32, // RETI
+            0x75, 0x80, 0xFF, // MOV P0, #0FFH
+            0x75, 0xA0, 0xE0, // MOV P2, #0E0H
+            0x75, 0x80, 0x02, // MOV P0, #02H
+            0x75, 0xA0, 0xC0, // MOV P2, #0C0H, 位选 D2
+            0x75, 0x80, 0xA4, // MOV P0, #0A4H, 数字 2 的段码取反
+            0x75, 0xA0, 0xE0, // MOV P2, #0E0H, 段选锁存
+            0x32, // RETI
+        ]);
+        // 0100H: 主程序
+        code[0x100..].copy_from_slice(&[
+            0x75, 0x81, 0x60, // MOV SP, #60H
+            0x75, 0xD6, 0xFC, // MOV T2H, #0FCH
+            0x75, 0xD7, 0x18, // MOV T2L, #18H
+            0x75, 0x8E, 0x10, // MOV AUXR, #10H, T2 12T 定时模式并启动
+            0x75, 0xAF, if et2_enabled { 0x04 } else { 0x00 }, // MOV IE2, #04H, ET2
+            0x75, 0xA8, 0x80, // MOV IE, #80H, EA
+            0x80, 0xFE, // SJMP $
+        ]);
+        code
+    }
+
+    #[test]
+    fn timer2_interrupt_enters_vector_0x0063_and_returns_by_reti() {
+        let mut code = vec![0x00_u8; 0x64];
+        code[0..0x11].copy_from_slice(&[
+            0x75, 0xD6, 0xFF, // MOV T2H, #0FFH
+            0x75, 0xD7, 0xFF, // MOV T2L, #0FFH
+            0x75, 0xAF, 0x04, // MOV IE2, #04H, ET2 = 1
+            0x75, 0xA8, 0x80, // MOV IE, #80H, EA = 1
+            0x75, 0x8E, 0x14, // MOV AUXR, #14H, T2R = 1 且 T2x12 = 1
+            0x80, 0xFE, // SJMP $
+        ]);
+        code[0x63] = 0x32; // RETI
+
+        let mut sim = Simulator::from_code_with_options(
+            code,
+            false,
+            WaveCaptureOptions {
+                json_path: Some(std::env::temp_dir().join("timer2-interrupt-test.json")),
+                ..WaveCaptureOptions::default()
+            },
+        );
+
+        for _ in 0..5 {
+            sim.step_once().expect("run t2 setup instruction");
+        }
+        assert_eq!(sim.cpu.pc, 0x000F, "T2 启动后应停在 SJMP $");
+
+        sim.step_once().expect("enter timer2 interrupt");
+        assert_eq!(sim.cpu.pc, 0x0063, "T2 中断向量入口应为 0063H");
+
+        let t2_entries = sim
+            .wave
+            .event_records()
+            .into_iter()
+            .filter(|(track_id, _, label, _)| {
+                *track_id == EventTrack::Cpu.track_id() && label.as_str() == "T2 enter"
+            })
+            .count();
+        assert_eq!(t2_entries, 1, "波形里应记录到 T2 中断事件");
+
+        sim.step_once().expect("execute timer2 RETI");
+        assert_eq!(sim.cpu.pc, 0x000F, "T2 中断应返回被中断的主程序");
+        assert_eq!(sim.interrupt_poll_blocked_instructions, 1);
+    }
+
+    #[test]
+    fn timer2_interrupt_drives_seg_scan() {
+        let mut sim = Simulator::from_code_with_options(
+            timer2_seg_scan_code(true),
+            false,
+            crate::wave::WaveCaptureOptions::default(),
+        );
+
+        sim.run_ms(20).expect("run to first complete scan");
+        assert_eq!(
+            sim.display_text(),
+            "12",
+            "T2 中断应完成 D1/D2 两位数码管的动态扫描"
+        );
+        assert_eq!(sim.seg_pattern(1).expect("read D1 pattern"), 0x06);
+        assert_eq!(sim.seg_pattern(2).expect("read D2 pattern"), 0x5B);
+
+        // 数码管采样超过 100ms 不刷新就会熄灭, 因此再跑 300ms 仍然显示 12,
+        // 说明 T2 中断在持续进入, 而不是只跑了一两次.
+        sim.run_ms(300).expect("run three more refresh cycles");
+        assert_eq!(
+            sim.display_text(),
+            "12",
+            "T2 中断一旦停下, 数码管就不该继续显示"
+        );
+    }
+
+    #[test]
+    fn timer2_without_et2_keeps_counting_but_never_interrupts() {
+        let mut sim = Simulator::from_code_with_options(
+            timer2_seg_scan_code(false),
+            false,
+            crate::wave::WaveCaptureOptions::default(),
+        );
+
+        sim.run_ms(20).expect("run without et2");
+        assert_eq!(
+            sim.display_text(),
+            "",
+            "ET2 = 0 时不应该进入 T2 中断, 数码管应保持熄灭"
+        );
+
+        let before = sim.ctx.ports.timers.snapshot(&sim.ctx.ports.generic);
+        // 半毫秒即 500 个 T2 计数, 避开 1ms 周期的整相位, 便于观察计数器本身在走.
+        sim.run_us(500).expect("run half a millisecond");
+        let after = sim.ctx.ports.timers.snapshot(&sim.ctx.ports.generic);
+        assert_ne!(
+            (before.t2h, before.t2l),
+            (after.t2h, after.t2l),
+            "ET2 只控制中断, T2 计数器本身仍应继续计数"
+        );
     }
 
     #[test]

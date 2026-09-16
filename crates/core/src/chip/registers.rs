@@ -133,6 +133,7 @@ pub const IE_ET1: u8 = 1 << 3;
 pub const IE_ES: u8 = 1 << 4;
 pub const IE_EA: u8 = 1 << 7;
 pub const IE2_ES2: u8 = 1 << 0;
+pub const IE2_ET2: u8 = 1 << 2;
 pub const IP2_PS2: u8 = 1 << 0;
 
 pub const TCON_IT0: u8 = 1 << 0;

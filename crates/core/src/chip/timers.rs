@@ -78,6 +78,22 @@ impl TimerBlock {
         self.pca.tick(ticks, generic)
     }
 
+    pub(crate) fn timer2_interrupt_requested(&self) -> bool {
+        self.timer2.interrupt_requested()
+    }
+
+    pub(crate) fn ack_timer2_interrupt(&mut self) {
+        self.timer2.ack_interrupt();
+    }
+
+    /// 固件改写 `IE2` 之后同步 T2 的中断允许位.
+    ///
+    /// 手册 7.5.1 的例程说明, 清 `ET2` 时芯片会连带清掉 T2 内部的溢出标志,
+    /// 因此这里既要在允许位下降沿清标志, 也要避免关闭期间积攒出过期的请求.
+    pub(crate) fn sync_timer2_interrupt_enable(&mut self, ie2: u8) {
+        self.timer2.set_interrupt_enabled(ie2 & IE2_ET2 != 0);
+    }
+
     pub(crate) fn snapshot(&self, generic: &[u8; 128]) -> TimerSnapshot {
         TimerSnapshot {
             tcon: self.timer01.tcon,
@@ -304,6 +320,8 @@ struct Timer2 {
     reload_low: u8,
     divider: u8,
     prev_p3: u8,
+    interrupt_enabled: bool,
+    overflow_latched: bool,
 }
 
 impl Timer2 {
@@ -313,6 +331,31 @@ impl Timer2 {
             SFR_T2H => self.reload_high = value,
             SFR_T2L => self.reload_low = value,
             _ => {}
+        }
+    }
+
+    /// T2 没有提供给用户查询的溢出标志位, 手册 6.3 表格中该行是空的,
+    /// 这里用内部挂起位来对应"溢出之后到 CPU 受理中断之前"的这段时间.
+    fn interrupt_requested(&self) -> bool {
+        self.interrupt_enabled && self.overflow_latched
+    }
+
+    /// CPU 受理 T2 中断后, 芯片会自动清掉内部溢出标志.
+    fn ack_interrupt(&mut self) {
+        self.overflow_latched = false;
+    }
+
+    fn set_interrupt_enabled(&mut self, enabled: bool) {
+        if enabled == self.interrupt_enabled {
+            return;
+        }
+        self.interrupt_enabled = enabled;
+        self.overflow_latched = false;
+    }
+
+    fn latch_overflow(&mut self) {
+        if self.interrupt_enabled {
+            self.overflow_latched = true;
         }
     }
 
@@ -339,6 +382,7 @@ impl Timer2 {
             if next == 0 {
                 write_sfr(generic, SFR_T2H, self.reload_high);
                 write_sfr(generic, SFR_T2L, self.reload_low);
+                self.latch_overflow();
             } else {
                 let [t2h, t2l] = next.to_be_bytes();
                 write_sfr(generic, SFR_T2H, t2h);
@@ -482,6 +526,104 @@ mod tests {
 
         assert_eq!(read_sfr(&generic, SFR_T2H), 0x12);
         assert_eq!(read_sfr(&generic, SFR_T2L), 0x34);
+        Ok(())
+    }
+
+    #[test]
+    fn timer2_overflow_latches_request_until_serviced() -> Result<()> {
+        let mut timers = TimerBlock::default();
+        let mut generic = generic();
+        timers.sync_timer2_interrupt_enable(IE2_ET2);
+
+        assert!(timers.write(&mut generic, SFR_T2H, 0xFF));
+        assert!(timers.write(&mut generic, SFR_T2L, 0xFF));
+        assert!(
+            !timers.timer2_interrupt_requested(),
+            "刚上电且没有溢出时不应该有 T2 请求"
+        );
+
+        timers.tick_timers01_t2(
+            0xFF,
+            AUXR_T2_RUN | AUXR_T2_X12,
+            1,
+            empty_transitions(),
+            &mut generic,
+        )?;
+        assert!(timers.timer2_interrupt_requested(), "溢出后应挂起 T2 请求");
+        assert_eq!(read_sfr(&generic, SFR_T2H), 0xFF);
+        assert_eq!(read_sfr(&generic, SFR_T2L), 0xFF);
+
+        // 中断还没来得及受理时又溢出一次, 请求保持挂起, 直到被受理.
+        timers.tick_timers01_t2(
+            0xFF,
+            AUXR_T2_RUN | AUXR_T2_X12,
+            1,
+            empty_transitions(),
+            &mut generic,
+        )?;
+        assert!(timers.timer2_interrupt_requested(), "受理之前的再次溢出不应丢请求");
+
+        timers.ack_timer2_interrupt();
+        assert!(!timers.timer2_interrupt_requested(), "受理之后内部溢出标志应被清掉");
+        Ok(())
+    }
+
+    #[test]
+    fn timer2_interrupt_follows_et2_gate() -> Result<()> {
+        let mut timers = TimerBlock::default();
+        let mut generic = generic();
+        assert!(timers.write(&mut generic, SFR_T2H, 0xFF));
+        assert!(timers.write(&mut generic, SFR_T2L, 0xFF));
+
+        // ET2 = 0 时溢出只推进计数器, 不生成请求.
+        timers.tick_timers01_t2(
+            0xFF,
+            AUXR_T2_RUN | AUXR_T2_X12,
+            1,
+            empty_transitions(),
+            &mut generic,
+        )?;
+        assert!(!timers.timer2_interrupt_requested());
+
+        timers.sync_timer2_interrupt_enable(IE2_ET2);
+        assert!(
+            !timers.timer2_interrupt_requested(),
+            "关闭期间积攒的溢出不应在重新允许后立刻触发"
+        );
+
+        timers.tick_timers01_t2(
+            0xFF,
+            AUXR_T2_RUN | AUXR_T2_X12,
+            1,
+            empty_transitions(),
+            &mut generic,
+        )?;
+        assert!(timers.timer2_interrupt_requested());
+
+        // 固件清 ET2 时芯片会连带清掉内部溢出标志.
+        timers.sync_timer2_interrupt_enable(0);
+        assert!(!timers.timer2_interrupt_requested(), "清 ET2 应清掉挂起的 T2 请求");
+        Ok(())
+    }
+
+    #[test]
+    fn timer2_counter_mode_latches_request_on_p3_1_falling_edge() -> Result<()> {
+        let mut timers = TimerBlock::default();
+        let mut generic = generic();
+        timers.sync_timer2_interrupt_enable(IE2_ET2);
+        assert!(timers.write(&mut generic, SFR_T2H, 0xFF));
+        assert!(timers.write(&mut generic, SFR_T2L, 0xFF));
+
+        let auxr = AUXR_T2_RUN | AUXR_T2_C_T;
+        timers.tick_timers01_t2(0xFF, auxr, 1, empty_transitions(), &mut generic)?;
+        assert!(
+            !timers.timer2_interrupt_requested(),
+            "P3.1 没有下降沿时不应该有 T2 请求"
+        );
+
+        // P3.1 由高变低构成一次外部计数, 计数器随即溢出.
+        timers.tick_timers01_t2(!P3_T2, auxr, 1, empty_transitions(), &mut generic)?;
+        assert!(timers.timer2_interrupt_requested());
         Ok(())
     }
 

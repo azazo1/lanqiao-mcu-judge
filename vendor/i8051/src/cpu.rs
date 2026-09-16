@@ -79,6 +79,10 @@ pub enum Interrupt {
     Timer0,
     Timer1,
     Serial,
+    /// 由调用方给出入口地址的中断源, 用于传统 8051 之外的扩展中断 (例如 STC15 的 Timer2).
+    ///
+    /// 这类中断源的允许位不在 `IE` 中, 因此是否允许, 是否挂起都由调用方判定, 这里只负责压栈和跳转.
+    Vector(u16),
 }
 
 enum Direct {
@@ -458,9 +462,10 @@ impl Cpu {
             Interrupt::Serial => (0x0023, IE_ES),
             Interrupt::External0 => (0x0003, IE_EX0),
             Interrupt::External1 => (0x0013, IE_EX1),
+            Interrupt::Vector(handler) => (handler, 0),
         };
 
-        if self.ie & ie == 0 {
+        if ie != 0 && self.ie & ie == 0 {
             return false;
         }
 
