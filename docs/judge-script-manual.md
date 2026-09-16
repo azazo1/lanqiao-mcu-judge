@@ -886,7 +886,7 @@ assert_in(stats.duty_percent, 8..=12, "L1 PWM: 占空比超出范围");
 - `set_seg_decode(pattern, text)` 用于自定义 `display_text()` 的解码规则.
 - `set_seg_blank(pattern)` 将某个模式视为留空.
 
-默认已经内置了 `0-9 - P E L F H C` 的解码映射.
+默认已经内置了 `0-9 - P E L F H C A N U n = _` 的解码映射 (其中 `=` 与 `_` 分别对应单段点亮的 a 段与 d 段, `-` 对应 g 段).
 
 ## 断言和调试
 
@@ -899,7 +899,9 @@ assert_in(stats.duty_percent, 8..=12, "L1 PWM: 占空比超出范围");
 
 `assert_eq(...)` 要求 `actual` 和 `expected` 是同类型. 适合字符串, 整数, 浮点, 布尔等直接相等比较. 失败时会同时打印 `expected` 和 `actual`.
 `assert_regex(...)` 用于判断左侧字符串是否匹配右侧正则. 失败时会同时打印正则和实际字符串, 也会保留 `label`.
-`assert_in(...)` 适合整数和浮点数的区间判断. 目前使用 Rhai 的整数 range 语法, 支持 `a..b` 和 `a..=b`. 对浮点实际值会按对应的整数边界比较. 失败时会同时打印期望区间和实际值.
+`assert_in(...)` 适合整数和浮点数的区间判断. 目前使用 Rhai 的整数 range 语法, 支持 `a..b` 和 `a..=b`. 区间边界必须是整数: 传浮点边界 (例如 `4.3..=4.7`) 会报 `Function not found: ..= (f64, f64)`, 需要先把被比较的量放大成整数 (电压乘 100, 距离乘 10) 再判定. 失败时会同时打印期望区间和实际值.
+
+写评测脚本前建议先读 [judge-script-skill.md](judge-script-skill.md) 的 "Rhai 与仿真器常见陷阱" 一节, 那里记着读取时机, 数值类型, 等待量, 段码, 状态与存储等实际踩过的坑.
 
 断言文案建议遵循下面几条:
 

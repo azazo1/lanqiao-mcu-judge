@@ -499,6 +499,9 @@ fn speed_segments_duration_ms(segments) {
 fn speed_segments_distance_window(r_value, b_value, segments, start_elapsed_ns, tail_extra_ns) {
     let start_delay_ms = start_elapsed_ns.to_float() / 1_000_000.0;
     let tail_extra_ms = tail_extra_ns.to_float() / 1_000_000.0;
+    // 变速后固件要先测到一个完整周期的频率, 速度才会跟着变; 实测这个过渡约 0.25 秒
+    // (600Hz 换 4000Hz 时位置轨迹落后理想积分 40cm 以内), 因此每个变速边界给下限留出这段余量.
+    let speed_transition_ms = 250.0;
     let min_cm = 0.0;
     let max_cm = 0.0;
     let last = len(segments) - 1;
@@ -517,7 +520,18 @@ fn speed_segments_distance_window(r_value, b_value, segments, start_elapsed_ns, 
         }
         min_cm += window.raw_min * min_ms / 1000.0;
         max_cm += window.raw_max * max_ms / 1000.0;
+        // 该段与下一段频率不同时, 下一段的起点可能整体推后一个过渡时间.
+        if i < last && segments[i + 1].freq_hz != seg.freq_hz {
+            let next_window = speed_formula_window(r_value, b_value, segments[i + 1].freq_hz);
+            let delta = next_window.raw_max - window.raw_min;
+            if delta > 0.0 {
+                min_cm -= delta * speed_transition_ms / 1000.0;
+            }
+        }
         i += 1;
+    }
+    if min_cm < 0.0 {
+        min_cm = 0.0;
     }
     #{
         min_cm: min_cm,

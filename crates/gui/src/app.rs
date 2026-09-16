@@ -28,11 +28,11 @@ use crate::{
     syntax::highlight_rhai,
     update::UpdateService,
     update_view::UpdateView,
-    window_state::WindowState,
     widgets::{
         UartOutputMode, draw_board_overview, draw_checkpoint_table, draw_logs, draw_ports,
         input_f32_row, path_label, show_tab_scroll, slider_f32_row, uart_row, wave_path_row,
     },
+    window_state::WindowState,
 };
 
 const KEY_ORDER: [KeyId; 16] = [
@@ -488,7 +488,7 @@ impl StcjudgeGuiApp {
                         let color = feedback_color(feedback.kind);
                         egui::Frame::new()
                             .fill(color.gamma_multiply(0.16))
-                            .stroke(egui::Stroke::new(1.0, color.gamma_multiply(0.75)))
+                            .stroke(egui::Stroke::new(1.0_f32, color.gamma_multiply(0.75)))
                             .corner_radius(egui::CornerRadius::same(6))
                             .inner_margin(egui::Margin::symmetric(10, 7))
                             .show(ui, |ui| {

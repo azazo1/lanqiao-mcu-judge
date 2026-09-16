@@ -179,7 +179,9 @@ just fake-dist   # v0.0.0 的自动更新测试构建
 
 ## samples
 
-评测真题示例.
+评测真题示例. 每场真题目录下包含原题 (`problem/`), 满分代码 (`src/`, `prj/`), 题目整理 (`README.md`) 和评测脚本 (`judge/`).
+
+真题的命名约定, 收集来源与各场次进度见 [docs/problem-collection.md](docs/problem-collection.md).
 
 ## 开源协议
 

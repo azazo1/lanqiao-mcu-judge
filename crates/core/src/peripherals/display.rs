@@ -164,6 +164,12 @@ impl Default for SegmentDecoder {
             (0x71, 'F'),
             (0x76, 'H'),
             (0x39, 'C'),
+            (0x77, 'A'),
+            (0x37, 'N'),
+            (0x3E, 'U'),
+            (0x54, 'n'),
+            (0x01, '='),
+            (0x08, '_'),
         ] {
             decoder.char_map.insert(pattern, ch);
         }
