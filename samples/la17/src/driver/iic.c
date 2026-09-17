@@ -9,7 +9,7 @@ sbit sda = P2^1;
 sbit scl = P2^0;
 
 //
-static void I2C_Delay(unsigned char n)
+void I2C_Delay(unsigned char n)
 {
     do
     {
